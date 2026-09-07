@@ -3946,8 +3946,6 @@ var nodes = {
   "alc-unsaved-save": new FakeNode("button"),
   "alc-storage-status": new FakeNode("div")
 };
-nodes["alc-editor-foreground"].value = "#f9fafb";
-nodes["alc-editor-background"].value = "#111827";
 nodes["alc-export-panel"].hidden = true;
 var visibleCard = null;
 globalThis.document = {
@@ -4002,6 +4000,11 @@ var historical = Object.assign({}, first, {
 });
 var helpers = globalThis.__alcReaderTest;
 var calls = {refresh: [], save: 0};
+assert(
+  nodes["alc-editor-foreground"].value === "" &&
+    nodes["alc-editor-background"].value === "",
+  "cold reader unexpectedly initialized hidden appearance controls"
+);
 helpers.installDraftSpies(calls, function (markdown) {
   var rendered = new FakeNode("div");
   rendered.className = "alc-markdown";
@@ -4286,6 +4289,11 @@ assert(
       nodes["alc-editor-dialog"].dataset.editorKind === "fragment" &&
       nodes["alc-editor-markdown"].value === "latest inline draft",
     "Advanced did not open on the latest inline draft"
+  );
+  assert(
+    nodes["alc-editor-foreground"].value === "#f9fafb" &&
+      nodes["alc-editor-background"].value === "#111827",
+    "Advanced did not initialize appearance controls from the draft"
   );
   assert(!nodes["alc-editor-save"].disabled, "changed Advanced draft disabled Save");
   helpers.renderColorPresets();

@@ -11989,6 +11989,8 @@
 
   function appearanceControlsValid() {
     if (state.activeGlossaryDraft) return true;
+    var dialog = document.getElementById("alc-editor-dialog");
+    if (!dialog || !dialog.open) return true;
     var foreground = document.getElementById("alc-editor-foreground");
     var background = document.getElementById("alc-editor-background");
     if (!foreground || !background) return true;
