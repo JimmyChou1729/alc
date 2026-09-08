@@ -1,5 +1,29 @@
 # ALC Translate Quick Start
 
+For new Skill-driven tasks, use the processing policy in SKILL.md:
+`--execution-profile local-app --review-rounds 1` by default, with two workers.
+Respect explicit 0/1/2 review rounds and 1–8 workers. These explicit settings
+supersede legacy-default descriptions below; resume uses the saved recipe.
+
+For every new generation step below, pass the resolved provider, exact model,
+effort and processing mode explicitly, along with `--execution-profile local-app`,
+`--window-workers <1-8>` and `--review-rounds <0-2>`. With the Codex defaults this
+is `--provider codex --model gpt-5.6-luna --reasoning-effort medium
+--processing-mode standard`. Preserve explicit user overrides. Follow the same
+configuration across language detection, glossary and blocks; do not infer a
+different setup for each command.
+
+In Codex Desktop, run model-backed generation and resume commands with host
+execution (`sandbox_permissions="require_escalated"` for the command tool),
+with a justification naming the selected provider and source. This permits
+the provider's existing login and local execution to work reliably. Keep
+`--host-authority unknown`; host execution does not
+grant unrestricted source authority. The user's translation request authorizes
+this processing: do not add a separate chat approval question. Respect any
+actual tool approval rejection. Status, get-result and validation remain
+read-only checks and do not require model execution.
+
+
 `alc-translate` owns reusable scientific language detection, bilingual
 glossary generation, source-block translation, and translation review. Use it
 when these steps must run independently of a Companion build. A source is a
@@ -156,6 +180,15 @@ Status reports the selected step at `data.current_step`, its run snapshot at
 only to read a verified successful selected result. Validation returns
 `data.valid`, `data.issues`, and, for a completed block translation, both
 `data.delivery.layer` and `data.delivery.glossary`.
+
+While the command session runs, inspect `data.progress`: completed/total units,
+last activity time and the last-observed active model calls (preparation,
+translation, review or repair). This comes from durable events and can advance
+while `data.run.updated_at` remains unchanged. Pipe activity is evidence of
+process output, not proof that a model is making useful progress. Use the
+command's actual terminal result to decide whether it finished. A missing final
+Layer or fragments directory is normal before all windows finish; accepted
+windows are saved internally and reused on resume.
 
 Resume the same project and selected step after a pause, interruption, failure,
 or stop. Omit `--input` when no response is required; otherwise pass either

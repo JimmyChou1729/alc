@@ -120,6 +120,7 @@ class CompanionService:
         execution: CompanionExecutionOptions = CompanionExecutionOptions(),
         task_service: LLMTaskService | None = None,
         translation_adapter: CompanionTranslationAdapter | None = None,
+        event_sink: Any = None,
     ) -> RunSnapshot:
         """Execute or replay one already prepared Companion build."""
 
@@ -132,7 +133,7 @@ class CompanionService:
             task_service=task_service,
             translation_adapter=translation_adapter,
         )
-        return self.engine.execute(spec, handler)
+        return self.engine.execute(spec, handler, **({"event_sink": event_sink} if event_sink is not None else {}))
 
     def resume(
         self,
@@ -142,6 +143,7 @@ class CompanionService:
         execution: CompanionExecutionOptions = CompanionExecutionOptions(),
         task_service: LLMTaskService | None = None,
         translation_adapter: CompanionTranslationAdapter | None = None,
+        event_sink: Any = None,
     ) -> RunSnapshot:
         if translation_adapter is None:
             require_translation_runtime()
@@ -152,7 +154,7 @@ class CompanionService:
             task_service=task_service,
             translation_adapter=translation_adapter,
         )
-        return self.engine.resume(run_id, handler, input=input)
+        return self.engine.resume(run_id, handler, input=input, **({"event_sink": event_sink} if event_sink is not None else {}))
 
     def _handler(
         self,
@@ -278,6 +280,15 @@ class CompanionService:
             if translation_required
             else len(chapter_ids)
         )
+        pipeline = _find_artifact_in_lineage(
+            artifacts, "diagnostics/chapter-pipeline", recovery_epoch=view.snapshot.recovery_epoch
+        )
+        if translation_required and pipeline is not None:
+            policy = json.loads(artifacts.read_bytes(pipeline))
+            if policy.get("enabled"):
+                translated = sum(_completed_group_units(
+                    self.repository, run_id, f"translation-{chapter_id}"
+                ) for chapter_id in chapter_ids)
         guided = sum(
             _find_artifact_in_lineage(
                 artifacts,
@@ -396,6 +407,10 @@ class CompanionService:
             "completed_units": completed,
             "total_units": total,
             "completed_chapters": joined,
+            "translated_chapters": min(translated, len(chapter_ids)),
+            "guided_chapters": guided,
+            "glossary_ready": glossary_ready,
+            "translation_required": translation_required,
             "total_chapters": len(chapter_ids),
             "active_model": {
                 "provider": provider,

@@ -864,6 +864,19 @@ def test_large_bibliography_list_source_markdown_self_validates() -> None:
     validate_translation_text(rendered_source, block)
 
 
+@pytest.mark.parametrize("label", ["[12]", "(12)", "Abbott et al. (2021)", "Smith (2020a)", "Smith (in press)"])
+def test_bibliography_visible_labels_include_author_year(label):
+    block = {
+        "block_id": "reference-entry",
+        "kind": "list",
+        "locator": {"source_id": "bib.bib12"},
+        "payload": {"ordered": False, "items": [{"text": label + " Reference text."}]},
+    }
+    validate_translation_text("- " + label + " 参考文献正文。", block)
+    with pytest.raises(TranslationSourceError, match="changed bibliography entry label"):
+        validate_translation_text("- Changed label. 参考文献正文。", block)
+
+
 def test_internal_bibliography_groups_and_entry_labels_are_authoritative() -> None:
     citation = {
         "block_id": "block-citation-group",
@@ -1236,3 +1249,40 @@ def test_translation_markdown_disambiguates_adjacent_inline_math() -> None:
 
     assert canonical == "$a$\u2060${}^{1}$"
     validate_translation_markdown(canonical)
+
+@pytest.mark.parametrize(
+    "candidate", ["Smith 等（2020） 译文。", "Smith et al. (2020) 译文。"]
+)
+def test_restore_localized_reference_label_retains_translation(candidate):
+    block = {
+        "block_id": "bib-entry",
+        "kind": "list",
+        "locator": {"source_id": "bib.bib1"},
+        "payload": {
+            "ordered": False,
+            "items": [{"text": "Smith et al. (2020) Original."}],
+        },
+    }
+    restored = source_module.restore_translation_identity(candidate, block)
+    assert restored == "Smith et al. (2020) 译文。"
+    validate_translation_text(restored, block)
+
+
+@pytest.mark.parametrize(
+    "candidate", ["Jones 等（2020） 译文。", "Smith 等（2021） 译文。"]
+)
+def test_reference_label_repair_does_not_hide_author_or_year_changes(candidate):
+    block = {
+        "block_id": "bib-entry",
+        "kind": "list",
+        "locator": {"source_id": "bib.bib1"},
+        "payload": {
+            "ordered": False,
+            "items": [{"text": "Smith et al. (2020) Original."}],
+        },
+    }
+    restored = source_module.restore_translation_identity(candidate, block)
+    with pytest.raises(
+        TranslationSourceError, match="changed bibliography entry label"
+    ):
+        validate_translation_text(restored, block)

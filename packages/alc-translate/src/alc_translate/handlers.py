@@ -131,6 +131,7 @@ class BuildGlossaryHandler:
                 term_input_budget_bytes=(
                     self.recipe.glossary_input_budget_bytes
                 ),
+                user_intent=self.recipe.user_intent,
             )
             return _outer_outcome(context, outcome, "glossary/result")
         except (ValueError, TranslationWorkflowError) as exc:
@@ -192,6 +193,9 @@ class TranslateBlocksHandler:
                 input_budget_bytes=(
                     self.recipe.translation_input_budget_bytes
                 ),
+                user_intent=self.recipe.user_intent,
+                window_workers=self.execution.window_workers,
+                review_rounds=self.recipe.review_rounds,
             )
             return _outer_outcome(context, outcome, "translation/result")
         except (ValueError, TranslationWorkflowError) as exc:

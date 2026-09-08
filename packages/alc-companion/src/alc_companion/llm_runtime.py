@@ -96,6 +96,14 @@ def execute_semantically_validated_task(
     supplies an already validated fallback.
     """
 
+    unavailable_id = candidate_id + "-unavailable"
+    unavailable = context.working.find_candidate(unavailable_id)
+    if fallback is not _NO_FALLBACK and unavailable is not None:
+        if context.working.read_candidate_json(unavailable_id) != {"output_unavailable": True}:
+            raise CompanionLLMError("companion_artifact_invalid", "Invalid optional-output marker")
+        return SemanticTaskCompleted(cast(T, fallback), (unavailable,),
+            CompanionContentError("optional_output_invalid", "Optional output unavailable"))
+
     first_path = context.working.find_candidate(candidate_id)
     if first_path is None:
         first_outcome = execute_task(
@@ -106,6 +114,15 @@ def execute_semantically_validated_task(
             options=options,
         )
         if isinstance(first_outcome, LLMPaused):
+            if (fallback is not _NO_FALLBACK
+                and first_outcome.reason == ResumeReason.SUPERVISION_REQUIRED
+                and first_outcome.details.get("automatic_retry_exhausted") is True
+                and first_outcome.details.get("code") in {"output_invalid", "output_formatting_failed"}):
+                path = context.working.write_candidate_json(
+                    candidate_id + "-unavailable", {"output_unavailable": True}
+                )
+                return SemanticTaskCompleted(cast(T, fallback), (path,),
+                    CompanionContentError("optional_output_invalid", "Optional output unavailable"))
             return Paused(awaiting_from_pause(first_outcome))
         if isinstance(first_outcome, LLMFailed):
             return first_outcome
@@ -158,6 +175,15 @@ def execute_semantically_validated_task(
             options=options,
         )
         if isinstance(retry_outcome, LLMPaused):
+            if (fallback is not _NO_FALLBACK
+                and retry_outcome.reason == ResumeReason.SUPERVISION_REQUIRED
+                and retry_outcome.details.get("automatic_retry_exhausted") is True
+                and retry_outcome.details.get("code") in {"output_invalid", "output_formatting_failed"}):
+                path = context.working.write_candidate_json(
+                    candidate_id + "-unavailable", {"output_unavailable": True}
+                )
+                return SemanticTaskCompleted(cast(T, fallback), (path,),
+                    CompanionContentError("optional_output_invalid", "Optional output unavailable"))
             return Paused(awaiting_from_pause(retry_outcome))
         if isinstance(retry_outcome, LLMFailed):
             return retry_outcome

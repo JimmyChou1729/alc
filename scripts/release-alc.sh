@@ -31,11 +31,17 @@ AC_FOUNDATION_REPO_ROOT="$foundation_path" \
 constraint_args=()
 for project in "$foundation_path"/packages/ac-*/pyproject.toml \
   "$root"/packages/alc-*/pyproject.toml; do
+  if [ "${project%/pyproject.toml}" = "$root/packages/alc-web" ]; then
+    continue
+  fi
   constraint_args+=(--package "$project")
 done
 "$python_bin" "$foundation_path/scripts/check-runtime-constraints.py" \
   --constraints "$root/plugins/alc/skills/alc/scripts/runtime-constraints.txt" \
   "${constraint_args[@]}"
+
+npm --prefix "$root/apps/web" ci
+npm --prefix "$root/apps/web" run build
 
 "$python_bin" - "$root" "$version" <<'PY'
 from __future__ import annotations
@@ -53,6 +59,7 @@ expected = {
     "alc-ocr-proofread",
     "alc-render",
     "alc-translate",
+    "alc-web",
 }
 projects = sorted((root / "packages").glob("alc-*/pyproject.toml"))
 observed = {path.parent.name for path in projects}
@@ -129,6 +136,16 @@ for path in (
         raise SystemExit(f"could not update plugin version in {path}")
     updates.append((path, updated_manifest, path, ""))
 
+for name in ("package.json", "package-lock.json"):
+    path = root / "apps/web" / name
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if document.get("version") != current:
+        raise SystemExit(f"{path} version differs from VERSION")
+    document["version"] = version
+    if name == "package-lock.json":
+        document["packages"][""]["version"] = version
+    updates.append((path, json.dumps(document, indent=2) + "\n", path, ""))
+
 constraints = root / "plugins/alc/skills/alc/scripts/runtime-constraints.txt"
 constraints_text = constraints.read_text(encoding="utf-8")
 constraints_text, count = re.subn(
@@ -153,7 +170,7 @@ PYTHONPATH="$foundation_source:$source_path" "$python_bin" -m pytest \
   --import-mode=importlib "$root"/packages/*/tests "$root/tests"
 PYTHON="$python_bin" "$root/scripts/build-packages.sh"
 
-git -C "$root" add VERSION packages plugins/alc
+git -C "$root" add VERSION packages plugins/alc apps/web/package.json apps/web/package-lock.json
 git -C "$root" commit -m "chore: release v${version}"
 source_commit="$(git -C "$root" rev-parse HEAD)"
 

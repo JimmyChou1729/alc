@@ -11,6 +11,10 @@ agent host or checked-out Skill.
 - `alc-translate` may additionally depend on `alc-render`.
 - `alc-companion` may depend on all AC packages plus `alc-render` and
   `alc-translate`.
+- `alc-web` is an optional local application package. It may depend on AC jobs,
+  model and document APIs plus ALC render, translation and Companion packages.
+  Its HTTP server, queue, settings and frontend remain outside the learning
+  packages. The agent plugin does not install the Web application implicitly.
 - Schemas, imports, distributions, CLIs, and product environment variables use
   `alc.*`, `alc_*`, `alc-*`, and `ALC_*` respectively. Shared infrastructure
   keeps `ac.*`, `ac_*`, `ac-*`, and `AC_*`.

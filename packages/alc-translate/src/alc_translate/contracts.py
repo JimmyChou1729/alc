@@ -25,12 +25,13 @@ LANGUAGE_REQUEST_SCHEMA = "alc.translate.language_request.v1"
 GLOSSARY_REQUEST_SCHEMA = "alc.translate.glossary_request.v1"
 BLOCKS_REQUEST_SCHEMA = "alc.translate.blocks_request.v1"
 GENERATION_RECIPE_SCHEMA = "alc.translate.generation_recipe.v1"
+GENERATION_RECIPE_SCHEMA_V2 = "alc.translate.generation_recipe.v2"
+GENERATION_RECIPE_SCHEMA_V3 = "alc.translate.generation_recipe.v3"
+GENERATION_RECIPE_SCHEMA_V4 = "alc.translate.generation_recipe.v4"
 LANGUAGE_RESULT_SCHEMA = "alc.translate.language_result.v1"
 GLOSSARY_RESULT_SCHEMA = "alc.translate.glossary_result.v2"
 LEGACY_GLOSSARY_RESULT_SCHEMA = "alc.translate.glossary_result.v1"
-GLOSSARY_FALLBACK_SUMMARY_SCHEMA = (
-    "alc.translate.glossary_fallback_summary.v1"
-)
+GLOSSARY_FALLBACK_SUMMARY_SCHEMA = "alc.translate.glossary_fallback_summary.v1"
 TRANSLATION_RESULT_SCHEMA = "alc.translate.translation_result.v1"
 
 DEFAULT_GLOSSARY_INPUT_BUDGET_BYTES = 32_000
@@ -109,10 +110,22 @@ class GenerationRecipe:
     model: ModelSelection = field(default_factory=ModelSelection)
     glossary_input_budget_bytes: int = DEFAULT_GLOSSARY_INPUT_BUDGET_BYTES
     translation_input_budget_bytes: int = DEFAULT_TRANSLATION_INPUT_BUDGET_BYTES
+    processing_mode: str | None = None
+    user_intent: str = ""
+    review_rounds: int | None = None
 
     def __post_init__(self) -> None:
+        if self.review_rounds is not None and (
+            type(self.review_rounds) is not int or self.review_rounds not in (0, 1, 2)
+        ):
+            raise ValueError("review_rounds must be 0, 1, 2 or None")
+        if self.processing_mode not in {None, "fast", "standard", "deep"}:
+            raise ValueError("Unsupported processing mode")
         if not isinstance(self.model, ModelSelection):
             raise ValueError("model must be a ModelSelection")
+        if not isinstance(self.user_intent, str) or len(self.user_intent) > 8_000:
+            raise ValueError("user_intent must be a string of at most 8000 characters")
+        object.__setattr__(self, "user_intent", self.user_intent.strip())
         for name in (
             "glossary_input_budget_bytes",
             "translation_input_budget_bytes",
@@ -129,10 +142,17 @@ class GenerationRecipe:
 @dataclass(frozen=True)
 class ExecutionOptions:
     llm: LLMExecutionOptions = field(default_factory=LLMExecutionOptions)
+    window_workers: int = 1
 
     def __post_init__(self) -> None:
         if not isinstance(self.llm, LLMExecutionOptions):
             raise ValueError("llm must be LLMExecutionOptions")
+        if (
+            isinstance(self.window_workers, bool)
+            or not isinstance(self.window_workers, int)
+            or not 1 <= self.window_workers <= 32
+        ):
+            raise ValueError("window_workers must be an integer between 1 and 32")
 
 
 def source_to_document(source: TranslationSource) -> dict[str, JsonValue]:
@@ -182,15 +202,71 @@ def recipe_to_document(recipe: GenerationRecipe) -> dict[str, JsonValue]:
     }
     if recipe.model.reasoning_effort is not None:
         model["reasoning_effort"] = recipe.model.reasoning_effort
-    return {
+    document = {
         "schema_version": GENERATION_RECIPE_SCHEMA,
         "model": model,
         "glossary_input_budget_bytes": recipe.glossary_input_budget_bytes,
         "translation_input_budget_bytes": recipe.translation_input_budget_bytes,
     }
+    if (
+        recipe.processing_mode is not None
+        or recipe.user_intent
+        or recipe.review_rounds is not None
+    ):
+        from ac_llm.request import model_selection_to_document
+
+        document.update(
+            schema_version=GENERATION_RECIPE_SCHEMA_V2,
+            model=model_selection_to_document(recipe.model),
+            processing_mode=recipe.processing_mode,
+        )
+    if recipe.user_intent or recipe.review_rounds is not None:
+        document.update(
+            schema_version=GENERATION_RECIPE_SCHEMA_V3,
+            user_intent=recipe.user_intent,
+        )
+    if recipe.review_rounds is not None:
+        document.update(
+            schema_version=GENERATION_RECIPE_SCHEMA_V4,
+            review_rounds=recipe.review_rounds,
+        )
+    return document
 
 
 def recipe_from_document(value: Mapping[str, Any]) -> GenerationRecipe:
+    if value.get("schema_version") == GENERATION_RECIPE_SCHEMA_V4:
+        from dataclasses import replace
+
+        raw = dict(value)
+        rounds = raw.pop("review_rounds")
+        if type(rounds) is not int or rounds not in (0, 1, 2):
+            raise ValueError("review_rounds must be 0, 1 or 2")
+        raw["schema_version"] = GENERATION_RECIPE_SCHEMA_V3
+        return replace(recipe_from_document(raw), review_rounds=rounds)
+    if value.get("schema_version") == GENERATION_RECIPE_SCHEMA_V3:
+        from dataclasses import replace
+
+        raw = dict(value)
+        intent = _string(raw, "user_intent")
+        raw.pop("user_intent")
+        raw["schema_version"] = GENERATION_RECIPE_SCHEMA_V2
+        return replace(recipe_from_document(raw), user_intent=intent)
+    if value.get("schema_version") == GENERATION_RECIPE_SCHEMA_V2:
+        from dataclasses import replace
+        from ac_llm.request import decode_model_selection
+
+        raw = dict(value)
+        mode = raw.pop("processing_mode")
+        model = decode_model_selection(
+            raw["model"], extended="reasoning_effort" in raw["model"]
+        )
+        raw["schema_version"] = GENERATION_RECIPE_SCHEMA
+        raw["model"] = {
+            "provider": model.provider,
+            "model": model.model,
+            "tier": model.tier,
+        }
+        return replace(recipe_from_document(raw), model=model, processing_mode=mode)
     document = _exact(
         value,
         {
@@ -223,9 +299,7 @@ def recipe_from_document(value: Mapping[str, Any]) -> GenerationRecipe:
                 else _string(model, "reasoning_effort")
             ),  # type: ignore[arg-type]
         ),
-        glossary_input_budget_bytes=_integer(
-            document, "glossary_input_budget_bytes"
-        ),
+        glossary_input_budget_bytes=_integer(document, "glossary_input_budget_bytes"),
         translation_input_budget_bytes=_integer(
             document, "translation_input_budget_bytes"
         ),
@@ -261,9 +335,7 @@ def decode_language_semantic_input(
             source_from_document(_mapping(request["source"], "source")),
             _string(request, "target_language"),
         ),
-        recipe_from_document(
-            _mapping(outer["generation_recipe"], "generation recipe")
-        ),
+        recipe_from_document(_mapping(outer["generation_recipe"], "generation recipe")),
     )
 
 
@@ -276,9 +348,7 @@ def glossary_semantic_input(
             "source": source_to_document(request.source),
             "target_language": request.target_language,
             "approx_count": request.approx_count,
-            "language_result": artifact_source_to_document(
-                request.language_result
-            ),
+            "language_result": artifact_source_to_document(request.language_result),
         },
         "generation_recipe": recipe_to_document(recipe),
     }
@@ -308,9 +378,7 @@ def decode_glossary_semantic_input(
             _integer(request, "approx_count"),
             artifact_source_from_document(request["language_result"]),
         ),
-        recipe_from_document(
-            _mapping(outer["generation_recipe"], "generation recipe")
-        ),
+        recipe_from_document(_mapping(outer["generation_recipe"], "generation recipe")),
     )
 
 
@@ -322,12 +390,8 @@ def blocks_semantic_input(
             "schema_version": BLOCKS_REQUEST_SCHEMA,
             "source": source_to_document(request.source),
             "target_language": request.target_language,
-            "language_result": artifact_source_to_document(
-                request.language_result
-            ),
-            "glossary_result": artifact_source_to_document(
-                request.glossary_result
-            ),
+            "language_result": artifact_source_to_document(request.language_result),
+            "glossary_result": artifact_source_to_document(request.glossary_result),
         },
         "generation_recipe": recipe_to_document(recipe),
     }
@@ -357,9 +421,7 @@ def decode_blocks_semantic_input(
             artifact_source_from_document(request["language_result"]),
             artifact_source_from_document(request["glossary_result"]),
         ),
-        recipe_from_document(
-            _mapping(outer["generation_recipe"], "generation recipe")
-        ),
+        recipe_from_document(_mapping(outer["generation_recipe"], "generation recipe")),
     )
 
 

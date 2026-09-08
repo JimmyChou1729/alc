@@ -35,27 +35,11 @@ installation.
 
 Choose a local rich Markdown, HTML, or flattened single-file TeX source. A PDF
 is optional and is used only for validation and page mapping. `alc-companion`
-does not resolve remote paper identifiers. For one direct HTML URL, use ARC
-only for exact `https://arxiv.org/html/<id>[vN]`; preserve the version while
-extracting the paper ID. An ar5iv URL or any other HTTPS HTML URL always goes
-to generic ACF with the original URL unchanged. If `arc-paper` is on `PATH`,
-first run `arc-paper export-arxiv-html-acquisition --help`; only exit status 0
-is usable. Otherwise, only an ARC Skill runtime whose `doctor` exits 0 with
-JSON `ready:true` may run
-`<arc-skill-dir>/scripts/arc-runtime arc-paper
-export-arxiv-html-acquisition --help`; only exit status 0 is usable. These
-probes are no-network and no-write. Never run `setup`; any failed probe uses
-the generic route. The accepted ARC route uses
-`arc-paper export-arxiv-html-acquisition <paper-id> --output-dir <bundle-dir>`
-with an optional `--cache-root <root>`. Both routes must return one materialized
-export containing an
-`ac.document.html_source_bundle.v1` bundle and one local HTML primary. The
-Companion integration projects the nested bundle's identity, primary artifact
-digest, requested URL, and final URL into the lineage; partial-resource
-warnings remain Companion source diagnostics. Do not retry a structural,
-translation, or provider failure through TeX, flattened Markdown, a second
-source bundle, or another project root. Preserve the user's exact
-`user_intent`; when absent, Companion uses its neutral textbook intent.
+does not resolve remote paper identifiers directly. Follow SKILL.md's Direct
+HTML sources route: normalize the supplied arXiv ID/DOI to its HTTPS URL and use
+Foundation acquisition, including when ARC is installed. Keep the materialized
+HTML and export manifest together; preserve source identity and the user's
+intent. Do not switch source edition or project root after a model failure.
 
 For the generic route, create one explicit materialization directory:
 
@@ -71,7 +55,8 @@ alc-companion build <bundle-dir>/source.html \
   --html-source-manifest <bundle-dir>/manifest.json \
   --project-dir <project-dir> \
   --target-language <language-tag> \
-  --host-authority <host-authority>
+  --host-authority <host-authority> \
+  --execution-profile local-app --workers 2 --review-rounds 1
 ```
 
 Companion verifies that the explicit source path and bytes match the manifest;
@@ -168,14 +153,11 @@ by this workflow. Do not ask a second chat question about sending the document
 to that same provider. Ask again only if a materially different provider,
 destination, source, or lineage is proposed.
 
-Add `--cross-chapter-editorial-review` only when the user wants an additional
-global redundancy audit after all chapter-local guides complete. It runs a
-separate single-worker proposer-reviewer scope for at most three rounds. Only
-edits explicitly approved by the final reviewer are used in the resolved
-publication; original accepted guide artifacts remain unchanged. The
-publication exposes a short status plus a downloadable complete editorial
-review report. Without the flag, the build keeps its existing recipe identity
-and model-call count.
+For new tasks use SKILL.md's explicit processing policy: standard is
+`--workers 2 --review-rounds 1 --execution-profile local-app`. Respect user
+choices for 0/1/2 reviews and 1–8 workers. The review policy also controls
+cross-chapter auditing; approved corrections remain bound to the reviewed
+proposal. Legacy tasks without review_rounds retain their frozen flag behavior.
 
 Choose `<host-authority>` once: use `unrestricted` only when the host
 explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the

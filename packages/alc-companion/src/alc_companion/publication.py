@@ -114,6 +114,7 @@ def publish_companion(
 ) -> PublishedCompanion:
     """Publish immutable overlay revisions, their layers, and one publication."""
 
+    partial = build_state == "partial"
     blocks = {item.block_id: item for item in source.blocks}
     source_identity = Publication(source).source
     translation_revisions: list[FragmentRevision] = []
@@ -131,14 +132,14 @@ def publish_companion(
     for chapter in chapters:
         chapter_id = _string(chapter, "chapter_id")
         raw_translation = chapter.get("translation_result")
-        if translation_mode == "enabled":
+        if translation_mode == "enabled" and not (partial and raw_translation is None):
             try:
                 selection = load_translation_selection(
                     context,
                     _mapping(raw_translation, "translation result"),
                     source=source,
                     block_ids=_string_list(
-                        chapter.get("block_ids"), "chapter block IDs"
+                        chapter.get("translation_block_ids", chapter.get("block_ids")) if partial else chapter.get("block_ids"), "chapter block IDs"
                     ),
                     target_language=target_language,
                 )

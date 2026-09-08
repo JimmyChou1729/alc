@@ -32,7 +32,7 @@ from ac_jobs import (
     file_lease,
     snapshot_data,
 )
-from ac_llm import ExecutionLimits, HostAuthority, LLMExecutionOptions, ModelSelection
+from ac_llm import ExecutionLimits, HostAuthority, LLMExecutionOptions, LLMExecutionProfile, ModelSelection
 from alc_render import (
     HTMLRenderError,
     InteractiveReaderAdmissionError,
@@ -136,8 +136,16 @@ def _parser() -> _Parser:
         help="path to a complete JSON object of reader UI labels",
     )
     build.add_argument("--user-intent", default="", help="reader intent used to focus the guide")
+    build.add_argument("--chapter-heading-level", type=int, choices=range(1, 7),
+                       help="explicit source heading level for chapter tasks; source blocks are unchanged")
     build.add_argument("--provider", default="auto", help="LLM provider (default: auto)")
     build.add_argument("--model", help="provider-specific model name")
+    build.add_argument("--reasoning-effort", choices=("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"), help="explicit provider reasoning effort")
+    build.add_argument("--preload-chapter-evidence", action="store_true", help=argparse.SUPPRESS)
+    build.add_argument("--pipeline-chapters", action="store_true", help=argparse.SUPPRESS)
+    build.add_argument("--processing-mode", choices=("fast", "standard", "deep"))
+    build.add_argument("--review-rounds", type=int, choices=(0, 1, 2),
+                       help="maximum content review rounds; 0 delivers generated content without model review")
     build.add_argument(
         "--effort",
         choices=("low", "medium", "high", "xhigh"),
@@ -146,8 +154,8 @@ def _parser() -> _Parser:
     build.add_argument(
         "--workers",
         type=int,
-        default=16,
-        help="parallel workers (default: 16)",
+        default=2,
+        help="parallel workers (default: 2)",
     )
     build.add_argument(
         "--approx-term-count", type=int, default=50, help="target glossary size (default: 50)"
@@ -166,6 +174,7 @@ def _parser() -> _Parser:
         ),
     )
     _host_authority_argument(build)
+    build.add_argument("--execution-profile", choices=("standard", "local-app"), default="standard", help="model execution profile")
     _document_cache_argument(build)
 
     status = commands.add_parser(
@@ -204,11 +213,14 @@ def _parser() -> _Parser:
     resume.add_argument(
         "--workers",
         type=int,
-        default=16,
-        help="parallel workers (default: 16)",
+        default=2,
+        help="parallel workers (default: 2)",
     )
+    resume.add_argument("--pipeline-chapters", action="store_true", help=argparse.SUPPRESS)
+    resume.add_argument("--preload-chapter-evidence", action="store_true", help=argparse.SUPPRESS)
     _document_cache_argument(resume)
     _host_authority_argument(resume)
+    resume.add_argument("--execution-profile", choices=("standard", "local-app"), default="standard", help="model execution profile")
 
     stop = commands.add_parser(
         "stop",
@@ -307,20 +319,25 @@ def _host_authority_argument(parser: argparse.ArgumentParser) -> None:
 def _execution_options(args: argparse.Namespace) -> CompanionExecutionOptions:
     return CompanionExecutionOptions(
         workers=args.workers,
+        pipeline_chapters=True,
+        preload_chapter_evidence=True,
         document_cache_root=args.document_cache_root,
-        llm=LLMExecutionOptions(
+        llm=(getattr(args, "llm_options", None) or LLMExecutionOptions(
+            profile=LLMExecutionProfile(getattr(args, "execution_profile", "standard").replace("-", "_")),
             limits=ExecutionLimits(
                 idle_timeout_seconds=_DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS
             ),
             host_authority=HostAuthority(args.host_authority),
-        ),
+        )),
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, event_sink: Any = None, llm_options: Any = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
         args = _parser().parse_args(arguments)
+        args.event_sink = event_sink
+        args.llm_options = llm_options
         result = _dispatch(args)
     except _HelpRequested:
         return 0
@@ -460,6 +477,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
         validator_digests=validators,
         target_language=args.target_language,
         user_intent=args.user_intent,
+        chapter_heading_level=getattr(args, "chapter_heading_level", None),
         authors=authors,
         reader_labels=reader_labels,
     )
@@ -469,11 +487,14 @@ def _build(args: argparse.Namespace) -> CommandResult:
                 provider=args.provider,
                 model=args.model,
                 tier="medium",
-                reasoning_effort=args.effort,
+                reasoning_effort=getattr(args, "reasoning_effort", None) or args.effort,
             ),
             approx_term_count=args.approx_term_count,
+            processing_mode=getattr(args, "processing_mode", None),
+            review_rounds=getattr(args, "review_rounds", None),
+            chapter_guide_max_rounds=2 if getattr(args, "processing_mode", None) == "fast" else 3,
             cross_chapter_editorial_review=(
-                args.cross_chapter_editorial_review
+                args.cross_chapter_editorial_review or getattr(args, "processing_mode", None) == "deep"
             ),
         )
     )
@@ -499,6 +520,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
     snapshot = service.execute(
         run_id,
         execution=execution,
+        **({"event_sink": args.event_sink} if getattr(args, "event_sink", None) is not None else {}),
     )
     return _snapshot_result(
         paths,
@@ -517,6 +539,7 @@ def _resume(args: argparse.Namespace) -> CommandResult:
         run_id,
         input=value,
         execution=_execution_options(args),
+        **({"event_sink": args.event_sink} if getattr(args, "event_sink", None) is not None else {}),
     )
     return _snapshot_result(
         paths,
@@ -1004,7 +1027,8 @@ def _snapshot_result(
         return CommandResult(
             base.status,
             run=base.run,
-            data={"run": snapshot_data(snapshot)},
+            data={"run": snapshot_data(snapshot),
+                  "progress": CompanionService(paths.jobs_root).progress(snapshot.run_id)},
             artifacts=base.artifacts,
             warnings=command_warnings,
             error=base.error,

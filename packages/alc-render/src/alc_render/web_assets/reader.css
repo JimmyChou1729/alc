@@ -2925,3 +2925,32 @@ body[data-alc-reader-edit-activation="double"]
   .alc-source-row { break-inside: auto; }
   a { text-decoration-color: #bbb; }
 }
+
+.alc-fragment:has(> .alc-translation-quality) { position: relative; padding-inline-end: 2rem; }
+.alc-translation-quality {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 2;
+  background: transparent;
+  border: 0;
+  padding: 0.25rem;
+  font-size: 0.875rem;
+  cursor: help;
+}
+@media print { .alc-translation-quality { display: none; } }
+
+ .alc-quality-dismiss {
+  position:absolute; top:.35rem; right:.35rem; display:grid; place-items:center;
+  width:1.75rem; height:1.75rem; padding:0; border:0; border-radius:50%;
+  background:transparent; color:#60768a; cursor:pointer;
+}
+.alc-quality-dismiss:hover { background:#e4edf5; color:#263f54; }
+.alc-quality-dismiss:focus-visible { outline:2px solid #7ea8ca; outline-offset:2px; }
+.alc-tooltip { box-sizing:border-box; overflow-wrap:anywhere; }
+.alc-tooltip.has-quality-dismiss { padding-inline-end:2.5rem; }
+.alc-confirm-dialog { box-sizing:border-box; width:min(28rem, calc(100vw - 2rem)); border:1px solid #d6e1eb; border-radius:1rem; padding:1.5rem; color:#243746; background:#fff; box-shadow:0 1rem 4rem #14283833; }
+.alc-confirm-dialog::backdrop { background:#14283855; }
+.alc-confirm-actions { display:flex; justify-content:flex-end; gap:.75rem; margin-top:1.5rem; }
+.alc-confirm-actions button { border:1px solid #cbd9e5; background:#f7fafc; padding:.6rem 1rem; border-radius:.6rem; font:inherit; cursor:pointer; }
+.alc-confirm-actions button:last-child { background:#285d82; color:#fff; border-color:#285d82; }

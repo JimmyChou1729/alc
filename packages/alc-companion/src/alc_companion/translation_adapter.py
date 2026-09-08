@@ -102,8 +102,18 @@ class AlcTranslateAdapter:
         task_service: LLMTaskService | None = None,
         *,
         document_cache_root: str | Path | None = None,
+        processing_mode: str | None = None,
+        window_workers: int = 1,
+        review_rounds: int | None = None,
+        user_intent: str = "",
     ) -> None:
         self.task_service = task_service
+        if type(window_workers) is not int or not 1 <= window_workers <= 24:
+            raise ValueError("window_workers must be an integer between 1 and 24")
+        self.window_workers = window_workers
+        self.processing_mode = processing_mode
+        self.review_rounds = review_rounds
+        self.user_intent = user_intent
         self.document_cache_root = (
             Path(document_cache_root)
             if document_cache_root is not None
@@ -170,6 +180,7 @@ class AlcTranslateAdapter:
             execution=execution,
             resume_input=resume_input,
             artifact_prefix="translation-v2/glossary",
+            user_intent=self.user_intent,
         )
         return _normalized_outcome(outcome)
 
@@ -201,6 +212,10 @@ class AlcTranslateAdapter:
             resume_input=resume_input,
             block_ids=tuple(block_ids),
             artifact_prefix=artifact_prefix,
+            input_budget_bytes=32000,
+            window_workers=self.window_workers,
+            review_rounds=self.review_rounds,
+            user_intent=self.user_intent,
         )
         return _normalized_outcome(outcome)
 

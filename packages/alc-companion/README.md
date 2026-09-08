@@ -50,6 +50,14 @@ alc-companion render --project-dir local/example
 alc-companion validate --project-dir local/example
 ```
 
+`build` accepts `--processing-mode fast|standard|deep` independently of
+`--reasoning-effort`. Fast allows one guide revision; standard and deep allow up
+to two, and deep enables cross-chapter editorial review. Translation still uses
+review in every mode unless an explicit `--review-rounds` policy is supplied.
+Omitting these options preserves existing recipe identity
+and defaults. Extended mode/effort options require the matching AC Foundation
+development runtime described in [alc-web](../alc-web/README.md).
+
 Markdown, HTML, or flattened single-file TeX is authoritative. For local
 sources, `--pdf note.pdf` supplies an optional validator; PDF is never the
 reader source or output. Use `unrestricted` only when the host explicitly
@@ -80,25 +88,12 @@ acquisition command:
   --output-dir bundle
 ```
 
-ARC is optional and remains outside the Python package. Use its academic export
-route only for an exact `https://arxiv.org/html/<id>[vN]` URL; retain the exact
-version. An ar5iv URL and every other HTTPS HTML URL use generic ACF with the
-original URL unchanged. If `arc-paper` is on `PATH`, first run
-`arc-paper export-arxiv-html-acquisition --help`; only exit status 0 is usable.
-Otherwise, the ARC Skill route requires
-`<arc-skill-dir>/scripts/arc-runtime doctor` to exit 0 with JSON `ready:true`,
-then requires its `arc-paper export-arxiv-html-acquisition --help` probe to
-exit 0. Never run `setup`; these probes are no-network and no-write. The
-accepted ARC export is:
-
-```bash
-arc-paper export-arxiv-html-acquisition <paper-id> \
-  --output-dir bundle [--cache-root <root>]
-```
-
-Both acquisition routes must produce the same ACF materialized export shape.
-Companion validates its manifest, source bytes, and resources before creating
-project state; warnings from unavailable resources remain source diagnostics.
+ARC is optional and remains outside the Python package. Supplied URLs use the
+same Foundation acquisition route as Local Web, preserving explicit arXiv
+versions. Discovery and enrichment may use ARC when requested. The materialized
+export remains authoritative; Companion validates its manifest, source bytes and
+resources before creating project state. Unavailable resources remain source
+diagnostics.
 
 Every command prints an `ac.command_result.v2` envelope. For `build` and
 `resume`, read the selected durable identity at top-level `run.id`, lifecycle at
@@ -281,7 +276,21 @@ title-formatting defect cannot stop or visibly leak markup into the Reader.
 
 ## Reader assumptions
 
-An explicit reader background in user intent takes precedence. Otherwise,
+For a paper with one title heading above its body sections, an explicit
+`--chapter-heading-level 2` on build partitions chapter tasks at level-two
+source headings. The equivalent public request field is
+`CompanionBuildRequest.chapter_heading_level`. The choice is frozen in the
+request; resume retains it. Source blocks, formulas and IDs are unchanged,
+and preceding front matter belongs to the first selected chapter. At this
+explicit boundary, exact References/Bibliography/Acknowledgements headings
+form display-and-translation chapters without generating guides. A missing
+requested level is rejected. This option cannot be combined with a document
+structure overlay; omitting it retains historical chapter planning and request
+identity.
+
+User intent is also passed to Companion's embedded glossary, translation and
+translation-review stages under their fixed source-faithful contracts. An
+explicit reader background in user intent takes precedence for guide content. Otherwise,
 popular or weakly specialized writing assumes a generally educated adult
 without specialist training; research papers assume a student who has
 completed the relevant foundational courses; textbooks assume completion of
@@ -293,3 +302,91 @@ already mastered.
 ```bash
 python -m pytest packages/alc-companion/tests
 ```
+
+Chapter translation results retain source-note translations as separate render
+fragments. Companion validates body order and note ownership/coverage separately;
+note text never replaces its owner paragraph in the guide input.
+
+Local-app builds check `ac-document` availability before model execution and
+require persisted successful host-read receipts covering every declared source
+and translation part before accepting chapter guides. Nonzero exits, empty
+output and truncated reads do not establish coverage; complete smaller reads
+can satisfy it. Missing coverage fails with `chapter_source_read_incomplete`,
+even when the model reports a completed review. Direct host execution retains
+its existing review contract because commands executed outside the broker do
+not produce these receipts. Existing completed publications are not rewritten.
+
+After a failed build, recovery retains accepted chapter guides and translations
+and rebuilds the pending guide batch in a fresh execution scope. It does not
+require manual deletion of old batch/request indexes or reuse old model sessions.
+
+New Companion builds use chapter pipelines by default, in both CLI/API and Web.
+Each chapter validates its translation before generating its guide, while other
+chapters can translate. Provider gates remain shared and chapter order is
+preserved. The saved strategy is retained on resume, including legacy staged
+jobs. These workflow optimizations are not user-facing settings.
+
+Complete original and frozen translation evidence is preloaded for independent
+proposers and reviewers before guide generation when exact cached source commands
+are available. Non-local legacy text-only sources retain their attached source
+input path. Local application jobs require complete verifiable evidence. If a complete chapter read is
+truncated or unavailable, registered smaller part ranges are read to establish
+complete original and translation coverage. Evidence includes source bindings,
+content digests and compact location descriptors, with a 256,000-byte serialized
+limit per chapter; command descriptors remain in the surrounding context. Failed
+reads and oversized chapters stop with a specific preparation error before guide
+model calls, rather than silently switching to model-directed reading. Failed
+preparation can be retried; only successful evidence is cached. Existing jobs
+keep their saved policy and already frozen guide requests, including legacy
+on-demand reading.
+
+Companion defaults to 2 workers; `--workers` is the invocation's shared model-task
+budget. Translation windows within one chapter can use the budget, while
+translation, review and guide tasks across chapters share the same limit. Chapter
+and window worker counts do not multiply the number of active model tasks.
+Changing workers on resume does not change semantic request identity or repeat
+accepted translation windows. Custom translation adapters retain their existing
+protocol and own any task execution they perform outside the supplied service.
+`build` and `resume` accept `--execution-profile standard|local-app`.
+The default remains `standard`; `local-app` uses the bounded local application's
+model and source-read execution policy. An explicitly injected runtime policy
+(such as Web execution) takes precedence over the CLI flag.
+Guide depth and model reasoning effort are independent of concurrency. Internal
+execution-policy overrides remain available for compatibility tests; legacy CLI
+optimization flags are accepted but hidden and no longer required.
+
+Independent chapter execution collects failed units instead of abandoning
+unstarted neighbors after the first failed result. Shared pauses still stop
+admission. Optional author output-format repair exhaustion reuses the validated
+omitted-author fallback and records that decision for replay without a new
+model call. This does not suppress authentication or quota pauses.
+
+Both chapter pipelines and legacy staged guide batches isolate exhausted
+model-content pauses from other chapters. Authority and shared-service pauses retain their normal stop boundary.
+When chapter processing pauses or fails, a separate partial Reader snapshot can
+include completed chapters and complete translation results from other chapters.
+It is titled as a partial result and does not publish the final build artifact.
+The partial state records the complete chapter count and unfinished chapter titles.
+Successful units are reused during normal recovery. Completed source blocks
+from chapter-internal translation windows can also appear in partial previews;
+a split block is included only when all its units and source notes are complete.
+Guide-only chapters remain available when their translation is unfinished.
+Optional cross-chapter editorial and PDF label-review output-format exhaustion
+retain accepted content and add an advisory rather than stopping delivery.
+
+
+### Content review policy
+
+`build --review-rounds 0|1|2` freezes a content-review limit into the durable
+generation recipe. It applies independently to each translated batch and each
+guide chapter. Zero skips model review and cross-chapter editorial work while
+retaining structural/content validators. One allows one review and correction;
+two allows a second review after correction, with early acceptance. This policy
+is independent of `--workers` and overrides the legacy processing-mode review
+behavior. Resume uses the stored recipe. Omitting it preserves legacy behavior
+and recipe identity.
+
+With a positive limit, cross-chapter editorial review also runs, with at most
+that many reviewed proposals. Only explicitly approved, digest-bound edits are
+applied; an unapproved final proposal never changes the guide. These rounds
+are limits per stage, not a total model-call budget or a quality guarantee.

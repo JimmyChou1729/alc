@@ -723,7 +723,7 @@ def test_reviewer_duplicate_id_recovers_only_admissible_proposals(
         def __init__(self, _tasks) -> None:
             pass
 
-        def execute(self, context, request, *, options, execution_scope=None):
+        def execute(self, context, request, *, options, execution_scope=None, continue_after_pause=None):
             assert request.failure_policy.value == "collect"
             loops = []
             for loop in request.loops:
@@ -800,7 +800,7 @@ def test_reviewer_duplicate_id_recovers_only_admissible_proposals(
             model=ModelSelection(provider="test", model="fixture")
         ),
         execution=CompanionExecutionOptions(
-            workers=1, document_cache_root=tmp_path / "paper"
+            workers=1, pipeline_chapters=False, document_cache_root=tmp_path / "paper"
         ),
         task_service=FakeGuideTasks(),  # type: ignore[arg-type]
         translation_adapter=FakeTranslationAdapter(mode="enabled"),
@@ -811,6 +811,57 @@ def test_reviewer_duplicate_id_recovers_only_admissible_proposals(
     assert expected_category in {
         item["category"] for item in ledger["issues"]
     }
+
+
+def test_legacy_failed_first_loop_retains_later_success(tmp_path):
+    from ac_llm import LLMFailed, ProviderFailure, FailureCategory
+    class FailFirst(FakeGuideTasks):
+        def execute_or_resume(self, context, request, **kwargs):
+            contract, payload = _request_payload(request.prompt)
+            if contract == CHAPTER_GUIDE_PROMPT_VERSION and payload["chapter"]["title"] == "Chapter":
+                return LLMFailed(ProviderFailure("fixture failure", category=FailureCategory.INTERNAL))
+            return super().execute_or_resume(context, request, **kwargs)
+    service = CompanionService(RunRepository(tmp_path / "jobs"))
+    prepared = service.prepare(CompanionBuildRequest(_document(tmp_path), target_language="zh-CN"))
+    result = service.execute(prepared.run_id,
+        execution=CompanionExecutionOptions(workers=1, pipeline_chapters=False,
+            preload_chapter_evidence=False, document_cache_root=tmp_path / "paper"),
+        task_service=FailFirst(), translation_adapter=FakeTranslationAdapter(mode="enabled"))
+    assert result.status is RunStatus.SUCCEEDED
+    publication = service.publication(result.run_id)
+    ledger = publication.reader_profile["delivery_ledger"]
+    assert ledger["delivery_grade"] == "degraded"
+    assert any(issue["category"] == "guide_evaluated_omitted" for issue in ledger["issues"])
+    context = RunContext(service.repository, result, resume_input=None)
+    later = plan_source_chapters(_document(tmp_path))[1]
+    accepted = context.artifacts.find(f"chapters/{later.chapter_id}/guide-accepted")
+    assert "A focused source-anchored explanation" in context.artifacts.read_bytes(accepted).decode()
+
+
+def test_legacy_global_pause_survives_neighbor_postprocessing_error(tmp_path, monkeypatch):
+    from ac_llm import LLMPaused
+    from ac_jobs import ResumeReason
+    class PauseSecond(FakeGuideTasks):
+        def execute_or_resume(self, context, request, **kwargs):
+            contract, payload = _request_payload(request.prompt)
+            if contract == CHAPTER_GUIDE_PROMPT_VERSION and payload["chapter"]["title"] == "Relativity":
+                return LLMPaused(ResumeReason.EXTERNAL_CONDITION, "authentication", {"code": "provider_authentication"})
+            return super().execute_or_resume(context, request, **kwargs)
+    def reject(*args, **kwargs):
+        raise ValueError("fixture invalid completed guide")
+    monkeypatch.setattr(companion_build.CompanionBuildHandler, "_augment_chapter_candidate", reject)
+    service = CompanionService(RunRepository(tmp_path / "jobs"))
+    prepared = service.prepare(CompanionBuildRequest(_document(tmp_path), target_language="zh-CN"))
+    result = service.execute(prepared.run_id,
+        execution=CompanionExecutionOptions(workers=1, pipeline_chapters=False,
+            preload_chapter_evidence=False, document_cache_root=tmp_path / "paper"),
+        task_service=PauseSecond(), translation_adapter=FakeTranslationAdapter(mode="enabled"))
+    assert result.status is RunStatus.PAUSED
+    assert result.awaiting.reason is ResumeReason.EXTERNAL_CONDITION
+    assert result.awaiting.details["llm_code"] == "provider_authentication"
+    context = RunContext(service.repository, result, resume_input=None)
+    errors = context.working.read_candidate_json("chapter-guide-postprocessing-errors")
+    assert any(error["message"] == "fixture invalid completed guide" for error in errors["errors"])
 
 
 def test_glossary_matching_does_not_cross_word_boundaries(
@@ -1041,7 +1092,7 @@ def test_translation_precedes_reviewed_guides_and_uses_local_glossary(
     ).handler == COMPANION_BUILD_HANDLER
     completed = service.execute(
         prepared.run_id,
-        execution=CompanionExecutionOptions(
+        execution=CompanionExecutionOptions(pipeline_chapters=False, preload_chapter_evidence=False,
             workers=2,
             document_cache_root=tmp_path / "paper",
         ),
@@ -1340,7 +1391,7 @@ def test_translation_durable_units_freeze_the_lane_contract(
 
     completed = service.execute(
         prepared.run_id,
-        execution=CompanionExecutionOptions(workers=1),
+        execution=CompanionExecutionOptions(pipeline_chapters=False, preload_chapter_evidence=False, workers=1),
         task_service=FakeGuideTasks(),  # type: ignore[arg-type]
         translation_adapter=FakeTranslationAdapter(mode="enabled"),
     )
@@ -1879,7 +1930,7 @@ def test_reviewer_can_accept_without_forcing_an_extra_revision(
 
     completed = service.build(
         CompanionBuildRequest(document, target_language="en"),
-        execution=CompanionExecutionOptions(workers=1),
+        execution=CompanionExecutionOptions(pipeline_chapters=False, preload_chapter_evidence=False, workers=1),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=FakeTranslationAdapter(mode="skipped"),
     )
@@ -1917,7 +1968,7 @@ def test_invalid_terminal_revision_reports_program_owned_candidate(
 
     failed = service.build(
         CompanionBuildRequest(document, target_language="en"),
-        execution=CompanionExecutionOptions(workers=1),
+        execution=CompanionExecutionOptions(pipeline_chapters=False, preload_chapter_evidence=False, workers=1),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=FakeTranslationAdapter(mode="skipped"),
     )
@@ -1975,7 +2026,7 @@ def test_invalid_terminal_revision_reports_program_owned_candidate(
 
     recovered = service.resume(
         failed.run_id,
-        execution=CompanionExecutionOptions(workers=1),
+        execution=CompanionExecutionOptions(pipeline_chapters=False, preload_chapter_evidence=False, workers=1),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=FakeTranslationAdapter(mode="skipped"),
     )
@@ -2030,7 +2081,7 @@ def test_resume_rebuilds_joined_chapter_after_guide_replay(
     )
     failed = service.build(
         CompanionBuildRequest(document, target_language="en"),
-        execution=CompanionExecutionOptions(workers=1),
+        execution=CompanionExecutionOptions(pipeline_chapters=False, preload_chapter_evidence=False, workers=1),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=FakeTranslationAdapter(mode="skipped"),
     )
@@ -2059,7 +2110,7 @@ def test_resume_rebuilds_joined_chapter_after_guide_replay(
 
     recovered = service.resume(
         failed.run_id,
-        execution=CompanionExecutionOptions(workers=1),
+        execution=CompanionExecutionOptions(pipeline_chapters=False, preload_chapter_evidence=False, workers=1),
         task_service=tasks,  # type: ignore[arg-type]
         translation_adapter=FakeTranslationAdapter(mode="skipped"),
     )
@@ -2155,7 +2206,7 @@ def test_default_adapter_resolves_shared_cache_for_structure(
             captured["kwargs"] = kwargs
             return FakeResult()
 
-    adapter = AlcTranslateAdapter()
+    adapter = AlcTranslateAdapter(user_intent="Prioritize observational methods.")
     monkeypatch.setattr(ac_document, "DocumentStructureCache", FakeStructureCache)
     monkeypatch.setattr(ac_document, "TermInventoryStore", FakeTermInventoryStore)
     monkeypatch.setattr(
@@ -2192,6 +2243,9 @@ def test_default_adapter_resolves_shared_cache_for_structure(
     assert captured["root"] == tmp_path / "shared-cache"
     assert captured["kwargs"]["keyword_structure"] == "overlay"
     assert captured["kwargs"]["keyword_section_ids"] == ("chapter",)
+    assert captured["kwargs"]["user_intent"] == (
+        "Prioritize observational methods."
+    )
 
 
 def test_default_adapter_preflight_requires_public_translate_facade(
@@ -2238,3 +2292,318 @@ def test_unfinished_legacy_handlers_require_a_new_build(
         )
 
     assert exc_info.value.code == "run_handler_invalid"
+
+
+@pytest.mark.parametrize("read_source", [False, True])
+def test_local_app_requires_source_read_receipts(tmp_path, read_source):
+    from ac_llm import LLMExecutionOptions, LLMExecutionProfile, HostRequest, HostResponseStatus
+
+    class ReadingTasks(FakeGuideTasks):
+        def execute_or_resume(self, context, request, **kwargs):
+            contract, payload = _request_payload(request.prompt)
+            if read_source and contract == CHAPTER_GUIDE_PROMPT_VERSION:
+                options = kwargs["options"]
+                commands = payload["source_commands"]
+                for group in (commands["source"], commands["translation"]["parts"]):
+                    complete = next(x for x in group if x["command_id"] == "complete-current-chapter")
+                    response = options.host_broker.execute(
+                        HostRequest("read", complete["shell"], "read complete chapter"),
+                        workspace=tmp_path,
+                    )
+                    assert response.status is HostResponseStatus.COMPLETED
+                    assert response.result["exit_code"] == 0
+            return super().execute_or_resume(context, request, **kwargs)
+
+    service = CompanionService(RunRepository(tmp_path / "jobs"))
+    prepared = service.prepare(CompanionBuildRequest(_document(tmp_path), target_language="zh-CN"))
+    completed = service.execute(
+        prepared.run_id,
+        execution=CompanionExecutionOptions(pipeline_chapters=False, preload_chapter_evidence=False, document_cache_root=tmp_path / "paper",
+            llm=LLMExecutionOptions(profile=LLMExecutionProfile.LOCAL_APP)),
+        task_service=ReadingTasks(),
+        translation_adapter=FakeTranslationAdapter(mode="enabled"),
+    )
+    if read_source:
+        assert completed.status is RunStatus.SUCCEEDED
+    else:
+        assert completed.status is RunStatus.FAILED
+        assert completed.error.code == "chapter_source_read_incomplete"
+        assert ImmutableArtifactStore(service.repository.run_directory(prepared.run_id)).find("result") is None
+
+
+def test_local_app_missing_document_cli_fails_before_model_work(tmp_path, monkeypatch):
+    from ac_llm import LLMExecutionOptions, LLMExecutionProfile
+    service = CompanionService(RunRepository(tmp_path / "jobs"))
+    prepared = service.prepare(CompanionBuildRequest(_document(tmp_path), target_language="zh-CN"))
+    tasks = FakeGuideTasks()
+    monkeypatch.setattr(companion_build.shutil, "which", lambda *args, **kwargs: None)
+    completed = service.execute(
+        prepared.run_id,
+        execution=CompanionExecutionOptions(document_cache_root=tmp_path / "paper",
+            llm=LLMExecutionOptions(profile=LLMExecutionProfile.LOCAL_APP)),
+        task_service=tasks,
+        translation_adapter=FakeTranslationAdapter(mode="enabled"),
+    )
+    assert completed.status is RunStatus.FAILED
+    assert completed.error.code == "document_runtime_unavailable"
+    assert not tasks.requests
+
+
+@pytest.mark.parametrize('pipeline', [False, True])
+def test_failed_chapter_resumes_without_replaying_accepted_chapter(tmp_path, pipeline):
+    from ac_llm import LLMFailed, InvalidRequestError
+    class FailingTasks(FakeGuideTasks):
+        broken = True
+        def execute_or_resume(self, context, request, **kwargs):
+            contract, payload = _request_payload(request.prompt)
+            if self.broken and contract == CHAPTER_GUIDE_PROMPT_VERSION and payload['chapter']['title'] == 'Relativity':
+                return LLMFailed(InvalidRequestError('injected failure'))
+            return super().execute_or_resume(context, request, **kwargs)
+    tasks = FailingTasks(reviewer_stop_round=1)
+    adapter = FakeTranslationAdapter(mode='enabled')
+    service = CompanionService(tmp_path/'jobs')
+    prepared = service.prepare(CompanionBuildRequest(_document(tmp_path), target_language='zh-CN'))
+    options = CompanionExecutionOptions(workers=1,pipeline_chapters=pipeline,document_cache_root=tmp_path/'paper')
+    first = service.execute(prepared.run_id,execution=options,task_service=tasks,translation_adapter=adapter)
+    assert first.status is RunStatus.FAILED
+    calls = list(adapter.calls)
+    tasks.broken = False
+    tasks.requests.clear()
+    resumed = service.resume(prepared.run_id,execution=options,task_service=tasks,translation_adapter=adapter)
+    assert resumed.status is RunStatus.SUCCEEDED
+    assert adapter.calls[len(calls):] == ['language', 'glossary']
+    titles = [_request_payload(prompt)[1]['chapter']['title'] for contract, _, prompt in tasks.requests if contract == CHAPTER_GUIDE_PROMPT_VERSION]
+    assert titles and set(titles) == {'Relativity'}
+
+
+@pytest.mark.parametrize('pipeline', [False, True])
+def test_chapter_pipeline_starts_guide_before_other_translation_finishes(tmp_path, pipeline):
+    document = _document(tmp_path)
+    chapters = plan_source_chapters(document)
+    first_guide = Event()
+    slow_done = Event()
+    translated = set()
+    guard = Lock()
+    active = 0
+    peak = 0
+    overlap = []
+    def enter():
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+    def leave():
+        nonlocal active
+        with guard:
+            active -= 1
+    class DelayedTranslation(FakeTranslationAdapter):
+        def translate_blocks(self, context, source, **kwargs):
+            enter()
+            try:
+                if tuple(kwargs['block_ids']) == chapters[1].block_ids:
+                    if pipeline:
+                        assert first_guide.wait(20), "guide did not start while translation was active"
+                    slow_done.set()
+                result = super().translate_blocks(context, source, **kwargs)
+                with guard:
+                    translated.add(tuple(kwargs['block_ids']))
+                return result
+            finally:
+                leave()
+    class ObservedTasks(FakeGuideTasks):
+        def execute_or_resume(self, context, request, **kwargs):
+            contract, payload = _request_payload(request.prompt)
+            enter()
+            try:
+                if contract == CHAPTER_GUIDE_PROMPT_VERSION:
+                    chapter = next(c for c in chapters if c.title == payload['chapter']['title'])
+                    assert chapter.block_ids in translated
+                    if chapter.chapter_id == chapters[0].chapter_id:
+                        overlap.append(not slow_done.is_set())
+                        first_guide.set()
+                return super().execute_or_resume(context, request, **kwargs)
+            finally:
+                leave()
+    service = CompanionService(tmp_path/'jobs')
+    result = service.build(CompanionBuildRequest(document,target_language='zh-CN'),
+        execution=CompanionExecutionOptions(workers=2,pipeline_chapters=pipeline,document_cache_root=tmp_path/'paper'),
+        task_service=ObservedTasks(reviewer_stop_round=1),translation_adapter=DelayedTranslation(mode='enabled'))
+    assert result.status is RunStatus.SUCCEEDED
+    assert any(overlap) is pipeline
+    assert peak <= 2
+    assert [node.title for node in service.publication(result.run_id).outline] == [c.title for c in chapters]
+    store = ImmutableArtifactStore(service.repository.run_directory(result.run_id))
+    assert [json.loads(store.read_bytes(store.find(f'chapters/{c.chapter_id}/accepted')))['chapter_id'] for c in chapters] == [c.chapter_id for c in chapters]
+
+
+@pytest.mark.parametrize("review_rounds", [None, 0, 1, 2])
+def test_pipeline_stop_resume_preserves_completed_chapter_and_policy(tmp_path, monkeypatch, review_rounds):
+    monkeypatch.setattr(CompanionBuildHandler, "_cross_chapter_editorial_review",
+                        lambda self, context, chapters, accepted, **kw: (accepted, None))
+    from ac_llm import LLMStopped
+    document = _document(tmp_path)
+    chapters = plan_source_chapters(document)
+    first_done = Event()
+    class StopOnce(FakeGuideTasks):
+        stopped = False
+        def execute_or_resume(self, context, request, **kwargs):
+            contract, payload = _request_payload(request.prompt)
+            if contract == CHAPTER_GUIDE_PROMPT_VERSION and payload['chapter']['title'] == chapters[1].title and not self.stopped:
+                assert first_done.wait(3)
+                self.stopped = True
+                context.repository.request_stop(context.run_id,reason='pipeline test')
+                return LLMStopped()
+            return super().execute_or_resume(context,request,**kwargs)
+    def event_sink(event):
+        if event['event']=='group_unit_finished' and event['data'].get('group_id')=='chapter-pipeline-v1' and event['data'].get('unit_id')==chapters[0].chapter_id:
+            first_done.set()
+    tasks=StopOnce(reviewer_stop_round=1)
+    adapter=FakeTranslationAdapter(mode='enabled')
+    service=CompanionService(tmp_path/'jobs')
+    prepared=service.prepare(CompanionBuildRequest(document,target_language='zh-CN'), recipe=CompanionGenerationRecipe(review_rounds=review_rounds))
+    options=CompanionExecutionOptions(workers=2,pipeline_chapters=True,document_cache_root=tmp_path/'paper')
+    stopped=service.execute(prepared.run_id,execution=options,task_service=tasks,translation_adapter=adapter,event_sink=event_sink)
+    assert stopped.status is RunStatus.PAUSED
+    assert service.progress(stopped.run_id)['completed_chapters']==1
+    tasks.requests.clear()
+    # Runtime defaults may differ on resume; the persisted policy wins.
+    resumed=service.resume(prepared.run_id,execution=CompanionExecutionOptions(workers=2,document_cache_root=tmp_path/'paper'),task_service=tasks,translation_adapter=adapter)
+    assert resumed.status is RunStatus.SUCCEEDED
+    assert decode_handler_semantic_input(service.repository.read_spec(prepared.run_id).semantic_input)[1].review_rounds == review_rounds
+    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == (0 if review_rounds == 0 else 2)
+    titles=[_request_payload(p)[1]['chapter']['title'] for c,_,p in tasks.requests if c==CHAPTER_GUIDE_PROMPT_VERSION]
+    assert titles and set(titles)=={chapters[1].title}
+
+
+@pytest.mark.parametrize("oversized", [False, True])
+@pytest.mark.parametrize("local_app", [False, True])
+def test_preloaded_evidence_reaches_proposer_and_independent_reviewer(tmp_path, monkeypatch, oversized, local_app):
+    if oversized:
+        monkeypatch.setattr("alc_companion.chapter_evidence._MAX_EVIDENCE_BYTES", 1)
+    from ac_llm import LLMExecutionOptions, LLMExecutionProfile
+    from alc_companion.chapter_evidence import EVIDENCE_INSTRUCTION_V2
+
+    seen = {}
+    class EvidenceTasks(FakeGuideTasks):
+        def execute_or_resume(self, context, request, **kwargs):
+            contract, payload = _request_payload(request.prompt)
+            if contract in (CHAPTER_GUIDE_PROMPT_VERSION, CHAPTER_GUIDE_REVIEW_PROMPT_VERSION):
+                if oversized:
+                    assert 'verified_chapter_evidence' not in payload
+                    return super().execute_or_resume(context, request, **kwargs)
+                evidence = payload['verified_chapter_evidence']
+                assert evidence['original']['text'].strip()
+                assert evidence['translation']['text'].strip()
+                assert EVIDENCE_INSTRUCTION_V2.strip() in request.prompt
+                key = payload['chapter']['title']
+                if key in seen:
+                    assert evidence == seen[key]
+                seen[key] = evidence
+            return super().execute_or_resume(context, request, **kwargs)
+
+    tasks = EvidenceTasks(reviewer_stop_round=1)
+    service = CompanionService(tmp_path / 'jobs')
+    result = service.build(CompanionBuildRequest(_document(tmp_path), target_language='zh-CN'),
+        execution=CompanionExecutionOptions(
+            document_cache_root=tmp_path / 'paper',
+            llm=LLMExecutionOptions(profile=LLMExecutionProfile.LOCAL_APP) if local_app else LLMExecutionOptions()),
+        task_service=tasks, translation_adapter=FakeTranslationAdapter(mode='enabled'))
+    if oversized:
+        assert result.status is RunStatus.FAILED
+        assert result.error.code == 'chapter_evidence_too_large'
+        assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 0
+        return
+    assert result.status is RunStatus.SUCCEEDED
+    assert len(seen) == 2
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
+    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 2
+    assert len({v['binding'] for v in seen.values()}) == 2
+
+
+@pytest.mark.parametrize("pipeline", [True, False])
+def test_content_pause_keeps_other_chapter_and_publishes_partial_reader(tmp_path, pipeline):
+    from ac_llm import LLMPaused
+    from ac_jobs import ResumeReason
+    class PauseChapter(FakeGuideTasks):
+        def execute_or_resume(self, context, request, **kwargs):
+            contract, payload = _request_payload(request.prompt)
+            if contract == CHAPTER_GUIDE_PROMPT_VERSION and payload['chapter']['title'] == 'Chapter':
+                return LLMPaused(ResumeReason.SUPERVISION_REQUIRED, 'content',
+                    {'code':'output_invalid','automatic_retry_exhausted':True})
+            return super().execute_or_resume(context, request, **kwargs)
+    service = CompanionService(RunRepository(tmp_path/'jobs'))
+    prepared = service.prepare(CompanionBuildRequest(_document(tmp_path),target_language='zh-CN'))
+    result = service.execute(prepared.run_id,
+        execution=CompanionExecutionOptions(workers=1,pipeline_chapters=pipeline,
+            preload_chapter_evidence=False,document_cache_root=tmp_path/'paper'),
+        task_service=PauseChapter(), translation_adapter=FakeTranslationAdapter(mode='enabled'))
+    assert result.status is RunStatus.PAUSED
+    root = service.repository.run_directory(prepared.run_id)/'partial-reader'
+    state = json.loads((root/'state.json').read_text())
+    assert state['completed_chapters'] == 1, result.awaiting
+    assert state['total_chapters'] == 2
+    assert state['incomplete_chapters'] == ['Chapter']
+    html = (root/'companion.html').read_text()
+    assert '部分结果' in html
+    assert 'A focused source-anchored explanation' in html
+
+
+@pytest.mark.parametrize("review_rounds", [0, 1, 2])
+@pytest.mark.parametrize("stop_early", [False, True])
+def test_explicit_review_rounds_cap_chapter_calls(tmp_path, monkeypatch, review_rounds, stop_early):
+    tasks = FakeGuideTasks(reviewer_stop_round=1 if stop_early else None)
+    editorial_calls = []
+    def editorial(self, context, chapters, accepted, **kwargs):
+        editorial_calls.append(self.recipe.review_rounds)
+        return accepted, None
+    monkeypatch.setattr(CompanionBuildHandler, "_cross_chapter_editorial_review", editorial)
+    service = CompanionService(tmp_path / "jobs")
+    completed = service.build(
+        CompanionBuildRequest(_document(tmp_path), target_language="en"),
+        recipe=CompanionGenerationRecipe(review_rounds=review_rounds, processing_mode="fast"),
+        execution=CompanionExecutionOptions(workers=1),
+        task_service=tasks, translation_adapter=FakeTranslationAdapter(mode="skipped"),
+    )
+    assert completed.status is RunStatus.SUCCEEDED
+    reviews = min(review_rounds, 1) if stop_early else review_rounds
+    proposals = 1 if stop_early else review_rounds + 1
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2 * proposals
+    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 2 * reviews
+    assert editorial_calls == ([review_rounds] if review_rounds else [])
+    assert service.published_companion(completed.run_id).fragment_refs
+
+
+@pytest.mark.parametrize("review_rounds", [0, 1, 2])
+def test_explicit_review_policy_is_frozen_in_run_identity(tmp_path, review_rounds):
+    request = CompanionBuildRequest(_document(tmp_path), target_language="en")
+    recipe = CompanionGenerationRecipe(review_rounds=review_rounds)
+    encoded = encode_handler_semantic_input(request, recipe)
+    decoded_request, decoded_recipe = decode_handler_semantic_input(encoded)
+    assert decoded_recipe == recipe
+    assert companion_run_id(decoded_request, decoded_recipe) == companion_run_id(request, recipe)
+    assert companion_run_id(request, recipe) != companion_run_id(request, CompanionGenerationRecipe())
+
+
+@pytest.mark.parametrize("review_rounds", [0, 1, 2])
+def test_default_adapter_forwards_review_limit_to_translation(monkeypatch, review_rounds):
+    from types import SimpleNamespace
+    from alc_translate import GlossaryResult, LanguageResult
+    captured = {}
+    def translate(*args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(to_document=lambda: {})
+    adapter = AlcTranslateAdapter(review_rounds=review_rounds)
+    monkeypatch.setattr(adapter, "_service_and_source",
+                        lambda source: (SimpleNamespace(translate_blocks=translate), source))
+    monkeypatch.setattr(LanguageResult, "from_document", lambda value: value)
+    monkeypatch.setattr(GlossaryResult, "from_document", lambda value: value)
+    adapter.translate_blocks(None, None, block_ids=("b1",), language={}, glossary={},
+                             target_language="zh-CN", model=ModelSelection(),
+                             execution=None, resume_input=None, artifact_prefix="test")
+    assert captured["review_rounds"] == review_rounds
+
+
+@pytest.mark.parametrize("value", [True, -1, 3, "1", 1.0])
+def test_invalid_explicit_review_limit_rejected(value):
+    with pytest.raises(ValueError, match="review_rounds"):
+        CompanionGenerationRecipe(review_rounds=value)

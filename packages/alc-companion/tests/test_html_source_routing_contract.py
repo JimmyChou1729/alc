@@ -31,30 +31,16 @@ def test_direct_html_routing_stays_skill_owned_and_uses_one_bundle_contract() ->
     readme = (
         _REPOSITORY_ROOT / "packages" / "alc-companion" / "README.md"
     ).read_text(encoding="utf-8")
-    arc_distribution = "-".join(("arc", "paper"))
-
-    assert "`ac-document acquire-html-bundle`" in skill
-    assert "`ac.document.html_source_bundle.v1`" in skill
+    assert "ac-document acquire-html-bundle" in skill
     assert "ac-document acquire-html-bundle" in workflow
+    assert "ac-document acquire-html-bundle" in manual
     assert "--output-dir <bundle-dir>" in workflow
     assert "--html-source-manifest" in workflow
-    assert f"{arc_distribution} export-arxiv-html-acquisition <paper-id>" in skill
-    assert f"<arc-skill-dir>/scripts/arc-runtime {arc_distribution}" in skill
-    assert f"{arc_distribution} export-arxiv-html-acquisition --help" in skill
-    assert f"{arc_distribution} export-arxiv-html-acquisition <paper-id>" in workflow
-    assert f"{arc_distribution} export-arxiv-html-acquisition <paper-id>" in manual
-    assert f"<arc-skill-dir>/scripts/arc-runtime {arc_distribution}" in manual
-    assert "https://arxiv.org/html/<id>[vN]" in skill
-    assert "An explicit ar5iv URL" in skill
-    assert "other HTTPS HTML URL go to generic ACF" in skill
-    assert "scripts/arc-runtime doctor" in skill
-    assert "`ready:true`" in skill
-    assert "Never call `setup`" in skill
-    assert "original URL unchanged" in skill
     assert "--html-source-manifest bundle/manifest.json" in readme
-    assert "scripts/arc-runtime doctor" in readme
-    assert "An ar5iv URL and every other HTTPS HTML URL use generic ACF" in readme
-    assert "does not import, install, or invoke ARC" in skill
+    assert "Do not choose an alternate acquisition route merely because ARC is installed" in skill
+    assert "--execution-profile local-app" in skill
+    assert "--review-rounds 1" in skill
+    assert "1–8 workers" in skill
 
 
 def test_companion_package_declares_no_arc_runtime_dependency() -> None:

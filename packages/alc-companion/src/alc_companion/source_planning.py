@@ -54,9 +54,15 @@ class SourceChapter:
             raise ValueError("section outline levels must be at least two")
 
 
-def plan_source_chapters(document: RichDocument) -> tuple[SourceChapter, ...]:
+def plan_source_chapters(
+    document: RichDocument, *, chapter_heading_level: int | None = None
+) -> tuple[SourceChapter, ...]:
     """Use the shallowest source headings, preserving exact block coverage."""
 
+    if chapter_heading_level is not None and (
+        type(chapter_heading_level) is not int or not 1 <= chapter_heading_level <= 6
+    ):
+        raise ValueError("chapter_heading_level must be an integer between 1 and 6")
     if not document.blocks:
         raise ValueError("Companion source must contain at least one block")
     headings = [
@@ -64,6 +70,10 @@ def plan_source_chapters(document: RichDocument) -> tuple[SourceChapter, ...]:
         for block in document.blocks
         if block.kind is RichBlockKind.HEADING
     ]
+    if chapter_heading_level is not None and not any(
+        int(block.payload["level"]) == chapter_heading_level for block in headings
+    ):
+        raise ValueError("selected chapter heading level is absent from the source")
     if not headings:
         return (
             _chapter(
@@ -73,7 +83,7 @@ def plan_source_chapters(document: RichDocument) -> tuple[SourceChapter, ...]:
             ),
         )
     levels = [int(block.payload["level"]) for block in headings]
-    chapter_level = min(levels)
+    chapter_level = min(levels) if chapter_heading_level is None else chapter_heading_level
     starts = [
         block.ordinal
         for block in headings
@@ -100,7 +110,10 @@ def plan_source_chapters(document: RichDocument) -> tuple[SourceChapter, ...]:
             if heading is not None
             else _document_title(document)
         )
-        output.append(_chapter(document, title=title, blocks=blocks))
+        structural = chapter_heading_level is not None and title.strip().casefold() in {
+            "references", "bibliography", "acknowledgements", "acknowledgments",
+        }
+        output.append(_chapter(document, title=title, blocks=blocks, generate_guide=not structural))
     validate_chapter_coverage(document, tuple(output))
     return tuple(output)
 

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import shlex
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from threading import RLock
 from typing import Any
+
+from ac_jobs import RunContext
 
 from ac_llm import (
     AcRuntimeEnvironment,
@@ -17,7 +21,7 @@ from ac_llm import (
 )
 
 
-_BROKER_CONTRACT = "alc.companion.read_only_source_broker.v1"
+_BROKER_CONTRACT = "alc.companion.read_only_source_broker.v2"
 _MAX_OUTPUT_BYTES = 64_000
 _MAX_SEARCH_TERM_BYTES = 1_000
 
@@ -30,6 +34,58 @@ class CompanionSourceHostBroker:
         self._exact: set[tuple[str, ...]] = set()
         self._search_prefixes: set[tuple[str, ...]] = set()
         self._lock = RLock()
+        self._context: RunContext | None = None
+        self._successful: set[tuple[str, ...]] = set()
+        self._failed: set[tuple[str, ...]] = set()
+
+    def bind_context(self, context: RunContext) -> None:
+        self._context = context
+
+    def _receipt_id(self, argv: tuple[str, ...]) -> str:
+        digest = hashlib.sha256(json.dumps(argv).encode()).hexdigest()
+        return f"source-read-receipts/{digest}"
+
+    def _record(self, argv: tuple[str, ...], successful: bool) -> None:
+        with self._lock:
+            if not successful:
+                self._failed.add(argv)
+                return
+            self._successful.add(argv)
+            if self._context is not None:
+                artifact_id = self._receipt_id(argv)
+                if self._context.artifacts.find(artifact_id) is None:
+                    self._context.artifacts.publish_json(
+                        artifact_id, {"argv": list(argv), "complete": True}
+                    )
+
+    def validate_reads(self, commands: Mapping[str, Any], *, require_complete: bool) -> None:
+        """Require successful source and translation coverage independently."""
+        groups = [commands.get("source", ())]
+        translation = commands.get("translation")
+        if isinstance(translation, Mapping):
+            groups.append(translation.get("parts", ()))
+        with self._lock:
+            for group in groups:
+                expected: set[int] = set()
+                covered: set[int] = set()
+                failed = False
+                for descriptor in group:
+                    argv = tuple(descriptor.get("argv", ()))
+                    parts = set(descriptor.get("part_numbers", ()))
+                    if not parts:
+                        continue
+                    expected.update(parts)
+                    successful = argv in self._successful
+                    if not successful and self._context is not None:
+                        ref = self._context.artifacts.find(self._receipt_id(argv))
+                        if ref is not None:
+                            value = json.loads(self._context.artifacts.read_bytes(ref))
+                            successful = value == {"argv": list(argv), "complete": True}
+                    if successful:
+                        covered.update(parts)
+                    failed = failed or argv in self._failed
+                if (require_complete or failed) and not expected.issubset(covered):
+                    raise ValueError("Complete chapter source reads lack successful receipts")
 
     @property
     def execution_identity(self) -> Mapping[str, Any]:
@@ -51,7 +107,7 @@ class CompanionSourceHostBroker:
             self._search_prefixes.update(search_prefixes)
 
     def execute(
-        self, request: HostRequest, *, workspace: Path
+        self, request: HostRequest, *, workspace: Path, record_receipt: bool = True
     ) -> HostResponse:
         try:
             argv = tuple(shlex.split(request.instruction.strip()))
@@ -76,6 +132,8 @@ class CompanionSourceHostBroker:
                 timeout=30,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
+            if record_receipt:
+                self._record(argv, False)
             return _refused(
                 "host_operation_failed",
                 f"The predeclared source read could not complete: {type(exc).__name__}.",
@@ -84,6 +142,21 @@ class CompanionSourceHostBroker:
             )
         stdout, stdout_truncated = _bounded_output(completed.stdout)
         stderr, stderr_truncated = _bounded_output(completed.stderr)
+        successful = (
+            completed.returncode == 0
+            and bool(stdout.strip())
+            and not stdout_truncated
+            and not stderr_truncated
+        )
+        if record_receipt:
+            self._record(argv, successful)
+        if completed.returncode != 0:
+            return _refused(
+                "host_operation_failed",
+                f"Source read exited with status {completed.returncode}.",
+                retryable=True,
+                retry_condition="Retry after the source command failure is resolved.",
+            )
         return HostResponse(
             HostResponseStatus.PARTIAL
             if stdout_truncated or stderr_truncated

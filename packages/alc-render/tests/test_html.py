@@ -3748,3 +3748,50 @@ def test_publication_owned_resource_is_embedded_and_validated(
         "supplement-coverage.json"
     ]
     validate_standalone_html(publication, output)
+
+
+def test_delivery_quality_uses_selected_revisions_and_rejects_tampering(tmp_path):
+    from alc_render import publication_translation_quality
+
+    document = _rich_document()
+    initial = replace(
+        _revision(document, body="Original"),
+        citation_ids=(),
+        provenance={
+            "producer": "alc-translate",
+            "translation_fallback": {
+                "schema_version": "alc.translate.fallback.v1",
+                "kind": "source_text",
+                "source_preserved": True,
+            },
+        },
+    )
+    path = write_fragment_revision(tmp_path, initial)
+    layer = Layer(
+        initial.source,
+        "alc-translate",
+        (fragment_revision_ref(relative_fragment_path(tmp_path, path), initial),),
+    )
+    write_layer(tmp_path / "translation.layer.json", layer)
+    publication = Publication(
+        document, layers=(layer.reference("translation.layer.json"),)
+    )
+    write_publication(tmp_path / "publication.json", publication)
+    first = publication_translation_quality(tmp_path / "publication.json")
+    assert first["source_fallback_count"] == 1
+    assert first["source_fallback_ids"] == [initial.anchor.target_id]
+    updated = replace(
+        initial,
+        revision=2,
+        parent_semantic_digest=initial.semantic_digest,
+        provenance={"producer": "alc-translate"},
+        markdown_body="已修复的翻译",
+    )
+    updated_path = write_fragment_revision(tmp_path, updated)
+    second = publication_translation_quality(tmp_path / "publication.json")
+    assert second["source_fallback_count"] == 0
+    assert second["publication_digest"] == first["publication_digest"]
+    assert second["edition_digest"] != first["edition_digest"]
+    path.write_text("corrupt")
+    with pytest.raises(ValueError):
+        publication_translation_quality(tmp_path / "publication.json")

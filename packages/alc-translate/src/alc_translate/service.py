@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from ac_jobs import (
     ArtifactSourceRef,
+    EventWriter,
     ImmutableArtifactStore,
     RunEngine,
     RunRepository,
@@ -130,6 +131,7 @@ class TranslationService:
         execution: ExecutionOptions = ExecutionOptions(),
         task_service: Any | None = None,
         keyword_provider: KeywordProvider | None = None,
+        event_sink: Any = None,
     ) -> RunSnapshot:
         spec = self.repository.read_spec(run_id)
         handler = self._handler(
@@ -138,7 +140,7 @@ class TranslationService:
             task_service=task_service,
             keyword_provider=keyword_provider,
         )
-        return self.engine.execute(spec, handler)
+        return self.engine.execute(spec, handler, **({"event_sink": event_sink} if event_sink is not None else {}))
 
     def resume(
         self,
@@ -148,6 +150,7 @@ class TranslationService:
         execution: ExecutionOptions = ExecutionOptions(),
         task_service: Any | None = None,
         keyword_provider: KeywordProvider | None = None,
+        event_sink: Any = None,
     ) -> RunSnapshot:
         spec = self.repository.read_working_spec(run_id)
         handler = self._handler(
@@ -156,10 +159,18 @@ class TranslationService:
             task_service=task_service,
             keyword_provider=keyword_provider,
         )
-        return self.engine.resume(run_id, handler, input=input)
+        return self.engine.resume(run_id, handler, input=input, **({"event_sink": event_sink} if event_sink is not None else {}))
 
     def inspect(self, run_id: str) -> RunView:
         return self.repository.inspect(run_id)
+
+    def progress(self, run_id: str) -> dict[str, Any]:
+        from .progress import summarize_progress
+
+        events = EventWriter(
+            self.repository.run_directory(run_id) / "events.jsonl", run_id=run_id
+        ).read_all()
+        return summarize_progress(events)
 
     def stop(self, run_id: str, *, reason: str | None = None) -> RunView:
         return self.repository.request_stop(run_id, reason=reason)

@@ -23,6 +23,7 @@ EXPECTED = {
     "alc-ocr-proofread": {"ac-jobs", "ac-llm", "ac-document"},
     "alc-render": {"ac-document"},
     "alc-translate": {"ac-jobs", "ac-llm", "ac-document", "alc-render"},
+    "alc-web": {"ac-jobs", "ac-llm", "ac-document", "alc-render", "alc-translate", "alc-companion"},
 }
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 ALC_MAJOR = int(VERSION.split(".")[0])
@@ -60,15 +61,15 @@ def test_package_set_metadata_and_dependency_graph() -> None:
 def test_packages_require_reliability_foundation_floors() -> None:
     expected = {
         "alc-companion": {
-            "ac-llm>=2.0.5,<3",
-            "ac-document>=2.0.5,<3",
-            "ac-proposer-reviewer>=2.0.5,<3",
+            "ac-llm>=2.1.0,<3",
+            "ac-document>=2.1.0,<3",
+            "ac-proposer-reviewer>=2.1.0,<3",
         },
-        "alc-ocr-proofread": {"ac-llm>=2.0.5,<3"},
-        "alc-render": {"ac-document>=2.0.5,<3"},
+        "alc-ocr-proofread": {"ac-llm>=2.1.0,<3"},
+        "alc-render": {"ac-document>=2.1.0,<3"},
         "alc-translate": {
-            "ac-llm>=2.0.5,<3",
-            "ac-document>=2.0.5,<3",
+            "ac-llm>=2.1.0,<3",
+            "ac-document>=2.1.0,<3",
         },
     }
     for package, dependencies in expected.items():

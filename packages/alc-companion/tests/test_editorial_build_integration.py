@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from dataclasses import replace
+
+import pytest
 
 from ac_jobs import RunContext, RunError, RunRepository, RunSpec, Succeeded
 from ac_llm import LLMExecutionOptions, ModelSelection
@@ -94,8 +97,9 @@ def _source_inputs(context: RunContext):
     return (build_module._llm_input(context, "companion-source-index", ref),)
 
 
+@pytest.mark.parametrize("review_rounds", [None, 1, 2])
 def test_scoped_editorial_batch_applies_only_reviewed_edit(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, review_rounds
 ) -> None:
     context = _context(tmp_path)
     source_chapters, accepted = _fixture(context)
@@ -176,7 +180,7 @@ def test_scoped_editorial_batch_applies_only_reviewed_edit(
 
     monkeypatch.setattr(build_module, "ProposerReviewerService", FakeService)
     resolved, report = build_module.CompanionBuildHandler._cross_chapter_editorial_review(
-        _handler(),
+        SimpleNamespace(**{**vars(_handler()), "recipe": replace(_handler().recipe, review_rounds=review_rounds)}),
         context,
         source_chapters,
         accepted,
@@ -192,7 +196,7 @@ def test_scoped_editorial_batch_applies_only_reviewed_edit(
         "companion-editorial-index",
         "companion-editorial-full-text",
     }
-    assert request.loops[0].max_rounds == 3
+    assert request.loops[0].max_rounds == (3 if review_rounds is None else review_rounds)
     assert request.loops[0].review_final_round is True
     assert request.loops[0].context["reference_ids"] == ["ref-a", "ref-b"]
     assert request.loops[0].context["input_manifest"]["source_evidence"] == [

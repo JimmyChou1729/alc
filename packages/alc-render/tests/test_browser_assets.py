@@ -2987,6 +2987,7 @@ globalThis.window = globalThis;
     saveEditor: saveEditor,
     deleteEditor: deleteEditor,
     installRenderSpies: function (rerender) {
+      confirmReaderAction = function () { return Promise.resolve(true); };
       renderDiagnostics = function () {};
       rerenderChunk = rerender;
     },
