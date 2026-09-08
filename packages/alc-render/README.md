@@ -4,6 +4,14 @@
 Reader delivery. A publication contains a frozen rich source and references its
 Layer, revision, and resource files.
 
+`publication_translation_quality(publication_path)` verifies the workspace and
+counts source-text fallback, skipped review and retained translation warnings
+from selected fragment revisions.
+The projection binds both publication and edition digests; historical fallback
+events do not override a repaired revision. Invalid workspaces raise an error
+instead of reporting zero. The Reader labels incomplete translations and reviews
+beside the affected fragment using its fallback provenance.
+
 ## Quick start
 
 With `ac-document` and `alc-render` on `PATH`:
@@ -369,3 +377,20 @@ Tests:
 ```bash
 python -m pytest packages/alc-render/tests
 ```
+
+Translation fallback provenance appears as a compact focusable tooltip indicator,
+not a paragraph in the editable content. The indicator is hidden during inline
+editing and printing; its text describes generation-time provenance rather than
+claiming that later manual edits were automatically reviewed.
+
+Retained translation differences use `translation_quality` provenance and a
+compact floating notice. Closing the notice also hides its indicator in the
+current view; this does not erase the saved diagnostic or certify the text.
+The notice stays outside editable prose and never replaces translation content.
+
+Reader math supports the AASTeX angular-unit macros arcmin, arcsec, farcm and
+farcs alongside arcdeg. Decimal-unit macros retain their decimal point and prime
+symbols without changing saved source or translated TeX.
+
+Quality notices use viewport-bounded, dismissible popovers; dismissal does not
+change the translation. Reader deletion confirmation uses a styled page dialog.

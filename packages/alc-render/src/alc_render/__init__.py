@@ -2,6 +2,8 @@
 
 __version__ = "2.0.6"
 
+from .quality import publication_translation_quality
+
 from .contracts import (
     FRAGMENT_REVISION_SCHEMA,
     LAYER_SCHEMA,
@@ -147,6 +149,7 @@ from .workspace import (
 )
 
 __all__ = [
+    "publication_translation_quality",
     "FRAGMENT_REVISION_SCHEMA",
     "GLOSSARY_FRONT_MATTER_BEGIN",
     "GLOSSARY_FRONT_MATTER_END",

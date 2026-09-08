@@ -593,6 +593,9 @@
       continueEditing: "继续编辑",
       saveFailedInEditor: "未能完成保存。修改仍保留在编辑区，请检查页面提示后重试。",
       editContent: "编辑这段 Markdown",
+      sourceFallback: "生成时此段保留了原文。可双击正文补充译文；手动修改不会自动重新审查。",
+      reviewSkipped: "此段翻译尚未完成审查",
+      translationWarning: "已保留译文。此段公式或引用与原文存在差异，请结合原文核对；可双击修改。",
       loading: "正在读取版本……",
       historyChanged: "目录中的当前版本已变化；请关闭编辑器并重新打开后再保存。",
       unknownCitation: "引用不在当前参考文献中：",
@@ -747,6 +750,9 @@
       continueEditing: "Continue editing",
       saveFailedInEditor: "The save could not be completed. Changes remain in the editor; check the page status and try again.",
       editContent: "Edit this Markdown",
+      sourceFallback: "Original text was retained during generation. Double-click to edit; manual changes are not automatically reviewed.",
+      reviewSkipped: "Translation review incomplete",
+      translationWarning: "Translation retained. A formula or citation differs from the source; please check this passage.",
       loading: "Loading revisions…",
       historyChanged: "The current directory revision changed; close and reopen the editor before saving.",
       unknownCitation: "Citation is absent from the bibliography: ",
@@ -6512,6 +6518,21 @@
     }
     header.appendChild(actions);
     card.appendChild(header);
+    var fallback = (fragment.provenance || {}).translation_fallback;
+    var diagnostic = (fragment.provenance || {}).translation_quality;
+    if ((fallback && fallback.schema_version === "alc.translate.fallback.v1") || diagnostic) {
+      var warning = diagnostic ? labels().translationWarning :
+        fallback.kind === "source_text" ? labels().sourceFallback :
+        fallback.kind === "review_skipped" ? labels().reviewSkipped : null;
+      if (warning) {
+        var qualityNotice = element("button", "alc-translation-quality", "ⓘ");
+        qualityNotice.type = "button";
+        qualityNotice.setAttribute("aria-label", warning);
+        qualityNotice.dataset.qualityTooltip = warning;
+        qualityNotice.addEventListener("click", function () { qualityNotice.focus(); });
+        if (!editing) card.appendChild(qualityNotice);
+      }
+    }
     var saved = element("div", "alc-fragment-saved-content");
     var rendered = renderMarkdown(fragment.markdown_body, fragment);
     decorateTranslationSourceNoteTokens(rendered, fragment);
@@ -8692,7 +8713,13 @@
   }
 
   function katexSemanticMacros() {
-    return {"\\arcdeg": "^{\\circ}"};
+    return {
+      "\\arcdeg": "^{\\circ}",
+      "\\arcmin": "^{\\prime}",
+      "\\arcsec": "^{\\prime\\prime}",
+      "\\farcm": ".\\mkern-4mu^{\\prime}",
+      "\\farcs": ".\\!\\!^{\\prime\\prime}"
+    };
   }
 
   function repairMatrixShorthand(value) {
@@ -9282,7 +9309,7 @@
       active = null;
     }
     function open(term) {
-      var content = term && term.dataset.glossaryTooltip;
+      var content = term && (term.dataset.glossaryTooltip || term.dataset.qualityTooltip);
       var entries = term && term._alcGlossaryEntries;
       if ((!entries || !entries.length) && !content) return;
       active = term;
@@ -9291,7 +9318,20 @@
       } else {
         tooltip.textContent = content;
       }
+      tooltip.classList.toggle("has-quality-dismiss", !!term.dataset.qualityTooltip);
+      tooltip.style.pointerEvents = term.dataset.qualityTooltip ? "auto" : "none";
+      if (term.dataset.qualityTooltip) {
+        var dismiss = element("button", "alc-quality-dismiss");
+        dismiss.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+        dismiss.type = "button";
+        dismiss.setAttribute("aria-label", "关闭此提示");
+        dismiss.onclick = function () { term.hidden = true; close(); };
+        tooltip.appendChild(dismiss);
+      }
       tooltip.hidden = false;
+      tooltip.style.left = "8px";
+      tooltip.style.top = "8px";
+      var viewportWidth = document.documentElement.clientWidth || window.innerWidth;
       var termRect = term.getBoundingClientRect();
       var tipRect = tooltip.getBoundingClientRect();
       var gap = 8;
@@ -9301,29 +9341,33 @@
       }
       var left = Math.min(
         Math.max(gap, termRect.left),
-        Math.max(gap, window.innerWidth - tipRect.width - gap)
+        Math.max(gap, viewportWidth - tipRect.width - gap)
       );
       tooltip.style.top = Math.round(top) + "px";
       tooltip.style.left = Math.round(left) + "px";
     }
     document.addEventListener("mouseover", function (event) {
-      var term = event.target.closest && event.target.closest(".glossary-term");
+      var term = event.target.closest && event.target.closest(".glossary-term, .alc-translation-quality");
       if (term) open(term);
     });
     document.addEventListener("mouseout", function (event) {
-      var term = event.target.closest && event.target.closest(".glossary-term");
-      if (term && (!event.relatedTarget || !term.contains(event.relatedTarget))) close();
+      var term = event.target.closest && event.target.closest(".glossary-term, .alc-translation-quality");
+      if (term && !term.dataset.qualityTooltip && (!event.relatedTarget || !term.contains(event.relatedTarget))) close();
     });
     document.addEventListener("focusin", function (event) {
-      if (event.target.matches && event.target.matches(".glossary-term")) open(event.target);
+      if (event.target.matches && event.target.matches(".glossary-term, .alc-translation-quality")) open(event.target);
     });
     document.addEventListener("focusout", function (event) {
-      if (event.target === active) close();
+      if (event.target === active && !active.dataset.qualityTooltip) close();
     });
     document.addEventListener("keydown", function (event) {
       if (event.key === "Escape") close();
     });
+    document.addEventListener("pointerdown", function (event) {
+      if (active && !active.contains(event.target) && !tooltip.contains(event.target)) close();
+    });
     window.addEventListener("scroll", close, {passive: true});
+    window.addEventListener("resize", close);
   }
 
   function captureExportTemplate() {
@@ -13631,10 +13675,32 @@
     }
   }
 
-  function deleteEditor(event) {
+  function confirmReaderAction(message) {
+    return new Promise(function (resolve) {
+      var dialog = element("dialog", "alc-confirm-dialog");
+      var text = element("p", "", message);
+      text.id = "alc-confirm-message";
+      dialog.setAttribute("aria-labelledby", text.id);
+      dialog.appendChild(text);
+      var actions = element("div", "alc-confirm-actions");
+      var cancel = element("button", "", labels().cancel || "Cancel");
+      var confirm = element("button", "", labels().deleteElement);
+      cancel.type = confirm.type = "button";
+      cancel.autofocus = true;
+      cancel.onclick = function () { dialog.close("cancel"); };
+      confirm.onclick = function () { dialog.close("confirm"); };
+      actions.appendChild(cancel); actions.appendChild(confirm); dialog.appendChild(actions);
+      dialog.addEventListener("close", function () { var accepted = dialog.returnValue === "confirm"; dialog.remove(); resolve(accepted); }, {once:true});
+      document.body.appendChild(dialog); dialog.showModal();
+    });
+  }
+
+  async function deleteEditor(event) {
     if (event && typeof event.preventDefault === "function") event.preventDefault();
     if (!state.activeDraft || !state.activeDraft.base) return;
-    if (!window.confirm(labels().deleteConfirm)) return;
+    var draft = state.activeDraft;
+    if (!await confirmReaderAction(labels().deleteConfirm)) return;
+    if (state.activeDraft !== draft) return;
     return persistEditor(event, true);
   }
 
