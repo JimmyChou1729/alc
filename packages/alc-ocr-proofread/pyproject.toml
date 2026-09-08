@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "alc-ocr-proofread"
-version = "2.0.6"
+version = "2.1.0"
 description = "Durable PDF-vision proofreading of page-mapped OCR for ALC."
 readme = "README.md"
 license = "MIT"
@@ -17,9 +17,9 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 dependencies = [
-  "ac-jobs>=2,<3",
-  "ac-llm>=2.0.5,<3",
-  "ac-document>=2,<3",
+  "ac-jobs>=2.1.0,<3",
+  "ac-llm>=2.1.0,<3",
+  "ac-document>=2.1.0,<3",
 ]
 
 [project.optional-dependencies]
