@@ -47,6 +47,7 @@ from .source_bundle import (
 
 LEGACY_COMPANION_BUILD_REQUEST_SCHEMA = "alc.companion.build_request.v8"
 COMPANION_BUILD_REQUEST_SCHEMA = "alc.companion.build_request.v9"
+HEADING_COMPANION_BUILD_REQUEST_SCHEMA = "alc.companion.build_request.v10"
 COMPANION_GENERATION_RECIPE_SCHEMA = "alc.companion.generation_recipe.v19"
 EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA = (
     "alc.companion.generation_recipe.v20"
@@ -84,8 +85,14 @@ class CompanionBuildRequest:
     companion_section_ids: tuple[str, ...] | None = None
     reviewed_supplements: tuple[ReviewedCompanionSupplement, ...] = ()
     source_bundle: HTMLSourceBundleBinding | None = None
+    chapter_heading_level: int | None = None
 
     def __post_init__(self) -> None:
+        if self.chapter_heading_level is not None:
+            if type(self.chapter_heading_level) is not int or not 1 <= self.chapter_heading_level <= 6:
+                raise ValueError("chapter_heading_level must be an integer between 1 and 6")
+            if self.structure_ref is not None:
+                raise ValueError("chapter_heading_level cannot be combined with structure_ref")
         if not isinstance(self.source, RichDocument):
             raise ValueError("source must be a RichDocument")
         if self.source_bundle is not None and not isinstance(
@@ -237,8 +244,16 @@ class CompanionGenerationRecipe:
     cross_chapter_editorial_review: bool = False
     editorial_proposer_prompt: str = EDITORIAL_PROPOSER_PROMPT_VERSION
     editorial_reviewer_prompt: str = EDITORIAL_REVIEWER_PROMPT_VERSION
+    processing_mode: str | None = None
+    review_rounds: int | None = None
 
     def __post_init__(self) -> None:
+        if self.review_rounds is not None and (
+            type(self.review_rounds) is not int or self.review_rounds not in {0, 1, 2}
+        ):
+            raise ValueError("review_rounds must be 0, 1, 2, or None")
+        if self.processing_mode not in {None, "fast", "standard", "deep"}:
+            raise ValueError("Unsupported processing mode")
         if not isinstance(self.model, ModelSelection):
             raise ValueError("model must be a ModelSelection")
         if (
@@ -251,7 +266,7 @@ class CompanionGenerationRecipe:
             )
         if (
             isinstance(self.chapter_guide_max_rounds, bool)
-            or self.chapter_guide_max_rounds != 3
+            or self.chapter_guide_max_rounds not in ({2, 3} if self.processing_mode else {3})
         ):
             raise ValueError(
                 "chapter_guide_max_rounds must be 3"
@@ -299,11 +314,13 @@ class CompanionGenerationRecipe:
 class CompanionExecutionOptions:
     """Non-semantic runtime policy for one invocation."""
 
-    workers: int = 16
+    workers: int = 2
+    pipeline_chapters: bool = True
     llm: LLMExecutionOptions = field(
         default_factory=_default_llm_execution_options
     )
     document_cache_root: Path | None = None
+    preload_chapter_evidence: bool = True
 
     def __post_init__(self) -> None:
         if isinstance(self.workers, bool) or not isinstance(
@@ -312,6 +329,10 @@ class CompanionExecutionOptions:
             raise ValueError("workers must be an integer")
         if not 1 <= self.workers <= 24:
             raise ValueError("workers must be between 1 and 24")
+        if not isinstance(self.preload_chapter_evidence, bool):
+            raise ValueError("preload_chapter_evidence must be a boolean")
+        if not isinstance(self.pipeline_chapters, bool):
+            raise ValueError("pipeline_chapters must be a boolean")
         if not isinstance(self.llm, LLMExecutionOptions):
             raise ValueError("llm must be LLMExecutionOptions")
         if self.document_cache_root is not None:
@@ -386,6 +407,10 @@ def encode_build_request(
         document["source_bundle"] = encode_html_source_bundle_binding(
             request.source_bundle
         )
+    if request.chapter_heading_level is not None:
+        document["schema_version"] = HEADING_COMPANION_BUILD_REQUEST_SCHEMA
+        document["chapter_heading_level"] = request.chapter_heading_level
+        document.setdefault("source_bundle", None)
     return document
 
 
@@ -432,6 +457,17 @@ def encode_generation_recipe(
                 ),
             }
         )
+    if recipe.review_rounds is not None or recipe.processing_mode is not None or getattr(recipe.model, "reasoning_effort", None) is not None:
+        from ac_llm.request import model_selection_to_document
+
+        document.update(schema_version="alc.companion.generation_recipe.v21", model=model_selection_to_document(recipe.model), processing_mode=recipe.processing_mode,
+                        cross_chapter_editorial_review=recipe.cross_chapter_editorial_review,
+                        editorial_proposer_prompt=recipe.editorial_proposer_prompt, editorial_reviewer_prompt=recipe.editorial_reviewer_prompt)
+    if recipe.review_rounds is not None:
+        document.update(
+            schema_version="alc.companion.generation_recipe.v22",
+            review_rounds=recipe.review_rounds,
+        )
     return document
 
 
@@ -448,6 +484,19 @@ def encode_handler_semantic_input(
 def decode_build_request(
     document: Mapping[str, Any],
 ) -> CompanionBuildRequest:
+    if document.get("schema_version") == HEADING_COMPANION_BUILD_REQUEST_SCHEMA:
+        from dataclasses import replace
+
+        raw = dict(document)
+        level = raw.pop("chapter_heading_level")
+        if type(level) is not int or not 1 <= level <= 6:
+            raise ValueError("chapter_heading_level must be an integer between 1 and 6")
+        if raw["source_bundle"] is None:
+            raw.pop("source_bundle")
+            raw["schema_version"] = LEGACY_COMPANION_BUILD_REQUEST_SCHEMA
+        else:
+            raw["schema_version"] = COMPANION_BUILD_REQUEST_SCHEMA
+        return replace(decode_build_request(raw), chapter_heading_level=level)
     fields = {
         "schema_version",
         "source",
@@ -525,6 +574,30 @@ def decode_build_request(
 def decode_generation_recipe(
     document: Mapping[str, Any],
 ) -> CompanionGenerationRecipe:
+    if document.get("schema_version") == "alc.companion.generation_recipe.v22":
+        from dataclasses import replace
+
+        raw = dict(document)
+        rounds = raw.pop("review_rounds")
+        if type(rounds) is not int or rounds not in {0, 1, 2}:
+            raise ValueError("review_rounds must be 0, 1, or 2")
+        raw["schema_version"] = "alc.companion.generation_recipe.v21"
+        return replace(decode_generation_recipe(raw), review_rounds=rounds)
+    if document.get("schema_version") == "alc.companion.generation_recipe.v21":
+        from dataclasses import replace
+        from ac_llm.request import decode_model_selection
+
+        raw = dict(document)
+        mode = raw.pop("processing_mode")
+        model = decode_model_selection(raw["model"], extended="reasoning_effort" in raw["model"])
+        rounds = raw["chapter_guide_max_rounds"]
+        raw["chapter_guide_max_rounds"] = 3
+        raw["model"] = {"provider": model.provider, "model": model.model, "tier": model.tier}
+        raw["schema_version"] = EDITORIAL_COMPANION_GENERATION_RECIPE_SCHEMA
+        editorial = raw["cross_chapter_editorial_review"]
+        raw["cross_chapter_editorial_review"] = True
+        base = decode_generation_recipe(raw)
+        return replace(base, model=model, processing_mode=mode, chapter_guide_max_rounds=rounds, cross_chapter_editorial_review=editorial)
     fields = {
         "schema_version",
         "model",

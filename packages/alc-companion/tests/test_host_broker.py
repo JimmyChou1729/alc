@@ -113,3 +113,95 @@ def test_broker_allows_only_bounded_term_for_registered_search(
         workspace=tmp_path,
     )
     assert refused.status is HostResponseStatus.REFUSED
+
+
+def _read_commands(tmp_path):
+    def descriptor(ref, start, end, parts):
+        return {"argv": ["ac-document", "read-cached-source-range", "--document-ref", ref,
+                         "--cache-root", str(tmp_path), "--text-only", str(start), str(end)],
+                "part_numbers": parts}
+    return {"source": [descriptor("source", 1, 1, [1]), descriptor("source", 2, 2, [2]),
+                        descriptor("source", 1, 2, [1, 2])],
+            "translation": {"parts": [descriptor("translation", 1, 2, [1, 2])]}}
+
+
+def _execute_read(broker, descriptor, tmp_path):
+    return broker.execute(HostRequest("read", shlex.join(descriptor["argv"]), "read source"), workspace=tmp_path)
+
+
+def test_read_receipts_cover_source_and_translation_separately(monkeypatch, tmp_path):
+    import pytest
+    broker = CompanionSourceHostBroker(_environment())
+    commands = _read_commands(tmp_path)
+    broker.register_commands(commands)
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, b"text", b""))
+    with pytest.raises(ValueError):
+        broker.validate_reads(commands, require_complete=True)
+    _execute_read(broker, commands["source"][0], tmp_path)
+    _execute_read(broker, commands["translation"]["parts"][0], tmp_path)
+    with pytest.raises(ValueError):
+        broker.validate_reads(commands, require_complete=True)
+    _execute_read(broker, commands["source"][1], tmp_path)
+    broker.validate_reads(commands, require_complete=True)
+
+
+def test_receipts_survive_handler_recreation(monkeypatch, tmp_path):
+    from ac_jobs import RunContext, RunRepository, RunSpec
+    repo = RunRepository(tmp_path / "jobs")
+    context = RunContext(repo, repo.create(RunSpec("read-run", "handler", {})), resume_input=None)
+    broker = CompanionSourceHostBroker(_environment())
+    broker.bind_context(context)
+    commands = _read_commands(tmp_path)
+    broker.register_commands(commands)
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, b"text", b""))
+    _execute_read(broker, commands["source"][2], tmp_path)
+    _execute_read(broker, commands["translation"]["parts"][0], tmp_path)
+    fresh = CompanionSourceHostBroker(_environment())
+    fresh.bind_context(context)
+    fresh.register_commands(commands)
+    fresh.validate_reads(commands, require_complete=True)
+
+
+def test_failed_reads_cannot_be_certified(monkeypatch, tmp_path):
+    import pytest
+    commands = _read_commands(tmp_path)
+    for mode in ("missing", "exit", "truncated", "empty"):
+        broker = CompanionSourceHostBroker(_environment())
+        broker.register_commands(commands)
+        def run(argv, **kwargs):
+            if mode == "missing":
+                raise FileNotFoundError()
+            return subprocess.CompletedProcess(argv, 1 if mode == "exit" else 0,
+                b"x" * 64001 if mode == "truncated" else b"", b"")
+        monkeypatch.setattr(subprocess, "run", run)
+        response = _execute_read(broker, commands["source"][2], tmp_path)
+        if mode in ("missing", "exit"):
+            assert response.status is HostResponseStatus.REFUSED
+        with pytest.raises(ValueError):
+            broker.validate_reads(commands, require_complete=True)
+        with pytest.raises(ValueError):
+            broker.validate_reads(commands, require_complete=False)
+
+
+def test_python_symlink_preserves_virtualenv_cli(monkeypatch, tmp_path):
+    import os
+    import sys
+    from alc_companion.build import _companion_llm_options
+    from alc_companion.request_contracts import CompanionExecutionOptions
+    from ac_llm import LLMExecutionOptions
+    system = tmp_path / "system"
+    system.mkdir()
+    python = system / "python"
+    python.touch()
+    venv = tmp_path / "venv" / "bin"
+    venv.mkdir(parents=True)
+    (venv / "python").symlink_to(python)
+    cli = venv / "ac-document"
+    cli.write_text("#!/bin/sh\nexit 0\n")
+    cli.chmod(0o755)
+    monkeypatch.setattr(sys, "executable", str(venv / "python"))
+    result = _companion_llm_options(CompanionExecutionOptions(
+        document_cache_root=tmp_path / "cache",
+        llm=LLMExecutionOptions(runtime_environment=_environment()),
+    ))
+    assert result.runtime_environment.values["PATH"].split(os.pathsep)[0] == str(venv)

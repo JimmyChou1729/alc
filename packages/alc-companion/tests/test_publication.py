@@ -1360,3 +1360,62 @@ def _translation_result(
         layer=Layer(source_identity, "alc-translate", tuple(references)),
         revision_artifacts=tuple(artifacts),
     )
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "duplicate", "unknown", "owner", "schema", "body_missing"])
+def test_translation_selection_preserves_and_validates_source_notes(tmp_path, fault):
+    from dataclasses import replace
+    from ac_document import source_notes
+    from alc_companion.translation_results import (
+        CompanionTranslationResultError, load_translation_selection,
+    )
+
+    repository = SourceRepository(tmp_path / "paper")
+    artifact = repository.store_bytes(
+        b'<article><p id="p1">Body<span class="ltx_note ltx_role_footnote" id="n1">'
+        b'<sup class="ltx_note_mark">1</sup><span class="ltx_note_outer">'
+        b'<span class="ltx_note_content">A source note.</span></span></span></p>'
+        b'<p id="p2">Other body.</p></article>',
+        source_format=SourceFormat.HTML,
+        origin=SourceOrigin(SourceOriginKind.LOCAL_IMPORT, locator="source.html"),
+    )
+    source = RichDocumentParserService(repository).parse_source(artifact)
+    jobs = RunRepository(tmp_path / "jobs")
+    context = RunContext(jobs, jobs.create(RunSpec("notes", "handler", {})), resume_input=None)
+    result = _translation_result(context, source)
+    note = source_notes(source)["notes"][0]
+    owner = next(b for b in source.blocks if b.block_id == note["owner_block_id"])
+    if fault == "owner":
+        owner = next(b for b in source.blocks if b.block_id != owner.block_id)
+    revision = FragmentRevision(
+        source=source_identity_from_rich_document(source),
+        fragment_id="translated-note", revision=1, parent_semantic_digest=None,
+        anchor=FragmentAnchor(AnchorKind.BLOCK, owner.block_id, (anchor_block_from_rich_block(owner),)),
+        priority=10, role="translation", language="zh-CN", title=None, citation_ids=(),
+        provenance={"producer": "alc-translate", "source_note_translation": {
+            "schema_version": "invalid" if fault == "schema" else "alc.render.source_note_translation.v1",
+            "note_id": "unknown" if fault == "unknown" else note["note_id"],
+        }}, markdown_body="脚注译文\n",
+    )
+    ref = fragment_revision_ref(f"fragments/{fragment_revision_filename(revision)}", revision)
+    art = context.artifacts.publish_bytes("note", encode_fragment_revision(revision).encode(), media_type="text/markdown")
+    added = () if fault == "missing" else (TranslationRevisionArtifact(ref, art),)
+    if fault == "duplicate":
+        duplicate = replace(revision, fragment_id="duplicate-note")
+        duplicate_ref = fragment_revision_ref(f"fragments/{fragment_revision_filename(duplicate)}", duplicate)
+        duplicate_art = context.artifacts.publish_bytes("duplicate-note", encode_fragment_revision(duplicate).encode(), media_type="text/markdown")
+        added += (TranslationRevisionArtifact(duplicate_ref, duplicate_art),)
+    body = result.revision_artifacts[1:] if fault == "body_missing" else result.revision_artifacts
+    artifacts = body + added
+    result = replace(result, layer=Layer(result.layer.source, result.layer.producer, tuple(a.revision for a in artifacts)), revision_artifacts=artifacts)
+    def load():
+        return load_translation_selection(context, result.to_document(), source=source,
+            block_ids=tuple(b.block_id for b in source.blocks), target_language="zh-CN")
+    if fault:
+        with pytest.raises(CompanionTranslationResultError):
+            load()
+    else:
+        selected = load()
+        assert len(selected.revisions) == len(source.blocks) + 1
+        assert selected.revisions[-1].markdown_body == "脚注译文\n"
+        assert all("脚注译文" not in r["text"] for r in selected.view_records)
