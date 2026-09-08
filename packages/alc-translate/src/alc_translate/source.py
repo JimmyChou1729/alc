@@ -602,6 +602,7 @@ def restore_translation_identity(text: str, block: Mapping[str, Any]) -> str:
         raise TranslationSourceError(
             "translation_coverage_invalid", "translation text must be a string"
         )
+    text = _restore_bibliography_label(text, block)
     expected = Counter(source_identity(block)["equations"])
     if not expected:
         return text
@@ -1477,6 +1478,34 @@ def _authored_bibliography_label(text: str) -> str | None:
         if author and any(character.isalpha() for character in author):
             return value[: match.end()]
     return None
+
+def _restore_bibliography_label(text: str, block: Mapping[str, Any]) -> str:
+    """Restore only equivalent author-year typography, never another identity."""
+    label = _bibliography_entry_label(block)
+    if not label or _translation_has_bibliography_label(text, label):
+        return text
+    value = text.lstrip()
+    marker = re.match(r"(?:[-+*]|[1-9][0-9]*[.)])\s+", value)
+    start = marker.end() if marker else 0
+    candidate = value[start:]
+    match = re.search(
+        r"[（(](?:[12][0-9]{3}[a-z]?|n\.d\.|in press|forthcoming)[）)]",
+        candidate[:256],
+        re.IGNORECASE,
+    )
+    if match is None:
+        return text
+    prefix = candidate[:match.end()]
+    def normalized(label_value: str) -> str:
+        label_value = (
+            label_value.casefold().replace("（", "(").replace("）", ")")
+        )
+        label_value = re.sub(r"\bet\s+al\.?|等", "~etal", label_value)
+        label_value = re.sub(r"\band\b|和|与", "~and", label_value)
+        return re.sub(r"\s+", "", label_value)
+    if normalized(prefix) != normalized(label):
+        return text
+    return value[:start] + label + " " + candidate[match.end():].lstrip()
 
 
 def _translation_has_bibliography_label(text: str, label: str) -> bool:

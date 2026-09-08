@@ -50,6 +50,9 @@ from alc_translate.atoms import (
 from alc_translate.contracts import recipe_from_document, recipe_to_document
 from alc_translate.prompts import (
     GLOSSARY_PROMPT_VERSION,
+    GLOSSARY_INTENT_PROMPT_VERSION,
+    TRANSLATION_INTENT_PROMPT_VERSION,
+    REVIEW_INTENT_PROMPT_VERSION,
     GLOSSARY_SCHEMA,
     LANGUAGE_PROMPT_VERSION,
     PROTECTED_ATOM_RESULT_SCHEMA,
@@ -115,18 +118,20 @@ class FakeTasks:
         self.translation_blocks: list[list[dict[str, Any]]] = []
         self.review_blocks: list[list[dict[str, Any]]] = []
         self.prompt_sizes: list[tuple[str, int]] = []
+        self.user_intents: list[str | None] = []
 
     def execute_or_resume(self, _context, request, *, input=None, options=None):
         contract, payload = _prompt(request.prompt)
         self.calls.append(contract)
         self.prompt_sizes.append((contract, len(request.prompt.encode("utf-8"))))
+        self.user_intents.append(payload.get("user_intent"))
         if contract == LANGUAGE_PROMPT_VERSION:
             value = {
                 "language_tag": self.language,
                 "classification": self.classification,
                 "confidence": 0.9,
             }
-        elif contract == GLOSSARY_PROMPT_VERSION:
+        elif contract in {GLOSSARY_PROMPT_VERSION, GLOSSARY_INTENT_PROMPT_VERSION}:
             value = {
                 "entries": [
                     {
@@ -137,7 +142,10 @@ class FakeTasks:
                     for term in payload["terms"]
                 ]
             }
-        elif contract == TRANSLATION_PROMPT_VERSION:
+        elif contract in {
+            TRANSLATION_PROMPT_VERSION,
+            TRANSLATION_INTENT_PROMPT_VERSION,
+        }:
             self.translation_blocks.append(payload["blocks"])
             self.translation_glossaries.append(
                 [item["term"] for item in payload["glossary"]]
@@ -205,7 +213,7 @@ class FakeTasks:
                 "schema_version": PROTECTED_ATOM_RESULT_SCHEMA,
                 "translations": translations,
             }
-        elif contract == REVIEW_PROMPT_VERSION:
+        elif contract in {REVIEW_PROMPT_VERSION, REVIEW_INTENT_PROMPT_VERSION}:
             self.review_blocks.append(payload["blocks"])
             self.prompt_glossary_fields.append(
                 [set(item) for item in payload["glossary"]]
@@ -952,6 +960,7 @@ def test_equation_translation_round_trips_through_fragment_markdown(
         item for item in revisions if item.anchor.target_id == equation["block_id"]
     )
     assert revision.markdown_body == f"$$\n{tex}\n$$\n"
+    assert "translation_quality" not in revision.provenance
 
 
 def test_equation_is_reinjected_when_review_falls_back(tmp_path: Path) -> None:
@@ -1021,6 +1030,7 @@ def test_equation_is_reinjected_when_review_falls_back(tmp_path: Path) -> None:
         item for item in revisions if item.anchor.target_id == equation["block_id"]
     )
     assert revision.markdown_body == f"$$\n{tex}\n$$\n"
+    assert "translation_quality" not in revision.provenance
     assert any(
         item.provenance.get("translation_fallback", {}).get("kind") == "review_skipped"
         for item in revisions
@@ -1448,6 +1458,119 @@ def test_translation_prompts_require_complete_block_text() -> None:
     assert "Patch any omission, summary, or truncation" in reviewed
 
 
+def test_user_intent_has_versioned_bounded_translation_prompts() -> None:
+    intent = "Use established astronomy terminology and concise prose."
+    glossary = glossary_prompt(
+        terms=[{"term_id": "term-1", "term": "seeing"}],
+        target_language="zh-CN",
+        window_ordinal=0,
+        user_intent=intent,
+    )
+    block = {"block_id": "block-1", "kind": "paragraph", "text": "Part"}
+    translation = translation_prompt(
+        blocks=[block],
+        glossary=[],
+        target_language="zh-CN",
+        language_result={"language_tag": "en"},
+        window_ordinal=0,
+        user_intent=intent,
+    )
+    review = review_prompt(
+        blocks=[block],
+        translations=[{"block_id": "block-1", "text": "部分"}],
+        glossary=[],
+        target_language="zh-CN",
+        window_ordinal=0,
+        user_intent=intent,
+    )
+
+    for prompt, contract in (
+        (glossary, GLOSSARY_INTENT_PROMPT_VERSION),
+        (translation, TRANSLATION_INTENT_PROMPT_VERSION),
+        (review, REVIEW_INTENT_PROMPT_VERSION),
+    ):
+        actual, payload = _prompt(prompt)
+        assert actual == contract
+        assert payload["user_intent"] == intent
+        assert "fixed contract takes precedence" in prompt
+
+    with pytest.raises(ValueError, match="at most 8000"):
+        translation_prompt(
+            blocks=[block],
+            glossary=[],
+            target_language="zh-CN",
+            language_result={"language_tag": "en"},
+            window_ordinal=0,
+            user_intent="x" * 8_001,
+        )
+
+
+def test_user_intent_recipe_round_trips_without_changing_empty_recipe() -> None:
+    assert recipe_to_document(GenerationRecipe())["schema_version"] == (
+        "alc.translate.generation_recipe.v1"
+    )
+    recipe = GenerationRecipe(user_intent="  Keep technical terms.  ")
+    encoded = recipe_to_document(recipe)
+
+    assert encoded["schema_version"] == "alc.translate.generation_recipe.v3"
+    assert encoded["user_intent"] == "Keep technical terms."
+    assert recipe_from_document(encoded) == recipe
+
+
+@pytest.mark.parametrize("intent", [
+    "Use established astronomy terminology.",
+    "保持术语一致。" * 150,
+], ids=["short", "long"])
+def test_user_intent_reaches_glossary_translation_and_review(tmp_path, intent) -> None:
+    source = _source(tmp_path)
+    tasks = FakeTasks()
+    workflow = TranslationWorkflowService(
+        tasks,
+        keyword_provider=FakeKeywords([_term("term-1", "seeing")]),
+    )
+    language = LanguageResult.from_document(
+        {
+            "schema_version": "alc.translate.language_result.v1",
+            "document_digest": source.document_digest,
+            "source_digest": source.source_digest,
+            "language_tag": "en",
+            "classification": "known",
+            "confidence": 0.99,
+            "target_language": "zh-CN",
+            "mode": "enabled",
+        }
+    )
+    glossary = workflow.build_glossary(
+        _context(tmp_path, "intent-glossary"),
+        source,
+        language=language,
+        target_language="zh-CN",
+        user_intent=intent,
+        term_input_budget_bytes=6000,
+    )
+    assert isinstance(glossary, GlossaryResult)
+    translated = workflow.translate_blocks(
+        _context(tmp_path, "intent-blocks"),
+        source,
+        language=language,
+        glossary=glossary,
+        target_language="zh-CN",
+        user_intent=intent,
+        input_budget_bytes=6000,
+    )
+
+    assert isinstance(translated, TranslationResult)
+    assert max(size for _, size in tasks.prompt_sizes) <= 6000
+    assert GLOSSARY_INTENT_PROMPT_VERSION in tasks.calls
+    assert TRANSLATION_INTENT_PROMPT_VERSION in tasks.calls
+    assert REVIEW_INTENT_PROMPT_VERSION in tasks.calls
+    assert all(
+        value == intent
+        for contract, value in zip(tasks.calls, tasks.user_intents, strict=True)
+        if contract != LANGUAGE_PROMPT_VERSION
+    )
+
+
 def test_derived_run_id_binds_handler_contract() -> None:
     semantic_input = {"request": {"source": "same"}}
     assert _run_id("blocks", "handler.v1", semantic_input) != _run_id(
@@ -1614,7 +1737,7 @@ def test_glossary_windows_preserve_every_term_identity_and_order(tmp_path):
     assert tasks.calls.count(GLOSSARY_PROMPT_VERSION) >= 2
 
 
-def test_invalid_glossary_retries_once_then_pauses_with_editable_candidate(
+def test_invalid_glossary_skips_bad_entries_and_replays_without_calls(
     tmp_path,
 ):
     source = _source(tmp_path)
@@ -1640,38 +1763,14 @@ def test_invalid_glossary_retries_once_then_pauses_with_editable_candidate(
         approx_count=1,
     )
 
-    assert isinstance(paused, Paused)
-    assert paused.awaiting.details["automatic_retry_exhausted"] is True
-    assert paused.awaiting.details["output_attempts"] == 2
-    candidate_path = Path(str(paused.awaiting.details["candidate_path"]))
-    assert candidate_path.is_file()
+    assert isinstance(paused, GlossaryResult)
+    assert paused.entries == ()
     assert tasks.calls == 2
-    candidate_path.write_text(
-        json.dumps(
-            {
-                "entries": [
-                    {
-                        "term_id": "term-1",
-                        "preferred_translation": "entropie",
-                        "target_definition": "Une grandeur thermodynamique.",
-                    }
-                ]
-            }
-        )
-    )
-
-    recovered = workflow.build_glossary(
-        context,
-        source,
-        language=language,
-        target_language="fr",
-        approx_count=1,
-    )
-
-    assert isinstance(recovered, GlossaryResult)
+    replay = workflow.build_glossary(context, source, language=language,
+        target_language="fr", approx_count=1)
+    assert replay == paused
     assert tasks.calls == 2
-    assert recovered.entries[0]["term"] == term["term"]
-    assert recovered.entries[0]["matched_sentences"] == term["matched_sentences"]
+
 
 
 def test_glossary_control_character_gets_one_fresh_retry(tmp_path):
@@ -1919,8 +2018,9 @@ def test_invalid_language_output_gets_one_fresh_retry(tmp_path):
     assert len(set(tasks.task_ids)) == 2
 
 
+@pytest.mark.parametrize("window_workers", [1, 2])
 def test_full_translation_publishes_source_note_revision_and_caption_only_table(
-    tmp_path: Path,
+    tmp_path: Path, window_workers: int,
 ) -> None:
     if not callable(getattr(source_module._ac_document, "source_notes", None)):
         pytest.skip("requires AC Foundation source-note producer")
@@ -1980,6 +2080,7 @@ def test_full_translation_publishes_source_note_revision_and_caption_only_table(
             (),
         ),
         target_language="zh-CN",
+        window_workers=window_workers,
     )
 
     assert isinstance(result, TranslationResult)
@@ -2093,6 +2194,8 @@ def test_language_second_invalid_output_pauses_and_resumes_without_third_call(
     assert resumed.status is RunStatus.SUCCEEDED
     assert tasks.calls.count(LANGUAGE_PROMPT_VERSION) == 2
     assert service.result(snapshot.run_id).language_tag == "en"
+
+
 
 
 def test_invalid_translation_draft_gets_one_fresh_retry(tmp_path):
@@ -3672,7 +3775,7 @@ def test_parenthesized_repeated_link_source_fallback_is_valid():
         (block,),
         candidate={
             "translations": [
-                {"block_id": block["block_id"], "text": "invalid translation"}
+                {"block_id": block["block_id"], "text": ""}
             ]
         },
     )
@@ -3708,7 +3811,7 @@ def test_lexical_link_source_fallback_is_valid(target):
         (block,),
         candidate={
             "translations": [
-                {"block_id": block["block_id"], "text": "invalid translation"}
+                {"block_id": block["block_id"], "text": ""}
             ]
         },
     )
@@ -3823,6 +3926,7 @@ def test_invalid_replayed_translation_artifact_falls_back_and_continues(
         "kind": "source_text",
         "source_preserved": True,
     }
+
 
 
 def test_protected_atom_accepted_window_replays_without_a_model_call(tmp_path):
@@ -4330,6 +4434,7 @@ def test_structured_inline_identity_survives_source_fallback_and_collapse(
     assert collapsed_fallback_ids == (block["block_id"],)
 
 
+
 def test_oversized_list_is_translated_as_bounded_internal_units(tmp_path):
     markdown = tmp_path / "large-list.md"
     markdown.write_text(
@@ -4505,7 +4610,7 @@ def test_oversized_review_block_does_not_skip_neighbor_reviews(tmp_path):
         max(
             size
             for contract, size in tasks.prompt_sizes
-            if contract == REVIEW_PROMPT_VERSION
+            if contract in {REVIEW_PROMPT_VERSION, REVIEW_INTENT_PROMPT_VERSION}
         )
         <= 4_800
     )
@@ -4553,7 +4658,8 @@ def test_translation_windows_reserve_space_for_review(tmp_path):
     assert max(size for _contract, size in tasks.prompt_sizes) <= 4_800
 
 
-def test_actual_translation_expansion_splits_review_windows(tmp_path):
+@pytest.mark.parametrize("intent", ["", "保持术语一致。" * 45], ids=["empty", "long"])
+def test_actual_translation_expansion_splits_review_windows(tmp_path, intent):
     markdown = tmp_path / "expanded-review.md"
     markdown.write_text(
         "# Long\n\n" + "\n\n".join(["source prose " * 8] * 6),
@@ -4587,17 +4693,20 @@ def test_actual_translation_expansion_splits_review_windows(tmp_path):
         ),
         target_language="zh-CN",
         input_budget_bytes=4_800,
+        user_intent=intent,
     )
 
     assert isinstance(result, TranslationResult)
-    translation_count = tasks.calls.count(TRANSLATION_PROMPT_VERSION)
-    review_count = tasks.calls.count(REVIEW_PROMPT_VERSION)
+    draft_contract = TRANSLATION_INTENT_PROMPT_VERSION if intent else TRANSLATION_PROMPT_VERSION
+    review_contract = REVIEW_INTENT_PROMPT_VERSION if intent else REVIEW_PROMPT_VERSION
+    translation_count = tasks.calls.count(draft_contract)
+    review_count = tasks.calls.count(review_contract)
     assert review_count > translation_count
     assert (
         max(
             size
             for contract, size in tasks.prompt_sizes
-            if contract == REVIEW_PROMPT_VERSION
+            if contract in {REVIEW_PROMPT_VERSION, REVIEW_INTENT_PROMPT_VERSION}
         )
         <= 4_800
     )
@@ -4681,3 +4790,46 @@ def test_missing_local_source_is_not_misrouted_to_arxiv(tmp_path):
         resolve_translation_source(paper, tmp_path / "missing.md")
 
     assert exc_info.value.code == "source_not_found"
+
+
+def test_fallback_event_carries_deduplicated_block_identities(tmp_path):
+    from alc_translate.workflow import _publish_translation_fallback
+    context = _context(tmp_path)
+    _publish_translation_fallback(context, artifact_id="fallback/test",
+        source_text_block_ids=["block-a", "block-a"], review_skipped_block_ids=["block-b"], reason_codes=["invalid"])
+    event = next(e for e in context.events.read_all() if e["event"] == "translation_fallback")
+    assert event["data"]["source_text_block_ids"] == ["block-a"]
+    assert event["data"]["source_text_block_count"] == 1
+    assert event["data"]["review_skipped_block_ids"] == ["block-b"]
+
+
+
+
+
+@pytest.mark.parametrize("entries", [[], [{"block_id": "a", "text": ""}],
+    [{"block_id": "a", "text": "一"}, {"block_id": "a", "text": "二"}],
+    [{"block_id": "other", "text": "不可配对"}]])
+def test_only_missing_or_ambiguous_translation_uses_source(entries):
+    block = {"block_id": "a", "kind": "heading", "payload": {"text": "Source"}}
+    result, missing = _salvaged_translation_fallback(
+        [block], candidate={"translations": entries}
+    )
+    assert missing == ["a"]
+    assert result[0]["block_id"] == "a"
+    assert result[0]["text"] == "Source"
+    assert result[0]["schema_version"] == PROTECTED_ATOM_RESULT_SCHEMA
+
+
+
+
+
+def test_glossary_salvage_keeps_only_unique_valid_source_bound_entries():
+    from alc_translate.workflow import _salvage_glossary_window
+    terms = [_term('a', 'Entropy'), _term('b', 'Energy'), _term('c', 'Mass')]
+    def entry(tid, text):
+        return {'term_id': tid, 'preferred_translation': text, 'target_definition': '定义'}
+    entries = [entry('a','熵'), entry('b','能量'), entry('b','重复'), entry('c',''), entry('unknown','无来源')]
+    retained = _salvage_glossary_window({'entries':entries},terms)
+    assert len(retained) == 1
+    assert retained[0]['term_id'] == 'a'
+    assert retained[0]['matched_sentences'] == terms[0]['matched_sentences']

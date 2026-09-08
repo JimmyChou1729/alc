@@ -125,6 +125,7 @@ def _parser() -> _Parser:
     resume.add_argument("--input", help="JSON object or a path to one")
     _document_cache_argument(resume)
     _host_authority_argument(resume)
+    _window_workers_argument(resume)
 
     get_result = commands.add_parser(
         "get-result",
@@ -148,9 +149,43 @@ def _project_argument(parser: argparse.ArgumentParser) -> None:
 def _generation_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--provider", default="auto", help="LLM provider (default: auto)")
     parser.add_argument("--model", help="provider-specific model name")
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=(
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra",
+        ),
+        help="explicit provider reasoning effort",
+    )
+    parser.add_argument(
+        "--processing-mode", choices=("fast", "standard", "deep")
+    )
+    parser.add_argument(
+        "--user-intent",
+        default="",
+        help="optional user requirements applied within source-faithful generation",
+    )
+    parser.add_argument(
+        "--review-rounds", type=int, choices=(0, 1, 2),
+        help="maximum model review rounds per translation batch",
+    )
     parser.add_argument("--refresh", action="store_true", help="refresh cached source data")
     _host_authority_argument(parser)
     _document_cache_argument(parser)
+    _window_workers_argument(parser)
+
+
+def _window_workers_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--window-workers", type=int, choices=range(1, 33), default=2,
+        help="translation windows in flight (default: 1); provider limits still apply",
+    )
 
 
 def _document_cache_argument(parser: argparse.ArgumentParser) -> None:
@@ -164,6 +199,7 @@ def _document_cache_argument(parser: argparse.ArgumentParser) -> None:
 
 
 def _host_authority_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--execution-profile", choices=("standard", "local-app"), default="standard")
     parser.add_argument(
         "--host-authority",
         choices=tuple(item.value for item in HostAuthority),
@@ -173,8 +209,17 @@ def _host_authority_argument(parser: argparse.ArgumentParser) -> None:
 
 
 def _execution(args: argparse.Namespace) -> ExecutionOptions:
+    from ac_llm import LLMExecutionProfile
+
     return ExecutionOptions(
-        llm=LLMExecutionOptions(host_authority=HostAuthority(args.host_authority))
+        llm=(
+            getattr(args, "llm_options", None)
+            or LLMExecutionOptions(
+                host_authority=HostAuthority(args.host_authority),
+                profile=LLMExecutionProfile(getattr(args, "execution_profile", "standard").replace("-", "_")),
+            )
+        ),
+        window_workers=getattr(args, "window_workers", 2),
     )
 
 
@@ -200,10 +245,14 @@ def _help_command(arguments: list[str]) -> str:
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None, *, event_sink: Any = None, llm_options: Any = None
+) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
         args = _parser().parse_args(arguments)
+        args.event_sink = event_sink
+        args.llm_options = llm_options
         result = _dispatch(args)
     except _HelpRequested:
         return 0
@@ -279,7 +328,15 @@ def _detect_language(args: argparse.Namespace) -> CommandResult:
         LanguageRequest(source, args.target_language), recipe=recipe
     )
     project.select("language", snapshot.run_id)
-    snapshot = service.execute(snapshot.run_id, execution=_execution(args))
+    snapshot = service.execute(
+        snapshot.run_id,
+        execution=_execution(args),
+        **(
+            {"event_sink": args.event_sink}
+            if getattr(args, "event_sink", None) is not None
+            else {}
+        ),
+    )
     return _snapshot_result(project, service, snapshot)
 
 
@@ -314,6 +371,11 @@ def _build_glossary(args: argparse.Namespace) -> CommandResult:
         snapshot.run_id,
         keyword_provider=_keyword_provider(paper),
         execution=_execution(args),
+        **(
+            {"event_sink": args.event_sink}
+            if getattr(args, "event_sink", None) is not None
+            else {}
+        ),
     )
     return _snapshot_result(
         project, service, snapshot, document=source.rich
@@ -352,7 +414,15 @@ def _translate_blocks(args: argparse.Namespace) -> CommandResult:
         recipe=recipe,
     )
     project.select("blocks", snapshot.run_id)
-    snapshot = service.execute(snapshot.run_id, execution=_execution(args))
+    snapshot = service.execute(
+        snapshot.run_id,
+        execution=_execution(args),
+        **(
+            {"event_sink": args.event_sink}
+            if getattr(args, "event_sink", None) is not None
+            else {}
+        ),
+    )
     return _snapshot_result(project, service, snapshot)
 
 
@@ -421,6 +491,7 @@ def _status(args: argparse.Namespace) -> CommandResult:
             "current_step": project.current_step,
             "run": snapshot_data(selected_snapshot),
             "steps": steps,
+            "progress": service.progress(run_id),
         },
         artifacts=artifacts,
         warnings=warnings,
@@ -442,6 +513,11 @@ def _resume(args: argparse.Namespace) -> CommandResult:
         input=_json_input(args.input) if args.input is not None else None,
         keyword_provider=keyword_provider,
         execution=_execution(args),
+        **(
+            {"event_sink": args.event_sink}
+            if getattr(args, "event_sink", None) is not None
+            else {}
+        ),
     )
     document = None
     if snapshot.status.value == "succeeded":
@@ -637,10 +713,16 @@ def _snapshot_result(
 ) -> CommandResult:
     base = command_result_from_snapshot(snapshot)
     if snapshot.status.value != "succeeded":
+        from .partial import render_partial_translation
+        try:
+            partial = render_partial_translation(project, service, snapshot)
+        except (ValueError, OSError, RuntimeError):
+            # Optional delivery must not replace the original resumable outcome.
+            partial = None
         return CommandResult(
             base.status,
             run=base.run,
-            data={"run": snapshot_data(snapshot)},
+            data={"run": snapshot_data(snapshot), "progress": {"partial_reader_path": partial}},
             artifacts=base.artifacts,
             warnings=base.warnings,
             error=base.error,
@@ -752,7 +834,16 @@ def _recipe(args: argparse.Namespace) -> GenerationRecipe:
             provider=args.provider,
             model=args.model,
             tier="medium",
-        )
+            **(
+                {"reasoning_effort": args.reasoning_effort}
+                if getattr(args, "reasoning_effort", None) is not None
+                else {}
+            ),
+        ),
+        processing_mode=getattr(args, "processing_mode", None),
+        user_intent=getattr(args, "user_intent", ""),
+        review_rounds=getattr(args, "review_rounds", None),
+        translation_input_budget_bytes=32000,
     )
 
 

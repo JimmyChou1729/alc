@@ -1,5 +1,10 @@
 # alc-translate
 
+The `status` command includes event-derived `data.progress` with completed and
+total translation units, last activity time and last-observed active model
+calls. These events can advance without updating the run snapshot. They do not
+replace the terminal run result or prove that an idle provider is healthy.
+
 `alc-translate` owns reusable scientific language detection, LLM-reviewed
 bilingual glossary generation, source-block translation, and translation
 review over verified `ac-document.RichDocument` sources. It uses `ac-jobs` for
@@ -57,6 +62,13 @@ alc-translate get-result --project-dir local/example/translation \
 The three commands are separately durable stages and verify their selected
 prerequisites. The final command returns the canonical result at `data.result`
 and the Layer handoff at `data.delivery.layer`.
+
+Generation commands accept `--processing-mode fast|standard|deep` and a separate
+`--reasoning-effort` supported by the selected provider/model. The processing
+mode does not change the default 32,000-byte translation request budget;
+processing mode alone does not change translation review. Omitting these options preserves existing
+recipe identity and defaults. These extended options require the matching
+AC Foundation development runtime described in [alc-web](../alc-web/README.md).
 
 Glossary `preferred_translation` values are plain text. Glossary
 `target_definition` values use the Reader's CommonMark-compatible Markdown
@@ -157,6 +169,40 @@ explicitly reports unrestricted authority; otherwise use `unknown`. Reuse the
 identical value when resuming. The setting is execution-only and is not
 recorded in a translation request or result.
 
+Generation commands also accept an optional `--user-intent`. A non-empty value
+is frozen in the generation recipe and supplied to glossary, translation and
+translation-review prompts. It may guide established terminology, register and
+glossary explanation wording, but cannot weaken complete coverage, source
+identity, protected formula/link/citation handling, or the closed output
+schemas. Empty intent preserves the legacy recipe and prompt identities for
+durable replay.
+
+Window planning includes the complete user intent and its instruction wrapper
+in glossary, translation and review input budgets. Actual translation expansion
+is checked again when review windows are formed. An indivisible term or source
+unit that cannot fit is reported as a budget error rather than sent oversized.
+
+### Bounded translation concurrency
+
+`translate-blocks` and `resume` accept `--window-workers` (1–32, CLI default 2).
+Python callers can set `ExecutionOptions(window_workers=2)` or pass
+`window_workers=2` to `TranslationWorkflowService.translate_blocks`.
+This execution setting does not change the model or remove translation review.
+The shared Foundation provider gate remains authoritative: two window workers
+with one provider slot still allow only one provider call at a time.
+
+Each window finishes its draft and configured review before its result is accepted.
+Concurrent windows use Foundation durable work groups and are merged in source
+order. Recovery also finds accepted windows after a gap, so a later completed
+window survives an earlier failure. Already accepted work is reused when
+switching back to serial execution. A crash before model output has been
+persisted can still require a repeated provider call.
+
+The Python workflow defaults to serial execution. Offline concurrency tests establish
+ordering, bounds and recovery behavior, not an end-to-end speedup guarantee.
+Companion's chapter scheduling remains separate; this option does not enable
+nested window parallelism inside every Companion chapter.
+
 A failed step is the latest failed attempt, not a permanent project terminal
 state. Status exposes `can_resume`, `recovery_epoch`, and stable `working/`
 paths. Glossary candidates contain only term IDs plus translated content. New
@@ -240,7 +286,14 @@ window, and any remaining-window fallback without storing source content.
 Provider authentication, host-authority, invalid request/schema, source/binding
 corruption, explicit stops, and publication failures remain terminal or
 resumable boundaries. Translation quality and scientific judgment remain
+
 reviewer concerns, not program-invalid output.
+
+Legacy Markdown review replay can restore an exact literal-to-math presentation
+change before source validation, without accepting changed values or operators.
+New text-slot results always use the caller-owned protected-atom path. Author-year
+reference labels are restored only when the authors and year still match.
+Fallback events include block identities as well as counts and reasons.
 
 ## Tests
 
@@ -249,3 +302,36 @@ The default suite uses deterministic sources and fake model services:
 ```bash
 python -m pytest packages/alc-translate/tests
 ```
+
+Standalone translation defaults to two concurrent windows. Use
+`--window-workers N` to override the resource limit; the default 32,000-byte
+batch budget and translation review policy are independent of concurrency.
+
+Independent translation window failures are collected so other windows can
+finish. Exhausted local output-format pauses also allow other windows to finish;
+shared provider and authority pauses stop further admission. Saved successful
+work remains reusable. Paused or failed block translation can expose a separate
+partial Reader containing complete source-bound blocks, including their quality
+and source-retention provenance. This does not mark the run successful.
+
+### Content review rounds
+
+Generation commands accept `--review-rounds 0|1|2`. Python callers set
+`GenerationRecipe(review_rounds=...)`; direct workflow callers pass
+`review_rounds` to `TranslationWorkflowService.translate_blocks`. Zero skips
+model review while retaining structural validation and source safeguards. One
+runs a check-and-correct pass. Two permits one additional pass when the first
+changes the draft, stopping early when unchanged. Invalid-output repair retries
+are separate from content review rounds.
+
+The choice is frozen in recipe v4 and restored on resume; resume cannot change
+it. Every explicit review round has separate model identity and checkpoints, so
+a paused second round reuses its first-round result. Omitting the option keeps
+the legacy one-pass behavior and existing recipe serialization unchanged.
+Intentional zero-review delivery does not produce a skipped-review warning.
+
+Generation and resume commands accept `--execution-profile standard|local-app`.
+The default `standard` keeps normal host execution behavior; `local-app` selects
+the isolated local application profile explicitly. Injected execution options
+from the Web application retain precedence. This execution choice does not
+modify the frozen review recipe.

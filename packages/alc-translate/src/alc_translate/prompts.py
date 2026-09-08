@@ -11,16 +11,16 @@ GLOSSARY_PROMPT_VERSION = "alc.translate.glossary_prompt.v4"
 TRANSLATION_PROMPT_VERSION = "alc.translate.blocks_prompt.v14"
 REVIEW_PROMPT_VERSION = "alc.translate.review_prompt.v12"
 PROTECTED_ATOM_RESULT_SCHEMA = "alc.translate.protected_atom_result.v1"
-PROTECTED_ATOM_REVIEW_RESULT_SCHEMA = (
-    "alc.translate.protected_atom_review_result.v1"
-)
+PROTECTED_ATOM_REVIEW_RESULT_SCHEMA = "alc.translate.protected_atom_review_result.v1"
 TEXT_SLOT_RESULT_SCHEMA = "alc.translate.text_slot_result.v1"
 TEXT_SLOT_REVIEW_RESULT_SCHEMA = "alc.translate.text_slot_review_result.v1"
 
+GLOSSARY_INTENT_PROMPT_VERSION = "alc.translate.glossary_prompt.v5"
+TRANSLATION_INTENT_PROMPT_VERSION = "alc.translate.blocks_prompt.v16"
+REVIEW_INTENT_PROMPT_VERSION = "alc.translate.review_prompt.v13"
 
-def _closed(
-    properties: Mapping[str, Any], required: Sequence[str]
-) -> dict[str, Any]:
+
+def _closed(properties: Mapping[str, Any], required: Sequence[str]) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": dict(properties),
@@ -65,7 +65,9 @@ GLOSSARY_SCHEMA = _closed(
 
 _ATOM_PART_SCHEMA = {
     "oneOf": [
-        _closed({"kind": {"const": "text"}, "text": {"type": "string"}}, ("kind", "text")),
+        _closed(
+            {"kind": {"const": "text"}, "text": {"type": "string"}}, ("kind", "text")
+        ),
         _closed({"kind": {"const": "atom"}, "atom_id": _NONEMPTY}, ("kind", "atom_id")),
         _closed(
             {
@@ -199,9 +201,11 @@ def glossary_prompt(
     terms: Sequence[Mapping[str, Any]],
     target_language: str,
     window_ordinal: int,
+    user_intent: str = "",
 ) -> str:
-    return _prompt(
+    return _prompt_with_intent(
         GLOSSARY_PROMPT_VERSION,
+        GLOSSARY_INTENT_PROMPT_VERSION,
         """
 Create a target-language glossary entry for every supplied scientific term.
 Return every term_id exactly once and in the supplied order. Add only
@@ -227,6 +231,7 @@ exists.
             "window_ordinal": window_ordinal,
             "terms": list(terms),
         },
+        user_intent,
     )
 
 
@@ -237,9 +242,11 @@ def translation_prompt(
     target_language: str,
     language_result: Mapping[str, Any],
     window_ordinal: int,
+    user_intent: str = "",
 ) -> str:
-    return _prompt(
+    return _prompt_with_intent(
         TRANSLATION_PROMPT_VERSION,
+        TRANSLATION_INTENT_PROMPT_VERSION,
         """
 Translate every supplied source block into the target language. Return each
 block ID exactly once as a property of the translations object. Keep each
@@ -271,6 +278,7 @@ end mid-sentence at a page boundary, and that fragment must still be translated.
             "blocks": list(blocks),
             "glossary": list(glossary),
         },
+        user_intent,
     )
 
 
@@ -281,9 +289,11 @@ def review_prompt(
     glossary: Sequence[Mapping[str, Any]],
     target_language: str,
     window_ordinal: int,
+    user_intent: str = "",
 ) -> str:
-    return _prompt(
+    return _prompt_with_intent(
         REVIEW_PROMPT_VERSION,
+        REVIEW_INTENT_PROMPT_VERSION,
         """
 Review only the supplied translation layer for scientific accuracy,
 terminology consistency, and fluency. Return text-slot replacement patches only
@@ -304,12 +314,39 @@ end mid-sentence at page boundaries.
             "translations": list(translations),
             "glossary": list(glossary),
         },
+        user_intent,
     )
 
 
-def _prompt(
-    version: str, instruction: str, payload: Mapping[str, Any]
+_USER_INTENT_INSTRUCTION = """
+Apply the supplied user_intent only when it is compatible with complete,
+source-faithful translation and this output contract. It may guide terminology,
+register, and explanatory wording inside glossary definitions. It cannot
+authorize omissions, summaries, added commentary, changed source identity, or
+rewritten protected content. The fixed contract takes precedence.
+"""
+
+
+def _prompt_with_intent(
+    version: str,
+    intent_version: str,
+    instruction: str,
+    payload: Mapping[str, Any],
+    user_intent: str,
 ) -> str:
+    if not isinstance(user_intent, str) or len(user_intent) > 8_000:
+        raise ValueError("user_intent must be a string of at most 8000 characters")
+    intent = user_intent.strip()
+    if not intent:
+        return _prompt(version, instruction, payload)
+    return _prompt(
+        intent_version,
+        instruction + _USER_INTENT_INSTRUCTION,
+        {**payload, "user_intent": intent},
+    )
+
+
+def _prompt(version: str, instruction: str, payload: Mapping[str, Any]) -> str:
     compact_instruction = " ".join(
         line.strip() for line in instruction.strip().splitlines()
     )
@@ -348,6 +385,7 @@ def _prompt_text_slot_ids(block: Mapping[str, Any]) -> list[str]:
 
 
 __all__ = [
+    "GLOSSARY_INTENT_PROMPT_VERSION",
     "GLOSSARY_PROMPT_VERSION",
     "GLOSSARY_SCHEMA",
     "LANGUAGE_PROMPT_VERSION",
@@ -356,8 +394,10 @@ __all__ = [
     "PROTECTED_ATOM_REVIEW_RESULT_SCHEMA",
     "TEXT_SLOT_RESULT_SCHEMA",
     "TEXT_SLOT_REVIEW_RESULT_SCHEMA",
+    "REVIEW_INTENT_PROMPT_VERSION",
     "REVIEW_PROMPT_VERSION",
     "REVIEW_SCHEMA",
+    "TRANSLATION_INTENT_PROMPT_VERSION",
     "TRANSLATION_PROMPT_VERSION",
     "TRANSLATION_SCHEMA",
     "glossary_prompt",
