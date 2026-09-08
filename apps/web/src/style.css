@@ -118,29 +118,33 @@ a svg {
 }
 .brand {
   display: flex;
-  gap: 12px;
+  flex-direction: row;
   align-items: center;
-  margin: 0 12px 30px;
+  gap: 6px;
+  margin: 0 12px 16px;
   color: var(--ink);
-  font-size: 25px;
-  font-weight: 650;
-  letter-spacing: 1px;
+  text-align: center;
+  text-decoration: none;
 }
 .brand-icon {
-  height: 43px;
-  width: 43px;
-  display: grid;
-  place-items: center;
-  background: #e8f0f5;
-  color: var(--primary);
-  border-radius: 13px;
+  flex: 0 0 auto;
+  width: 88px;
+  max-width: 100%;
+}
+.brand-icon img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
 }
 .brand small {
   display: block;
-  font-size: 11px;
-  letter-spacing: 1.3px;
-  font-weight: 400;
-  line-height: 1.1;
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 1px;
+  font-weight: 550;
+  line-height: 1.5;
   color: var(--muted);
 }
 .new-button {
@@ -1075,17 +1079,17 @@ select {
     border-bottom: 1px solid var(--line);
   }
   .brand {
+    flex-direction: row;
     margin: 0;
-    font-size: 21px;
-    gap: 9px;
+    gap: 4px;
   }
   .brand-icon {
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
+    width: 72px;
   }
   .brand small {
-    font-size: 9px;
+    margin: 0;
+    font-size: 14px;
+    letter-spacing: 1px;
   }
   .new-button {
     padding: 8px 12px;
@@ -1331,8 +1335,8 @@ select {
 .task-dialog .actions { margin-top:24px; justify-content:flex-end; }
 @media(max-width:760px) { .sidebar-resizer { display:none; } }
 
-.brand > span:last-child { display:flex; align-items:baseline; gap:7px; white-space:nowrap; }
-.brand small { display:inline; margin:0; letter-spacing:0; }
+.brand > span:last-child { white-space:nowrap; }
+
 .price-input { display:flex; gap:8px; }
 .price-input input { min-width:0; flex:1; }
 .price-input select { width:135px; flex-shrink:0; }
@@ -1354,7 +1358,7 @@ select {
 .currency-menu button > svg { flex-shrink:0; }
 
 
-.brand small { font-size:15px; font-weight:500; }
+
 
 
 .detail-heading { margin-bottom:12px; }

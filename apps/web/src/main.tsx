@@ -123,10 +123,14 @@ const speeds = [
   { id: "thorough", name: "加强校对", workers: 2, reviews: 2, note: "2 个批次 · 最多两轮", icon: ShieldCheck },
 ];
 function processingLabel(spec: Record<string, any>) {
-  if (spec.processing_workers != null && spec.review_rounds != null)
-    return speeds.find(s => s.workers === spec.processing_workers && s.reviews === spec.review_rounds)?.name || "自定义";
-  return ({economy: "节省", standard: "标准", fast: "快速"} as Record<string, string>)[spec.speed]
-    || modes.find(m => m.id === spec.mode)?.name;
+  if (spec.processing_workers != null && spec.review_rounds != null) {
+    const preset = speeds.find(s => s.workers === spec.processing_workers && s.reviews === spec.review_rounds)?.name || "自定义";
+    const review = ["不校对", "校对一轮", "最多校对两轮"][spec.review_rounds];
+    return `${preset} · 并发 ${spec.processing_workers} · ${review}`;
+  }
+  const preset = ({economy: "节省", standard: "标准", fast: "快速"} as Record<string, string>)[spec.speed]
+    || modes.find(m => m.id === spec.mode)?.name || "旧版设置";
+  return `${preset} · 并发与校对按原任务配置`;
 }
 const modes = [
   {
@@ -436,10 +440,10 @@ function App() {
           }}
         >
           <span className="brand-icon">
-            <BookOpen size={23} />
+            <img src={new URL("./assets/alc-logo.png", import.meta.url).href} alt="ALC" />
           </span>
           <span>
-            ALC<small>文档工作台</small>
+            <small>伴读助手</small>
           </span>
         </a>
         <button className="new-button" onClick={() => navigate("new")}>
@@ -906,9 +910,9 @@ function NewJob({
   }
   return (
     <div className="page new-page">
-      <div className="eyebrow">YOUR READING WORKSPACE</div>
+      <div className="eyebrow">Agentic Learning Copilot</div>
       <h1>从一份文档开始。</h1>
-      <p className="page-intro">翻译、伴读，再用自己的节奏阅读。</p>
+      <p className="page-intro">翻译、伴读，让知识触手可及。</p>
       <form onSubmit={submit}>
         <section className="card source-card">
           <div className="card-heading">
@@ -981,17 +985,13 @@ function NewJob({
             </>
           ) : (
             <div className="url-input">
-              <label htmlFor="source-url">文档地址、DOI 或 arXiv ID</label>
+              <label htmlFor="source-url">HTTP 文档地址、DOI 或 arXiv ID</label>
               <input
                 id="source-url"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder="https://… 或 10.…/…"
               />
-              <p>
-                仅获取公开 HTTPS 资源。DOI
-                可能返回出版商落地页，请检查来源预览。
-              </p>
             </div>
           )}
         </section>
@@ -1242,23 +1242,26 @@ function SettingsPage({
   const [saveError, setSaveError] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const editForm = useRef<HTMLFormElement>(null);
-  const [form, setForm] = useState({
-    id: "api-custom",
-    name: "自定义 API",
-    protocol: "responses",
-    base_url: "https://api.openai.com/v1",
-    model: "",
-    key: "",
-    remember_key: false,
-    reasoning_efforts: "",
-    vision: false,
-    price_currency: "USD",
-    input_price: "",
-    output_price: "",
-    cache_read_price: "",
-    cache_write_price: "",
-    max_output_tokens: 8192,
-  });
+  function newProviderForm() {
+    return {
+      id: `api-${crypto.randomUUID()}`,
+      name: "自定义 API",
+      protocol: "chat-completions",
+      base_url: "https://api.openai.com/v1",
+      model: "",
+      key: "",
+      remember_key: false,
+      reasoning_efforts: "",
+      vision: false,
+      price_currency: "USD",
+      input_price: "",
+      output_price: "",
+      cache_read_price: "",
+      cache_write_price: "",
+      max_output_tokens: 8192,
+    };
+  }
+  const [form, setForm] = useState(newProviderForm);
   function editProvider(p: Provider) {
     onError("");
     setSaveError("");
@@ -1319,12 +1322,6 @@ function SettingsPage({
     if (correction) {
       setSaveError(
         "尚未保存：Base URL 填成了完整接口地址。请点击上方“按接口地址修正”，再保存；已输入的密钥会保留在表单中。",
-      );
-      return;
-    }
-    if (!editingId && settings?.providers.some((p) => p.id === form.id)) {
-      onError(
-        "这个配置 ID 已存在，请点击列表中的连接进行编辑，或使用新的 ID。",
       );
       return;
     }
@@ -1432,12 +1429,7 @@ function SettingsPage({
               type="button"
               onClick={() => {
                 setEditingId(null);
-                setForm({
-                  ...form,
-                  id: "api-new",
-                  name: "自定义 API",
-                  key: "",
-                });
+                setForm(newProviderForm());
                 setNotice("");
               }}
             >
@@ -1455,27 +1447,25 @@ function SettingsPage({
             />
           </label>
           <label>
-            配置 ID
-            <input
-              value={form.id}
-              disabled={editingId !== null}
-              onChange={(e) => patch("id", e.target.value)}
-              pattern="api-[a-z0-9][a-z0-9_-]{0,58}"
-              required
-            />
-          </label>
-          <label>
             协议
             <StyledSelect aria-label="协议"
               value={form.protocol}
               onChange={(e) => patch("protocol", e.target.value)}
             >
-              <option value="responses">OpenAI Responses</option>
               <option value="chat-completions">
-                Chat Completions 兼容协议
+                OpenAI 兼容（Chat Completions）
               </option>
+              <option value="responses">OpenAI Responses</option>
               <option value="anthropic">Anthropic Messages</option>
             </StyledSelect>
+          </label>
+          <label>
+            Base URL
+            <input
+              value={form.base_url}
+              onChange={(e) => patch("base_url", e.target.value)}
+              required
+            />
           </label>
           <label>
             模型 ID
@@ -1487,14 +1477,6 @@ function SettingsPage({
             />
           </label>
         </div>
-        <label>
-          Base URL
-          <input
-            value={form.base_url}
-            onChange={(e) => patch("base_url", e.target.value)}
-            required
-          />
-        </label>
         {correction && (
           <div className="warning-line" role="status">
             <p>
