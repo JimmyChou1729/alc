@@ -31,11 +31,17 @@ AC_FOUNDATION_REPO_ROOT="$foundation_path" \
 constraint_args=()
 for project in "$foundation_path"/packages/ac-*/pyproject.toml \
   "$root"/packages/alc-*/pyproject.toml; do
+  if [ "${project%/pyproject.toml}" = "$root/packages/alc-web" ]; then
+    continue
+  fi
   constraint_args+=(--package "$project")
 done
 "$python_bin" "$foundation_path/scripts/check-runtime-constraints.py" \
   --constraints "$root/plugins/alc/skills/alc/scripts/runtime-constraints.txt" \
   "${constraint_args[@]}"
+
+npm --prefix "$root/apps/web" ci
+npm --prefix "$root/apps/web" run build
 
 "$python_bin" - "$root" "$version" <<'PY'
 from __future__ import annotations
@@ -53,6 +59,7 @@ expected = {
     "alc-ocr-proofread",
     "alc-render",
     "alc-translate",
+    "alc-web",
 }
 projects = sorted((root / "packages").glob("alc-*/pyproject.toml"))
 observed = {path.parent.name for path in projects}

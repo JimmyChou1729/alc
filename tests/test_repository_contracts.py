@@ -23,6 +23,7 @@ EXPECTED = {
     "alc-ocr-proofread": {"ac-jobs", "ac-llm", "ac-document"},
     "alc-render": {"ac-document"},
     "alc-translate": {"ac-jobs", "ac-llm", "ac-document", "alc-render"},
+    "alc-web": {"ac-jobs", "ac-llm", "ac-document", "alc-render", "alc-translate", "alc-companion"},
 }
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 ALC_MAJOR = int(VERSION.split(".")[0])

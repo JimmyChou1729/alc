@@ -19,6 +19,10 @@ llm-providers.local.json
 # NPM, PNPM
 
 .pnpm-store/
+node_modules/
+packages/alc-web/src/alc_web/static/
+apps/web/test-results/
+apps/web/playwright-report/
 
 # Python bytecode and caches
 __pycache__/

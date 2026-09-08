@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
+python_bin="${ALC_WEB_PYTHON:-${AC_INSTALL_PYTHON_BIN:-python3}}"
+exec "$python_bin" "$root/scripts/alc-web.py" "$@"
