@@ -66,80 +66,65 @@ ALC.
 
 ## Direct HTML sources
 
-`alc-companion` accepts a local source only. When the user provides one direct
-HTML URL for a Companion, materialize it at the Skill layer before starting the
-build. This is acquisition, not academic enrichment:
+For a URL or paper identifier supplied for translation or Companion, use the same
+Foundation acquisition route as Local Web. Convert a bare arXiv ID (including
+its explicit vN suffix) or arXiv: identifier to https://arxiv.org/html/<id>.
+Convert a DOI to https://doi.org/<doi>. Preserve an existing public HTTPS URL.
+Do not choose an alternate acquisition route merely because ARC is installed.
+ARC remains optional for explicitly requested discovery or enrichment.
 
-1. This workflow accepts direct HTML URLs only. Classify locally before probing
-   an executable. Route to ARC only for an exact
-   `https://arxiv.org/html/<id>[vN]` URL, deterministically extracting the ID
-   and preserving an explicit `vN` version. An explicit ar5iv URL and every
-   other HTTPS HTML URL go to generic ACF with the original URL unchanged.
-2. Probe ARC without installing it. When `arc-paper` is already on `PATH`, run
-   this no-network, no-write capability probe:
+```bash
+<skill-dir>/scripts/alc-runtime ac-document acquire-html-bundle <html-url> \
+  --output-dir <bundle-dir>
+```
 
-   ```bash
-   arc-paper export-arxiv-html-acquisition --help
-   ```
-
-   Use that launcher only when the probe exits with status 0. Otherwise, only
-   when the ARC Skill is present, run its own:
-
-   ```bash
-   <arc-skill-dir>/scripts/arc-runtime doctor
-   ```
-
-   Continue only if it exits successfully and returns JSON with `ready:true`.
-   Then run the same no-network, no-write capability probe through that ready
-   runtime:
-
-   ```bash
-   <arc-skill-dir>/scripts/arc-runtime arc-paper \
-     export-arxiv-html-acquisition --help
-   ```
-
-   Use the runtime launcher only when this second probe exits with status 0.
-   Never call `setup`; any missing, not-ready, or failed probe goes to generic
-   ACF.
-3. When the exact official URL and an executable probe both pass, materialize
-   through:
-
-   ```bash
-   arc-paper export-arxiv-html-acquisition <paper-id> \
-     --output-dir <bundle-dir> [--cache-root <root>]
-   ```
-
-   If the ready ARC Skill runtime is being used instead of the console script,
-   use its own launcher:
-
-   ```bash
-   <arc-skill-dir>/scripts/arc-runtime arc-paper \
-     export-arxiv-html-acquisition <paper-id> --output-dir <bundle-dir>
-   ```
-
-   Do not use ALC's runtime launcher for an ARC command. ARC's materialized
-   export must contain the shared `ac.document.html_source_bundle.v1` bundle.
-4. If ARC is unavailable, old, not ready, incapable, or the input is not an
-   exact official arXiv HTML URL, invoke the explicit
-   provider-neutral `ac-document acquire-html-bundle` flow through
-   `alc-runtime` with `--output-dir <bundle-dir>`. It atomically creates
-   `<bundle-dir>/source.html`, `<bundle-dir>/manifest.json`, and any local
-   resources. Pass the original HTTPS URL unchanged. Do not install ARC or
-   retry through a different source type.
-5. In either route, retain the one materialized local HTML primary and its
-   materialized export manifest. The export's nested bundle uses the shared
-   contract, and the Companion integration projects its bundle identity,
-   primary artifact digest, requested URL, and final URL into the durable
-   lineage. Start Companion with the local `source.html` plus
-   `--html-source-manifest <manifest-path>`.
-
-Acquisition warnings, including partially unavailable resources, are retained
-through Companion's existing source-diagnostic warning surface. ALC package
-code does not import, install, or invoke ARC; ARC presence and recognition are
-Skill-level coordination only.
+Retain source.html, manifest.json and local resources together. Pass
+`--html-source-manifest <bundle-dir>/manifest.json` to Companion. If a URL returns
+PDF or another format, identify that format and use its supported explicit input
+workflow; do not silently replace the requested source with a different edition.
+Acquisition warnings and source identity remain attached to the result.
 
 ## Completion
 
 Validate the owning workflow before delivery. Publish visible HTML or native
 source artifacts; hidden state is not the final deliverable. Preserve exact
 source identity, returned run IDs, assumptions, and warnings.
+
+Keep following a model-backed command until its execution session returns a
+terminal result. A yielded tool session or a period without stdout is not a
+completed command. Do not end the task with "still running" while that session
+remains active; poll the session and use the workflow's public status command
+for progress. A run snapshot's timestamp alone does not measure live progress.
+Never infer that no work was saved from an absent final Layer or HTML file.
+After successful standalone translation, compose and validate the Reader as
+documented in manuals/alc-translate.md; a Layer JSON is not the requested HTML
+delivery. Stop or defer only when the user requests it or a concrete blocker
+requires user input, and describe the verified state at that point.
+
+## Workflow and resource policy
+
+Use the shared Local Web processing defaults for new translation and Companion:
+`--execution-profile local-app`, 2 workers, and `--review-rounds 1`. Specify the
+same provider/model/language chosen by the user; do not silently substitute a
+model. Use the medium-tier default when no model is requested. The local-app
+profile uses the official CLI login and isolated execution; custom API routes
+must be configured explicitly rather than inherited from host CLI settings.
+
+Presets: fast draft = 4 workers / 0 reviews; standard = 2 / 1; strengthened review
+= 2 / 2. User-chosen combinations are custom. Accept 1–8 workers and review
+rounds 0, 1 or 2. Zero skips model content review while retaining programmatic
+source and output validation. Two stops early when no correction is needed.
+Pass `--workers N` to Companion and `--window-workers N` to translation.
+
+Companion preloads complete original and frozen translated chapter inputs before
+guide generation. Do not silently fall back to incomplete agent-directed reads.
+Treat unavailable input as retryable preparation failure and oversized input as
+an explicit capacity limit. Resume keeps the frozen review and evidence policy;
+use `--execution-profile local-app` and the task's saved worker count on resume.
+Do not rewrite old requests to upgrade them in place. Do not add a separate
+cross-chapter review flag to new explicit-policy tasks; review_rounds governs it.
+
+Concurrency is a per-task upper limit. Independent tasks do not divide one
+user-wide pool: two tasks configured for eight can issue sixteen requests in
+total. Hardware, network and provider limits can reduce actual throughput.
+Local Web separately limits the number of simultaneous document jobs.

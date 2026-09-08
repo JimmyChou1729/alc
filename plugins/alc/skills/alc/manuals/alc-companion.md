@@ -1,5 +1,11 @@
 # ALC Companion Quick Start
 
+For new Skill-driven tasks, use the processing policy in SKILL.md:
+`--execution-profile local-app --review-rounds 1` by default, with two workers.
+Respect explicit 0/1/2 review rounds and 1–8 workers. These explicit settings
+supersede legacy-default descriptions below; resume uses the saved recipe.
+
+
 `alc-companion` builds a source-anchored, run-owned `alc-render` publication and
 promotes its standalone reader to `<project-dir>/companion.html`. Build and
 resume require ALC's public package dependencies; an incomplete runtime returns
@@ -63,23 +69,12 @@ a stable ignored path under `local/`. Companion claims only
 `<project-dir>/.alc/companion/` and `<project-dir>/companion.html`; unrelated
 files remain untouched.
 
-For one direct HTML URL, use the Skill's host-level acquisition route before
-this command. ARC applies only to exact
-`https://arxiv.org/html/<id>[vN]`; preserve any explicit version. An ar5iv URL
-and every other HTTPS HTML URL use generic ACF with the original URL unchanged.
-When `arc-paper` is already on `PATH`, first run `arc-paper
-export-arxiv-html-acquisition --help`; only exit status 0 is usable. Otherwise,
-the ARC Skill route requires `doctor` to exit 0 with JSON `ready:true`, then
-requires `<arc-skill-dir>/scripts/arc-runtime arc-paper
-export-arxiv-html-acquisition --help` to exit 0. These probes are no-network
-and no-write. Never run `setup`; a failed probe uses generic ACF. The accepted
-ARC command is `arc-paper export-arxiv-html-acquisition <paper-id>
---output-dir <bundle-dir> [--cache-root <root>]`. Otherwise use the explicit
-provider-neutral `ac-document acquire-html-bundle` flow. Both routes
-produce a local primary and one materialized export containing the shared
-`ac.document.html_source_bundle.v1` bundle. Keep that one bundle authoritative;
-the Companion integration binds its identity, primary artifact digest,
-requested URL, and final URL to the selected lineage.
+For a supplied HTML URL or normalized arXiv/DOI identifier, use
+`ac-document acquire-html-bundle` through the ALC runtime, as in Local Web.
+Preserve an explicit version and the original public HTTPS URL. The resulting
+`ac.document.html_source_bundle.v1` export binds source bytes, requested/final
+URLs and local resources. ARC is reserved for optional discovery or enrichment,
+not automatic replacement of this acquisition route.
 Partial-resource warnings are preserved through the normal source-diagnostic
 warning surface. Do not fall back to TeX or flattened Markdown after an
 acquisition failure. If the

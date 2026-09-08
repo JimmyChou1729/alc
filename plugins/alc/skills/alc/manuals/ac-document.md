@@ -64,9 +64,8 @@ alc-companion build <materialization-dir>/source.html \
   --html-source-manifest <materialization-dir>/manifest.json
 ```
 
-Do not use this generic route to classify academic sources: optional installed
-ARC may first recognize and materialize an academic URL, but must return the
-same ACF bundle contract to ALC.
+Use this Foundation route for supplied URLs, matching Local Web. Optional ARC
+discovery or enrichment does not automatically replace the source bundle.
 
 Build an approximate durable keyword inventory from a local source:
 
