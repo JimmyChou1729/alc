@@ -12,7 +12,9 @@ PACKAGES = ROOT / "packages"
 PLUGIN = ROOT / "plugins/alc"
 SCRIPTS = PLUGIN / "skills/alc/scripts"
 EXPECTED = {
+    "alc-catalog": set(),
     "alc-companion": {
+        "alc-catalog",
         "ac-jobs",
         "ac-llm",
         "ac-document",
@@ -20,10 +22,10 @@ EXPECTED = {
         "alc-render",
         "alc-translate",
     },
-    "alc-ocr-proofread": {"ac-jobs", "ac-llm", "ac-document"},
+    "alc-ocr-proofread": {"alc-catalog", "ac-jobs", "ac-llm", "ac-document"},
     "alc-render": {"ac-document"},
-    "alc-translate": {"ac-jobs", "ac-llm", "ac-document", "alc-render"},
-    "alc-web": {"ac-jobs", "ac-llm", "ac-document", "alc-render", "alc-translate", "alc-companion"},
+    "alc-translate": {"alc-catalog", "ac-jobs", "ac-llm", "ac-document", "alc-render"},
+    "alc-web": {"alc-catalog", "ac-jobs", "ac-llm", "ac-document", "alc-render", "alc-translate", "alc-companion", "alc-ocr-proofread"},
 }
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 ALC_MAJOR = int(VERSION.split(".")[0])
@@ -205,3 +207,38 @@ def test_public_marketplaces_and_install_instructions_are_complete() -> None:
     assert "codex plugin marketplace add tririver/alc --ref stable" in readme
     assert "/plugin marketplace add tririver/alc@stable" in readme
     assert "dsh plugin --profile alc add github:tririver/alc" in readme
+
+
+def test_release_updates_product_package_list_with_source_pin(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    release = (ROOT / "scripts/release-alc.sh").read_text(encoding="utf-8")
+    marker = '\"$python_bin\" - \"$root\" \"$source_commit\" <<\'PY\'\n'
+    code = release.split(marker, 1)[1].split("\nPY", 1)[0]
+    for name in ("alc-catalog", "alc-render", "alc-web"):
+        project = tmp_path / "packages" / name / "pyproject.toml"
+        project.parent.mkdir(parents=True)
+        project.write_text("", encoding="utf-8")
+    lock = tmp_path / "plugins/alc/skills/alc/scripts/runtime-sources.json"
+    lock.parent.mkdir(parents=True)
+    lock.write_text(json.dumps({"sources": [{"id": "product", "commit": "a" * 40,
+        "packages": ["alc-render"]}, {"id": "foundation", "commit": "c" * 40}]}))
+    subprocess.run([sys.executable, "-", str(tmp_path), "b" * 40], input=code,
+        text=True, check=True, capture_output=True)
+    sources = json.loads(lock.read_text())["sources"]
+    assert sources[0]["commit"] == "b" * 40
+    assert sources[0]["packages"] == ["alc-catalog", "alc-render"]
+    assert sources[1]["commit"] == "c" * 40
+
+
+def test_package_runtime_versions_match_release() -> None:
+    import ast
+
+    for package in EXPECTED:
+        path = PACKAGES / package / "src" / package.replace("-", "_") / "__init__.py"
+        versions = [ast.literal_eval(node.value) for node in ast.parse(path.read_text()).body
+                    if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == "__version__"
+                            for target in node.targets)]
+        assert versions == [VERSION], package

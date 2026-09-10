@@ -344,7 +344,9 @@ def _chapter(
         section_titles=section_titles,
         section_levels=section_levels,
         structure_section_id=structure_section_id,
-        generate_guide=generate_guide,
+        generate_guide=generate_guide and any(
+            block.kind is not RichBlockKind.HEADING for block in blocks
+        ),
     )
 
 

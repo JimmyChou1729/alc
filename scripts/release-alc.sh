@@ -55,6 +55,7 @@ from pathlib import Path
 root = Path(sys.argv[1])
 version = sys.argv[2]
 expected = {
+    "alc-catalog",
     "alc-companion",
     "alc-ocr-proofread",
     "alc-render",
@@ -187,6 +188,11 @@ products = [source for source in document["sources"] if source["id"] == "product
 if len(products) != 1:
     raise SystemExit("runtime source lock must contain exactly one product source")
 products[0]["commit"] = source_commit
+products[0]["packages"] = sorted(
+    project.parent.name
+    for project in (root / "packages").glob("alc-*/pyproject.toml")
+    if project.parent.name != "alc-web"
+)
 path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 PY
 

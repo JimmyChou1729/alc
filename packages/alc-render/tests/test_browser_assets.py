@@ -2371,7 +2371,7 @@ def test_reader_exposes_lightweight_supplement_coverage_download() -> None:
 def test_reader_exposes_lightweight_editorial_review_download() -> None:
     javascript = _text("reader.js")
 
-    assert "appendEditorialReview(list)" in javascript
+    assert "    appendEditorialReview(list);" not in javascript
     assert "review.report_logical_name" in javascript
     assert 'link.download = review.report_filename ||' in javascript
     assert "Download editorial review" in javascript
@@ -3779,6 +3779,9 @@ globalThis.window = globalThis;
     state: state,
     renderFragment: renderFragment,
     renderSourceRow: renderSourceRow,
+    renderContents: renderContents,
+    renderDeliverySummary: renderDeliverySummary,
+    resetQualitySession: function () { deliverySummaryDismissed = false; },
     primaryTitlePromotion: primaryTitlePromotion,
     beginInlineEdit: beginInlineEdit,
     openAdvancedEditor: openAdvancedEditor,
@@ -4110,6 +4113,80 @@ assert(
     ),
     "source-only and translated rows did not receive distinct lane states"
   );
+  globalThis.NodeFilter = {SHOW_TEXT: 4};
+  document.createTreeWalker = function () { return {nextNode: function () {return null;}}; };
+  nodes["alc-contents-heading"] = new FakeNode("h2");
+  document.body = new FakeNode("body");
+  document.createTextNode = function (text) {
+    var node = new FakeNode("text"); node.textContent = text; return node;
+  };
+  var contentsList = new FakeNode("ul");
+  var headingEdit = {fragment_id: "source-heading-edit", role: "source", deleted: true,
+    anchor: anchor("deleted-heading"), provenance: {source_edit: {
+      schema_version: "alc.render.source_edit.v1", operation: "replace"}}};
+  helpers.state.selected.set(headingEdit.fragment_id, headingEdit);
+  var sections = [{anchor_block_id: "deleted-heading", level: 2, title: "Duplicate"},
+    {anchor_block_id: "live-heading", level: 2, title: "Keep"}];
+  helpers.renderContents(contentsList, sections, {contents: "Contents"});
+  assert(contentsList.children[0].hidden && !contentsList.children[1].hidden,
+    "deleted source heading must hide only its anchored TOC entry");
+  headingEdit.deleted = false;
+  contentsList.replaceChildren();
+  helpers.renderContents(contentsList, sections, {contents: "Contents"});
+  assert(!contentsList.children[0].hidden, "restoring source heading must restore TOC entry");
+  helpers.state.selected.delete(headingEdit.fragment_id);
+  helpers.state.payload.delivery_ledger = {
+    schema_version: "alc.companion.delivery_ledger.v1", delivery_grade: "degraded",
+    issues: [{category: "translation_source_text"}]
+  };
+  var qualityStorage = new Map();
+  window.localStorage = {
+    getItem: function (key) { return qualityStorage.get(key) || null; },
+    setItem: function (key, value) { qualityStorage.set(key, value); }
+  };
+  helpers.state.payload.source_identity = {artifact_digest: "quality-document"};
+  var qualityPanel = helpers.renderDeliverySummary();
+  assert(qualityPanel, "quality summary must appear initially");
+  qualityPanel.querySelector(".alc-delivery-summary-close").dispatch("click");
+  assert(qualityPanel.hidden && helpers.renderDeliverySummary() === null,
+    "closing quality summary must survive subsequent reader rerenders");
+  assert(qualityStorage.size === 1, "dismissal was not persisted");
+  helpers.resetQualitySession();
+  delete document.body.dataset.alcQualityDismissed;
+  assert(helpers.renderDeliverySummary() === null,
+    "quality summary reappeared after a simulated page reload");
+  helpers.state.payload.source_identity = {artifact_digest: "another-document"};
+  assert(helpers.renderDeliverySummary(), "dismissal must be scoped to the source document");
+  window.localStorage.getItem = function () { throw new Error("storage blocked"); };
+  document.body.dataset.alcQualityDismissed = "true";
+  assert(helpers.renderDeliverySummary() === null, "exported dismissal flag was ignored");
+  delete helpers.state.payload.delivery_ledger;
+  var savedLayers = helpers.state.payload.publication.layers;
+  helpers.state.payload.publication.layers = [{producer: "alc-translate"}];
+  var captionlessFigure = {
+    block_id: "captionless", kind: "figure", payload: {caption: "", alt_text: ""}
+  };
+  var figureRow = helpers.renderSourceRow(captionlessFigure, []);
+  var figureLanes = figureRow.querySelector(".alc-lanes");
+  assert(figureLanes.classList.contains("has-parallel-translation") &&
+    figureLanes.children.length === 2 &&
+    figureLanes.children[1].dataset.role === "translation",
+    "captionless figure must appear in both reading columns");
+  var deletedFigureSource = {fragment_id: "deleted-captionless-source", role: "source", deleted: true,
+    anchor: anchor("captionless"), provenance: {source_edit: {
+      schema_version: "alc.render.source_edit.v1", operation: "replace"}}};
+  helpers.state.selected.set(deletedFigureSource.fragment_id, deletedFigureSource);
+  var deletedFigureLanes = helpers.renderSourceRow(captionlessFigure, []).querySelector(".alc-lanes");
+  assert(deletedFigureLanes.children.length === 2 &&
+    deletedFigureLanes.children[1].dataset.role === "translation",
+    "source deletion removed the independent captionless translation image");
+  helpers.state.selected.delete(deletedFigureSource.fragment_id);
+  assert(helpers.renderSourceRow(captionlessFigure, []).querySelector(".alc-lanes").children.length === 2,
+    "restored captionless source lost the translated image");
+  helpers.state.payload.publication.layers = [];
+  assert(helpers.renderSourceRow(captionlessFigure, []).querySelector(".alc-lanes")
+    .children.length === 1, "source-only reading must not duplicate figures");
+  helpers.state.payload.publication.layers = savedLayers;
   helpers.state.payload.selected_heading_fragments = [titleTranslation];
   helpers.state.selected.set(titleTranslation.fragment_id, Object.assign(
     {}, titleTranslation, {deleted: true, revision: 3}
@@ -4732,6 +4809,7 @@ var diagnosticsRoot = {
   appendChild: function () {}
 };
 globalThis.document = {
+  getElementById: function () { return null; },
   createDocumentFragment: function () { return {}; }
 };
 var firstChunk = {
@@ -5436,7 +5514,7 @@ helpers.state.selected = new Map([
   var reportPath = "resources/" + reportDigest + "/report.json";
   assert(markdown.startsWith("# 译题\n"), "preferred translated heading was not first");
   assert(!markdown.includes("次选题"), "lower-precedence translation was exported");
-  assert(markdown.includes("Fallback $x$ [report](" + reportPath + ")"), "source fallback lost inline structure");
+  assert(!markdown.includes("Fallback $x$"), "deleted translation was silently replaced by source content");
   assert(markdown.includes("- 甲"), "selected list translation was omitted");
   assert(markdown.includes("1. first\n   continued"), "source list continuation indentation is wrong");
   assert(markdown.includes("````python\nvalue = ```\n````"), "source code fence was not preserved");
@@ -5532,6 +5610,18 @@ helpers.state.selected = new Map([
       !bilingual.markdown.includes("## 参考文献"),
     "unchecked appendices were included in combined Markdown"
   );
+  assert(bilingual.markdown.split("$$\ny=1\n$$").length === 2,
+    "identical source and translated display equations must appear once");
+  var originalEquationBody = equation.markdown_body;
+  equation.markdown_body = "$$\ny=2\n$$\n";
+  var changedEquationExport = helpers.buildMarkdownPackage("all", new Set(["source", "translation"]));
+  assert(changedEquationExport.markdown.includes("y=1") && changedEquationExport.markdown.includes("y=2"),
+    "different translated equation must remain visible");
+  equation.markdown_body = originalEquationBody + "\nEquation explanation.\n";
+  var explainedEquationExport = helpers.buildMarkdownPackage("all", new Set(["source", "translation"]));
+  assert(explainedEquationExport.markdown.includes("Equation explanation."),
+    "equation deduplication removed translated explanation");
+  equation.markdown_body = originalEquationBody;
   var glossaryOnlyPackage = helpers.buildMarkdownPackage(
     "all", new Set(["glossary"])
   );
@@ -6300,7 +6390,8 @@ def test_reader_uses_low_distraction_controls_and_inline_editor() -> None:
     assert javascript.count("syncCustomSelect(role);") == 2
     assert 'wrapper.dataset.compact = "true";' in javascript
     assert '".alc-settings-panel, .alc-speech-dock"' in javascript
-    assert "localStorage" not in javascript
+    persistent_quality = javascript[javascript.index("  function deliverySummaryStorageKey()"):javascript.index("  function renderDeliverySummary()") ]
+    assert "localStorage" not in javascript.replace(persistent_quality, "")
     assert "contain: inline-size;" in stylesheet
     assert ".alc-speech-player-title {\n  display: block;" in stylesheet
     assert (
@@ -6554,7 +6645,8 @@ def test_reader_visibility_is_dynamic_ephemeral_and_book_focused() -> None:
     assert "state.payload.selected_roles || []" in javascript
     assert "Array.from(state.selected.values())" in javascript
     assert "state.hiddenRoles =" not in javascript
-    assert "localStorage" not in javascript
+    persistent_quality = javascript[javascript.index("  function deliverySummaryStorageKey()"):javascript.index("  function renderDeliverySummary()") ]
+    assert "localStorage" not in javascript.replace(persistent_quality, "")
     assert 'visibilityOption("source", labels().original' in javascript
     assert "roleLabel(role)" in javascript
     assert "function updateVisibilityStyles(channels)" in javascript
@@ -7449,3 +7541,38 @@ def test_reader_uses_explicit_outline_for_navigation_and_section_anchors() -> No
     assert "parent.appendChild(document.createTextNode" in javascript
     assert "typeset(parent);" in javascript
     assert 'safeToken(section.anchor_block_id)' in javascript
+
+
+def test_export_and_reinitialization_remove_all_stale_deleted_controls():
+    javascript = _text("reader.js")
+    start = javascript.index("  function removeDeletedContentControls(root)")
+    end = javascript.index("  function setupRecoverySettings", start)
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    script = javascript[start:end] + """
+var nodes = [1, 2].map(function () {return {remove: function () {this.removed = true;}};});
+var root = {querySelectorAll: function (selector) {
+  if (selector !== '#alc-deleted-open') throw new Error('unexpected selector');
+  return nodes.filter(function (n) {return !n.removed;});
+}};
+removeDeletedContentControls(root);
+removeDeletedContentControls(root);
+if (nodes.some(function (n) {return !n.removed;})) throw new Error('duplicate toolbar control survives');
+"""
+    subprocess.run([node, "-"], input=script, text=True, capture_output=True, check=True)
+    assert "removeDeletedContentControls(document);" in javascript
+    assert "removeDeletedContentControls(root);" in javascript
+
+
+def test_deleted_dialog_keeps_header_outside_scrolling_list():
+    javascript = _text("reader.js")
+    body = javascript[javascript.index("  function showDeletedContents()"):javascript.index("  function setupReaderSettings()")]
+    assert 'dialog.appendChild(header);' in body
+    assert 'dialog.appendChild(content);' in body
+    assert 'content.appendChild(row);' in body
+    assert 'dialog.appendChild(row);' not in body
+    css = _text("reader.css")
+    assert '.alc-deleted-dialog[open] { display:flex; flex-direction:column; overflow:hidden; }' in css
+    assert 'min-height:0;' in css[css.index('.alc-deleted-list {'):]
+    assert '.alc-deleted-list::-webkit-scrollbar { width:6px; }' in css

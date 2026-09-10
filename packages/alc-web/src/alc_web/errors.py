@@ -27,6 +27,21 @@ def explain_error(error: Mapping, provider: Mapping | None = None) -> str:
             for item in value:
                 visit(item)
     visit(error)
+    code = error.get('code', '')
+    if code == 'ocr_review_required':
+        return '模型校对已完成。点击继续即可复用现有结果完成后续处理，无需人工复查。'
+    if code == 'pdf_review_paused':
+        return 'OCR 校对尚未完成，已保存逐页进度。请检查模型连接后恢复任务。'
+    if code == 'mineru_page_restore_unavailable':
+        return 'PDF 识别结果已保留，但跨页内容还原未通过检查。需要检查结果兼容性；这不一定是 MinerU 配置问题。'
+    if code == 'mineru_timeout' or code == 'mineru_transport':
+        return 'PDF 识别等待超时或连接中断。已有 OCR 任务和结果已保留；服务模式可恢复查询，本机模式请检查运行环境后新建任务。'
+    if code in {'mineru_submission_uncertain', 'mineru_task_lost', 'mineru_local_interrupted', 'mineru_remote_failed', 'mineru_local_failed'}:
+        return 'PDF 识别未完成，系统没有重复提交。请检查 MinerU 服务或本机运行状态，再决定是否新建任务；已有内容已保留。'
+    if code.startswith(('mineru_', 'pdf_source_')):
+        return 'PDF 识别配置或结果未通过检查。请在设置中检测 MinerU，核对版本和文档；修改设置后新建任务。已完成结果会保留。'
+    if code == 'pdf_text_confirmation':
+        return '此任务没有配置 MinerU。可在设置中配置后新建任务，或明确选择仅提取文字；仅文字模式不保留图片，也不能读取扫描页。'
     if 404 in statuses and provider:
         from urllib.parse import urlsplit
         try:

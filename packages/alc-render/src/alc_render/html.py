@@ -2603,6 +2603,7 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
           <div class="alc-dialog-fields alc-dialog-advanced-fields">
             <label><span id="alc-editor-role-label">Role</span>
               <select id="alc-editor-role">
+                <option value="source">Source</option>
                 <option value="translation">Translation</option>
                 <option value="companion">Companion</option>
                 <option value="guide">Guide</option>

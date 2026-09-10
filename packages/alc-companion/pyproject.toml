@@ -4,13 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "alc-companion"
-version = "2.1.0"
+version = "2.1.1"
 description = "Source-faithful, LLM-assisted paper companions for ALC."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "ALC" }]
 requires-python = ">=3.11"
 dependencies = [
+  "alc-catalog>=2,<3",
   "ac-jobs>=2.1.0,<3",
   "ac-llm>=2.1.0,<3",
   "ac-document>=2.1.0,<3",

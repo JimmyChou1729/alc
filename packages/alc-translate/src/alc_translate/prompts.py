@@ -291,6 +291,16 @@ def review_prompt(
     window_ordinal: int,
     user_intent: str = "",
 ) -> str:
+    if any(item.get("content", {}).get("schema_version") == PROTECTED_ATOM_RESULT_SCHEMA for item in translations):
+        return _prompt("alc.translate.paragraph_review.v1",
+            "Review the complete source and translated paragraphs for omissions, scientific accuracy and fluency. "
+            "Source text_slot entries provide source text; atom IDs stand for immutable content. "
+            "Return alc.translate.protected_atom_review_result.v1 with translation_patches as an array "
+            "of block_id and parts (text, atom, link), plus a nonempty summary. Preserve every atom exactly once "
+            "and preserve link membership. Patch any missing clause or qualifier. Empty patches are valid only "
+            "when all source meaning is retained. Do not add commentary to translated text.",
+            {"blocks":list(blocks), "translations":list(translations), "glossary":list(glossary),
+             "target_language":target_language, "user_intent":user_intent})
     return _prompt_with_intent(
         REVIEW_PROMPT_VERSION,
         REVIEW_INTENT_PROMPT_VERSION,

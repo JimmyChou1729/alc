@@ -15,6 +15,8 @@ import time
 import tempfile
 from pathlib import Path
 
+from ac_document import PDFSourceBundleError
+
 from ac_jobs import FileLease, StoppedError
 from ac_jobs.storage import atomic_write_json
 from ac_llm import (
@@ -163,6 +165,9 @@ class Worker:
                 continue
 
     def stop_package(self):
+        if self.active_owner == "ocr-proofread" and hasattr(self, "ocr_service"):
+            self.ocr_service.stop(self.ocr_run_id)
+            return
         if self.active_owner == "companion":
             from alc_companion import CompanionProjectPaths, CompanionService
 
@@ -251,7 +256,25 @@ class Worker:
 
     def run(self):
         self.phase("acquisition")
-        source, manifest, warnings = acquire(self.store, self.job, self.checkpoint)
+        if (self.root / "ocr-review-decision.json").is_file():
+            from .ocr_review import _selection
+            from ac_document import verify_pdf_source_bundle
+            service, run_id, manifest = _selection(self.store, self.job)
+            service.result(run_id)
+            bundle = verify_pdf_source_bundle(manifest)
+            source = manifest.parent / bundle["source"]["path"]
+            warnings = list(bundle["warnings"])
+        else:
+            source, manifest, warnings = acquire(self.store, self.job, self.checkpoint)
+        pdf_manifest = manifest if manifest and json.loads(manifest.read_text()).get("schema_version") == "ac.document.pdf_source_bundle.v1" else None
+        if pdf_manifest and self.job["spec"].get("ocr_proofread"):
+            from .ocr_review import prepare_review
+            source, manifest, review_warnings = prepare_review(self, source, pdf_manifest)
+            pdf_manifest = manifest
+            if self.detail.get("ocr_proofreading") in {"approved", "model"}:
+                warnings = [w for w in warnings if w != "OCR extraction has not been proofread against the original PDF."]
+            warnings.extend(review_warnings)
+
         self.detail["source_warnings"] = warnings
         self.detail["source_preview"] = source.read_text(encoding="utf-8")[:3000]
         self.detail["source_bytes"] = source.stat().st_size
@@ -293,7 +316,7 @@ class Worker:
                 *self.model_args(),
             ]
             if manifest:
-                args += ["--html-source-manifest", str(manifest)]
+                args += ["--pdf-source-manifest" if pdf_manifest else "--html-source-manifest", str(manifest)]
             result = self.stage("companion", args)
             self.phase("render")
             result = call_cli(
@@ -321,7 +344,7 @@ class Worker:
                 if not (exported / "rich-source.json").exists():
                     export_result = AcDocumentService(
                         cache_root=self.cache
-                    ).export_rich_document(source, output_dir=exported)
+                    ).export_rich_document(source, output_dir=exported, **({"pdf_source_manifest": pdf_manifest} if pdf_manifest else {}))
                     self.detail["parse_warnings"] = export_result.get("warnings", [])
                     self.store.update(self.job_id, detail=self.detail)
                 if spec["output"] == "reader":
@@ -346,6 +369,8 @@ class Worker:
                     "unknown",
                     *self.model_args(),
                 ]
+                if pdf_manifest:
+                    common += ["--pdf-source-manifest", str(pdf_manifest)]
                 for phase, command, step in (
                     ("language", "detect-language", "language"),
                     ("glossary", "build-glossary", "glossary"),
@@ -368,6 +393,8 @@ class Worker:
                             ],
                         )
                         if language["data"]["result"]["mode"] == "skipped":
+                            self.detail["translation_skipped_same_language"] = True
+                            self.store.update(self.job_id, detail=self.detail)
                             break
             self.phase("render")
             composed = self.publication / "publication.json"
@@ -494,6 +521,8 @@ def execute(project: str, job_id: str, generation: int | None = None):
                 "data": result.get("data"),
             },
         )
+    except PDFSourceBundleError as exc:
+        store.update(job_id, state="needs_input", error={"code": exc.code, "message": str(exc)})
     except PDFTextConfirmation as exc:
         store.update(
             job_id,

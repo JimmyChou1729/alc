@@ -153,6 +153,7 @@ from .request_contracts import (
 )
 from .rich_text import RichTextError
 from .source_identity import resolve_document_identity
+from .guide_batches import split_guide_chapter, batch_translation_index, merge_guide_batches
 from .source_planning import (
     SourceChapter,
     block_prompt_document,
@@ -513,6 +514,11 @@ class CompanionBuildHandler:
                     )
                     if source_only is not None:
                         return source_only
+                    try:
+                        self._refresh_partial_reader(context, source, chapters,
+                            title=title, authors=authors, language=language, reader_labels=reader_labels)
+                    except (ValueError, OSError, CompanionContentError) as exc:
+                        context.events.emit("partial_reader_unavailable", {"type": type(exc).__name__})
                     return editorial_outcome
                 chapters_outcome, editorial_report = editorial_outcome
 
@@ -603,6 +609,10 @@ class CompanionBuildHandler:
         authors: Sequence[str] = (),
         source_language: str = "unknown",
     ) -> Succeeded | None:
+        # Later failures must not replace durable translations with a terminal
+        # source-only publication. The caller retains a resumable partial Reader.
+        if stage in {"chapters", "editorial"}:
+            return None
         reason_code = _provider_source_only_reason(outcome)
         if reason_code is None:
             return None
@@ -1503,7 +1513,12 @@ class CompanionBuildHandler:
             if any(loop.error is not None for loop in prior_batch.loops):
                 existing_guide_batch = None
         replay_guide_batch = existing_guide_batch is not None
-        for chapter in chapters:
+        guide_chapters = list(chapters)
+        guide_owners = {c.chapter_id: c.chapter_id for c in chapters}
+        guide_by_id = dict(by_chapter)
+        split_parents: set[str] = set()
+        for chapter in guide_chapters:
+            owner_id = guide_owners[chapter.chapter_id]
             artifact_id = f"chapters/{chapter.chapter_id}/guide-accepted"
             existing = (
                 None
@@ -1557,15 +1572,28 @@ class CompanionBuildHandler:
                     source,
                     chapter,
                     language_identity=language_identity,
-                    glossary=chapter_entries[chapter.chapter_id],
+                    glossary=chapter_entries[owner_id],
                     translation_index=(
                         None
                         if translation_indexes is None
-                        else translation_indexes[chapter.chapter_id]
+                        else batch_translation_index(translation_indexes[owner_id], chapter)
                     ),
                 )
             except ChapterEvidenceError as exc:
-                return Failed(RunError(exc.code, str(exc)))
+                batches = split_guide_chapter(chapter) if exc.code == "chapter_evidence_too_large" else ()
+                if not batches:
+                    return Failed(RunError(exc.code, str(exc)))
+                split_parents.add(chapter.chapter_id)
+                for batch in batches:
+                    guide_owners[batch.chapter_id] = owner_id
+                    guide_by_id[batch.chapter_id] = batch
+                    guide_chapters.append(batch)
+                continue
+            if chapter.chapter_id != owner_id:
+                guide_context["processing_scope"] = (
+                    "This is one contiguous batch of a larger chapter. Write only "
+                    "about the supplied parts; do not claim coverage of the full chapter."
+                )
             guide_contexts[chapter.chapter_id] = guide_context
             guide_loops.append(
                 LoopSpec(
@@ -1611,7 +1639,7 @@ class CompanionBuildHandler:
                         if translation_indexes is None
                         else (
                             _chapter_translation_input_id(
-                                chapter.chapter_id
+                                owner_id
                             ),
                         )
                     ),
@@ -1681,7 +1709,7 @@ class CompanionBuildHandler:
                     if loop_result is None:
                         guide_errors.append(RunError("chapter_guide_batch_incomplete", f"missing guide result for {chapter_id}"))
                         continue
-                    chapter = by_chapter[chapter_id]
+                    chapter = guide_by_id[chapter_id]
                     delivery_issue: dict[str, Any] | None = None
                     proposal_value = loop_result.final_proposals.get("guide-proposer")
                     if loop_result.error is not None:
@@ -1837,6 +1865,20 @@ class CompanionBuildHandler:
 
                 except ValueError as exc:
                     guide_errors.append(RunError("chapter_guide_invalid", str(exc), {"chapter_id": chapter_id}))
+
+        for parent in chapters:
+            if parent.chapter_id not in split_parents:
+                continue
+            leaves = [c for c in guide_chapters
+                      if guide_owners[c.chapter_id] == parent.chapter_id
+                      and c.chapter_id not in split_parents]
+            leaves.sort(key=lambda c: parent.block_ids.index(c.block_ids[0]))
+            if not all(f"guide-{c.chapter_id}" in completed_results for c in leaves):
+                continue
+            merged = merge_guide_batches(parent, [
+                completed_results[f"guide-{c.chapter_id}"] for c in leaves])
+            context.artifacts.publish_json(f"chapters/{parent.chapter_id}/guide-accepted", merged)
+            completed_results[f"guide-{parent.chapter_id}"] = merged
 
         joined = self._publish_completed_chapters(
             context,

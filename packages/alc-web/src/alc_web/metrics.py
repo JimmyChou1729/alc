@@ -30,6 +30,14 @@ class Projection:
         default_factory=lambda: {"source_text": set(), "review_skipped": set()}
     )
     progress: dict[str, list[dict]] = field(default_factory=dict)
+    ocr_pages: set[str] = field(default_factory=set)
+    ocr_run: str = ""
+    stage_seconds: dict[str, float] = field(default_factory=dict)
+    seen: set[str] = field(default_factory=set)
+    last_event_time: float | None = None
+    work_state: str = "queued"
+    smooth_percent: int = 0
+    stage_evidence: dict[str, dict] = field(default_factory=dict)
 
 
 _cache: OrderedDict[tuple[str, str], Projection] = OrderedDict()
@@ -58,6 +66,32 @@ def _summarize(store: Any, job: dict, projection: Projection) -> dict:
         if len(chunk) < 1000:
             break
     document = _document(job, projection)
+    import json
+    from .progress_plan import estimate
+    try:
+        manifest = json.loads((store.job_directory(job["id"]) / "ocr-job/bundle/manifest.json").read_text())
+        pages = len(manifest["pages"])
+    except (OSError, ValueError, KeyError, TypeError):
+        pages = 0
+    elapsed = projection.stage_seconds.get(job["phase"], 0)
+    if projection.work_state in {"running", "delivering"} and projection.last_event_time is not None:
+        elapsed += max(0, time.time() - projection.last_event_time)
+    value = estimate(job, projection.seen, elapsed, job.get("detail", {}).get("progress", {}), pages, len(projection.ocr_pages))
+    for phase in projection.seen:
+        value = max(value, estimate({**job, "phase": phase}, projection.seen,
+            projection.stage_seconds.get(phase, 0), projection.stage_evidence.get(phase, {}), pages,
+            len(projection.ocr_pages)))
+    projection.smooth_percent = max(projection.smooth_percent, value)
+    document["progress"].update(percent=projection.smooth_percent, mode="overall", estimated=job["state"] != "completed")
+    if job["phase"] == "ocr_proofread" and job["state"] != "completed":
+        done = len(projection.ocr_pages)
+        document["progress"].update(completed_units=done, total_units=pages or None,
+            unit="pages", eta_seconds=None,
+            label=f"已校对 {done} / {pages} 页" if pages else f"已校对 {done} 页")
+        if pages and done >= pages:
+            document["progress"]["label"] += "，正在汇总校对结果"
+    elif job["phase"] in {"acquisition", "ocr"} and job["state"] != "completed":
+        document["progress"].update(eta_seconds=None, label="正在获取并识别文档 · 进度按阶段耗时估算")
     if job["state"] == "completed":
         from alc_render import publication_translation_quality
 
@@ -85,6 +119,15 @@ def _summarize(store: Any, job: dict, projection: Projection) -> dict:
 
 def _fold(projection: Projection, event: dict) -> None:
     data = event["data"]
+    if projection.last_event_time is not None and projection.work_state in {"running", "delivering"}:
+        projection.stage_seconds[projection.stage] = projection.stage_seconds.get(projection.stage, 0) + max(0, event["created"] - projection.last_event_time)
+    projection.last_event_time = event["created"]
+    if event["kind"] == "job.started":
+        projection.work_state = "running"
+    if event["kind"] in {"job.updated", "job.control", "job.finished"} and data.get("state"):
+        projection.work_state = data["state"]
+    if event["kind"] == "job.updated" and data.get("phase"):
+        projection.seen.add(data["phase"])
     if event["kind"] == "job.started":
         if projection.active_since is None:
             projection.active_since = event["created"]
@@ -101,6 +144,11 @@ def _fold(projection: Projection, event: dict) -> None:
             projection.current_progress = {}
         if "progress" in data.get("detail", {}):
             projection.current_progress = data["detail"]["progress"]
+            evidence = projection.current_progress
+            phase = evidence.get("phase", projection.stage)
+            old = projection.stage_evidence.get(phase, {})
+            if (evidence.get("completed_units") or 0) >= (old.get("completed_units") or 0):
+                projection.stage_evidence[phase] = evidence
         projection.percent = max(projection.percent, percentage(projection.stage, projection.current_progress, ""))
     if event["kind"] == "job.started":
         projection.progress.clear()
@@ -127,6 +175,13 @@ def _fold(projection: Projection, event: dict) -> None:
                     projection.token_samples.append({"done": done, "total": progress.get("total_units"), **totals})
                     del projection.token_samples[:-6]
     if event["kind"] == "package.event":
+        package = event["data"]
+        if package.get("data", {}).get("group_id") == "pdf-pages" and package.get("event") == "group_unit_finished":
+            if projection.ocr_run != package.get("run_id"):
+                projection.ocr_pages.clear()
+                projection.ocr_run = package.get("run_id", "")
+            if package["data"].get("status") == "succeeded":
+                projection.ocr_pages.add(package["data"]["unit_id"])
         data = event["data"]
         data = data.get("data", {})
         kind = event["data"].get("event")
@@ -236,7 +291,7 @@ def _document(job: dict, projection: Projection) -> dict:
     )
     if eta is None:
         eta = initial_eta(job, percent)
-    if job["spec"]["output"] == "source" and job["state"] == "completed" and not calls:
+    if job["spec"]["output"] == "source" and not job["spec"].get("ocr_proofread") and job["state"] == "completed" and not calls:
         sums = {key: 0 for key in sums}
     return {
         "progress": {

@@ -2607,3 +2607,102 @@ def test_default_adapter_forwards_review_limit_to_translation(monkeypatch, revie
 def test_invalid_explicit_review_limit_rejected(value):
     with pytest.raises(ValueError, match="review_rounds"):
         CompanionGenerationRecipe(review_rounds=value)
+
+
+@pytest.mark.parametrize('pipeline', [False, True])
+def test_oversized_guide_batches_preserve_chapters_and_translation(tmp_path, monkeypatch, pipeline):
+    from alc_companion.chapter_evidence import ChapterEvidenceError
+    original_context = CompanionBuildHandler._chapter_model_context
+    observed = []
+
+    def bounded_context(self, context, source, chapter, **kwargs):
+        if len(chapter.block_ids) > 1:
+            raise ChapterEvidenceError('chapter_evidence_too_large', chapter.chapter_id, 'original')
+        result = original_context(self, context, source, chapter, **kwargs)
+        observed.extend(chapter.block_ids)
+        assert result['verified_chapter_evidence']['translation']['text']
+        return result
+
+    monkeypatch.setattr(CompanionBuildHandler, '_chapter_model_context', bounded_context)
+    monkeypatch.setattr(CompanionBuildHandler, '_cross_chapter_editorial_review',
+                        lambda self, context, chapters, accepted, **kw: (accepted, None))
+    document = _document(tmp_path)
+    chapters = plan_source_chapters(document)
+    tasks = FakeGuideTasks(reviewer_stop_round=1, with_reference=True)
+    service = CompanionService(tmp_path / 'jobs')
+    result = service.build(CompanionBuildRequest(document, target_language='zh-CN'),
+        execution=CompanionExecutionOptions(pipeline_chapters=pipeline, document_cache_root=tmp_path / 'paper'),
+        task_service=tasks, translation_adapter=FakeTranslationAdapter(mode='enabled'))
+    assert result.status is RunStatus.SUCCEEDED, result.error
+    assert sorted(observed) == sorted(b.block_id for b in document.blocks)
+    store = ImmutableArtifactStore(service.repository.run_directory(result.run_id))
+    for chapter in chapters:
+        accepted = json.loads(store.read_bytes(store.find(f'chapters/{chapter.chapter_id}/accepted')))
+        assert accepted['chapter_id'] == chapter.chapter_id
+        assert accepted['block_ids'] == list(chapter.block_ids)
+        units = accepted['learning_units']
+        assert len(units) == len(chapter.block_ids)
+        assert [u['anchor_block_ids'][0] for u in units] == list(chapter.block_ids)
+        assert len({u['unit_id'] for u in units}) == len(units)
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == len(document.blocks)
+
+
+def test_guide_batch_resume_reuses_completed_batches(tmp_path, monkeypatch):
+    from ac_llm import LLMStopped
+    from alc_companion.chapter_evidence import ChapterEvidenceError
+    original_context = CompanionBuildHandler._chapter_model_context
+
+    def bounded_context(self, context, source, chapter, **kwargs):
+        if len(chapter.block_ids) > 1:
+            raise ChapterEvidenceError('chapter_evidence_too_large', chapter.chapter_id, 'original')
+        return original_context(self, context, source, chapter, **kwargs)
+
+    monkeypatch.setattr(CompanionBuildHandler, '_chapter_model_context', bounded_context)
+    monkeypatch.setattr(CompanionBuildHandler, '_cross_chapter_editorial_review',
+                        lambda self, context, chapters, accepted, **kw: (accepted, None))
+    class StopBatch(FakeGuideTasks):
+        stopped = False
+        def execute_or_resume(self, context, request, **kwargs):
+            contract, _ = _request_payload(request.prompt)
+            if contract == CHAPTER_GUIDE_PROMPT_VERSION and self.counts[contract] == 1 and not self.stopped:
+                self.stopped = True
+                context.repository.request_stop(context.run_id, reason='batch resume test')
+                return LLMStopped()
+            return super().execute_or_resume(context, request, **kwargs)
+
+    tasks = StopBatch(reviewer_stop_round=1)
+    service = CompanionService(tmp_path / 'jobs')
+    document = _document(tmp_path)
+    options = CompanionExecutionOptions(workers=1, pipeline_chapters=False, document_cache_root=tmp_path / 'paper')
+    adapter = FakeTranslationAdapter(mode='enabled')
+    stopped = service.build(CompanionBuildRequest(document, target_language='zh-CN'),
+        execution=options, task_service=tasks, translation_adapter=adapter)
+    assert stopped.status is RunStatus.PAUSED
+    resumed = service.resume(stopped.run_id, execution=options, task_service=tasks, translation_adapter=adapter)
+    assert resumed.status is RunStatus.SUCCEEDED, resumed.error
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == len(document.blocks)
+
+
+@pytest.mark.parametrize('stage', ['chapters', 'editorial'])
+def test_late_provider_failure_keeps_bilingual_partial_reader(tmp_path, monkeypatch, stage):
+    from ac_jobs import Failed
+    failure = Failed(RunError('provider_transport', 'Provider unavailable after translation'))
+    method = '_chapter_lanes' if stage == 'chapters' else '_cross_chapter_editorial_review'
+    original = getattr(CompanionBuildHandler, method)
+    def fail_after_work(self, *args, **kwargs):
+        if stage == 'chapters':
+            original(self, *args, **kwargs)
+        return failure
+    monkeypatch.setattr(CompanionBuildHandler, method, fail_after_work)
+    service = CompanionService(tmp_path / 'jobs')
+    result = service.build(CompanionBuildRequest(_document(tmp_path), target_language='zh-CN'),
+        recipe=CompanionGenerationRecipe(review_rounds=1),
+        execution=CompanionExecutionOptions(pipeline_chapters=False, document_cache_root=tmp_path / 'paper'),
+        task_service=FakeGuideTasks(reviewer_stop_round=1), translation_adapter=FakeTranslationAdapter(mode='enabled'))
+    assert result.status is RunStatus.FAILED
+    assert result.error.code == 'provider_transport'
+    reader = service.repository.run_directory(result.run_id) / 'partial-reader/companion.html'
+    html = reader.read_text()
+    assert 'data-alc-source-only="true"' not in html
+    assert 'alc-translate' in html
+    assert service.progress(result.run_id)['partial_reader_available']

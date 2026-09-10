@@ -24,6 +24,13 @@ class JobInput(InputModel):
         default="zh-CN", pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$"
     )
     output: Literal["reader", "companion", "source"] = "reader"
+    pdf_mode: Literal["mineru", "text_only"] = "mineru"
+    ocr_remote_consent: bool = False
+    ocr_proofread: bool = False
+    ocr_proofread_consent: bool = False
+    ocr_proofread_provider_id: str | None = Field(default=None, max_length=64)
+    ocr_proofread_model: str | None = Field(default=None, max_length=200)
+    ocr_service_url: str | None = Field(default=None, max_length=2048)
     speed: Literal["economy", "standard", "fast"] | None = "standard"
     processing_workers: int | None = Field(default=None, ge=1, le=8, strict=True)
     review_rounds: int | None = Field(default=None, ge=0, le=2, strict=True)
@@ -114,3 +121,10 @@ class ResourceInput(InputModel):
     cli_slots: int = Field(default=8, ge=1, le=16)
     translation_window_workers: int = Field(default=1, ge=1, le=16)
     companion_workers: int = Field(default=2, ge=1, le=16)
+
+
+class OCRInput(InputModel):
+    executable: str | None = Field(default=None, max_length=4096)
+    api_url: str | None = Field(default=None, max_length=2048)
+    token_env: str | None = Field(default=None, max_length=200)
+    language: Literal["en", "ch"] = "en"

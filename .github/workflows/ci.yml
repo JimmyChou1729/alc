@@ -33,6 +33,7 @@ jobs:
           -e local/ac-foundation/packages/ac-llm
           -e local/ac-foundation/packages/ac-document
           -e local/ac-foundation/packages/ac-proposer-reviewer
+          -e packages/alc-catalog
           -e packages/alc-render
           -e packages/alc-ocr-proofread
           -e packages/alc-translate

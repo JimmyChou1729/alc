@@ -163,6 +163,9 @@ The standalone Reader progressively renders large publications and completes
 all remaining chunks before print. Source and translation are parallel on wide
 screens and stacked on narrow screens. More settings controls layout, edit
 activation, fonts, scale, spacing, and content width for the current Reader.
+Term definitions can appear on hover, on click, or remain hidden. Hover popups
+allow pointer entry and text selection; a short exit delay bridges the gap
+between the term and its definition.
 A Single HTML export captures the current appearance.
 
 Some older rich sources identify in-document bibliography links as
@@ -318,6 +321,25 @@ Single HTML mirrors the same panel grid, and Markdown packages include each
 available panel as its own digest-addressed resource.
 
 Translation, guide, companion, note, and glossary content can be edited inline.
+Original source blocks use the same inline editor through their edit control or
+configured click gesture; the inline Advanced button opens detailed editing.
+Source corrections and additions use versioned `source` fragments; the frozen
+RichDocument and original PDF remain unchanged. Editing the source never changes
+translations, displays synchronization notices, or triggers retranslation.
+Source-side plus/minus controls add or remove content; translated/guide/companion
+cards expose a direct minus control. Deletion asks for confirmation and retains
+revision history and image resources. A source figure deletion includes its caption
+and leaves the translated figure unchanged. In side-by-side layout, deleting either
+language preserves the other language’s column. Deleted content leaves no visible
+placeholder and can be restored from Deleted content.
+The Deleted content toolbar button, before More settings, appears when deleted
+fragments exist and lists deleted source and supplemental fragments;
+Restore appends a new revision using the last visible content and leaves the panel
+closed. Deleted content is ordered by newest deletion first, then by source position
+for older records without a deletion timestamp; ties put source before translation.
+Contents titles follow saved source heading replacements while the source is visible,
+and visible translated headings when the source is hidden. Saving or restoring a
+heading revision refreshes its contents label; unsaved drafts do not change it.
 Single-click or double-click activation follows the Reader setting. Advanced
 editing provides Markdown preview and version history. Saving appends an
 immutable revision; cancelling leaves the selected revision unchanged. The
@@ -339,8 +361,9 @@ by the translated term and definition.
 
 Markdown export supports all latest content or latest changes only. Source,
 translation, guide, companion, note, glossary, bibliography, and other selected
-roles can be included independently. Source is unavailable in the changes-only
-scope because it is immutable.
+roles can be included independently. Source corrections and additions are available in the changes-only scope;
+deletions are reported explicitly there. Complete export uses the revised source
+view. Deleted translations are not silently replaced by source text in export.
 
 Single-file Markdown removes bundled image dependencies and turns local
 resource links into plain labels. The Markdown package contains `document.md`,
@@ -394,3 +417,47 @@ symbols without changing saved source or translated TeX.
 
 Quality notices use viewport-bounded, dismissible popovers; dismissal does not
 change the translation. Reader deletion confirmation uses a styled page dialog.
+
+Figure panels without an authored display width are capped at their intrinsic
+pixel width. Small raster elements such as chapter ornaments are not enlarged to
+fill the Reader column; authored figure sizing remains unchanged.
+
+Manually added source and translation content uses independent parallel rows.
+`provenance.parallel_edit` (`alc.render.parallel_edit.v1`) records a stable `pair_id`
+within the original block anchor; it does not change the immutable source document.
+Each row has at most one source fragment and one translation fragment. Empty sides
+provide an add action, including an explicit choice to associate existing unpaired
+content at the same anchor. Pairing is saved as a new revision; edits, deletion and
+restoration preserve it. Older additions remain independent until explicitly linked,
+so matching is never inferred from text or insertion order. Complete Markdown export
+includes both selected sides in pair order.
+
+Dismissing a translation quality notice also hides its fallback stripe for the
+current Reader session. Saving a changed translation records a user-resolution
+marker in the new revision; its old fallback provenance remains available for
+audit but no longer styles the corrected text as a fallback.
+
+Inline editing evaluates pointer-based outside interactions on pointerdown, so
+a selection drag ending outside the textarea does not dismiss the editor.
+Keyboard-triggered outside activation still uses the unsaved-change guard.
+
+In bilingual publications, captionless figures are mirrored in both reading
+columns without a model-generated translation fragment. Source-only publications
+keep a single figure. Internal editorial review summaries are excluded from the
+table of contents; their underlying report resources remain in the publication.
+
+The table of contents follows deletion and restoration of its original source
+heading anchor, independent of the translation's visibility. Closing the quality
+summary persists dismissal per source document in browser storage, including
+after reload. Exported HTML also retains dismissal on the body. If browser
+storage is blocked, persistence across reload requires saving the HTML.
+
+Standalone HTML export removes the generated deleted-content toolbar button;
+initialization replaces any stale copies before attaching the current control.
+Bilingual Markdown emits one copy when an equation block's source and translation
+exports match exactly after Markdown newline normalization and trimming, with no
+translation title. Changed equations, translated explanations, and inline formulas
+inside prose are preserved. The manifest still records both selected revisions.
+
+The deleted-content dialog keeps its heading and close action outside the scrolling
+list. The list uses the same thin, hover/focus scrollbar treatment as other panels.

@@ -100,8 +100,10 @@ from .prompts import (
     LANGUAGE_SCHEMA,
     PROTECTED_ATOM_REVIEW_RESULT_SCHEMA,
     REVIEW_PROMPT_VERSION,
+    REVIEW_SCHEMA,
     TEXT_SLOT_REVIEW_RESULT_SCHEMA,
     TRANSLATION_PROMPT_VERSION,
+    TRANSLATION_SCHEMA,
     glossary_prompt,
     language_prompt,
     review_prompt,
@@ -1104,6 +1106,7 @@ class TranslationWorkflowService:
                     resume_input=resume_input,
                     options=execution,
                     stopped_message="block translation stopped",
+                    repair_missing_atoms=True,
                     retry_request_factory=(
                         lambda original, error, candidate, window=window, window_ordinal=ordinal: (
                             _protected_translation_retry_request(
@@ -1443,7 +1446,7 @@ class TranslationWorkflowService:
                                 _task_id("translation-review", task_identity),
                                 review_text,
                                 JsonOutput(
-                                    review_schema(model_review_blocks),
+                                    (REVIEW_SCHEMA if any(item["content"]["schema_version"] == PROTECTED_ATOM_RESULT_SCHEMA for item in review_translations) else review_schema(model_review_blocks)),
                                     repair="format",
                                 ),
                                 model,
@@ -1849,6 +1852,7 @@ def _validated_generation(
     resume_input: ResumeInput | None,
     options: LLMExecutionOptions,
     stopped_message: str,
+    repair_missing_atoms: bool = False,
     retry_request_factory: (
         Callable[[LLMRequest, TranslationWorkflowError, Mapping[str, Any]], LLMRequest]
         | None
@@ -1857,7 +1861,7 @@ def _validated_generation(
         Callable[[Mapping[str, Any], Any], Mapping[str, Any]] | None
     ) = None,
 ) -> Any | Paused | RunError | _InvalidGeneratedOutput:
-    """Retry one model-correctable identity/coverage failure, then pause."""
+    """Repair bounded validation failures while retaining verified neighbors."""
 
     candidate_path = context.working.find_candidate(candidate_id)
     if candidate_path is not None:
@@ -1907,7 +1911,7 @@ def _validated_generation(
         assert isinstance(outcome, LLMCompleted)
         candidate_value = outcome.value
         if (
-            attempt == 2
+            attempt >= 2
             and first_candidate is not None
             and retry_candidate_merger is not None
         ):
@@ -1926,6 +1930,17 @@ def _validated_generation(
                     if retry_request_factory is not None
                     else _semantic_retry_request(request, exc)
                 )
+                continue
+            if (
+                attempt == 2
+                and repair_missing_atoms
+                and exc.code == "translation_atom_missing"
+                and retry_request_factory is not None
+                and document.get("schema_version") == PROTECTED_ATOM_RESULT_SCHEMA
+            ):
+                first_candidate = document
+                attempt = 3
+                current_request = retry_request_factory(request, exc, document)
                 continue
             path = context.working.write_candidate_json(candidate_id, document)
             return _InvalidGeneratedOutput(exc, path, document)
@@ -2143,6 +2158,7 @@ def _recover_glossary_control_text(value: str) -> str:
     """Remove terminal controls and reconstruct deterministic Unicode damage."""
 
     without_terminal_controls = _ANSI_SGR_RE.sub("", value)
+    without_terminal_controls = re.sub(r"\x00(?=\\[A-Za-z])", "", without_terminal_controls)
 
     def reconstruct(match: re.Match[str]) -> str:
         return chr(ord(match.group("high")) * 0x100 + int(match.group("suffix"), 16))
@@ -2369,7 +2385,8 @@ def _validate_glossary_window(
                 "glossary translations and target definitions cannot contain "
                 "control characters",
             )
-        if _has_glossary_translated_term_math_markup(entry["preferred_translation"]):
+        preferred = _plain_glossary_label(entry["preferred_translation"])
+        if _has_glossary_translated_term_math_markup(preferred):
             raise TranslationWorkflowError(
                 "glossary_translation_math_markup_invalid",
                 "glossary preferred_translation must be plain text",
@@ -2377,11 +2394,16 @@ def _validate_glossary_window(
         output.append(
             {
                 **dict(term),
-                "preferred_translation": entry["preferred_translation"],
+                "preferred_translation": preferred,
                 "target_definition": entry["target_definition"],
             }
         )  # type: ignore[arg-type]
     return output
+
+
+def _plain_glossary_label(value: str) -> str:
+    # Strip math delimiters only when the enclosed label is already plain text.
+    return re.sub(r"(?<!\$)\$([A-Za-z0-9]+)\$(?!\$)", r"\1", value)
 
 
 def _salvaged_glossary_fallback(
@@ -3787,8 +3809,9 @@ def _review_text_slot_projection(
     parts = translation.get("parts")
     try:
         slots = text_slot_values_from_parts(block, parts)
-    except ProtectedAtomError as exc:
-        raise TranslationWorkflowError(exc.code, str(exc), exc.details) from exc
+    except ProtectedAtomError:
+        # A validated paragraph repair can move text around immutable atoms.
+        return _review_translation_projection(translation)
     return {
         "block_id": str(translation.get("block_id", "")),
         "content": {
@@ -4105,6 +4128,28 @@ def _protected_translation_retry_request(
     user_intent: str = "",
 ) -> LLMRequest:
     invalid = _invalid_protected_candidate_blocks(candidate, blocks) or tuple(blocks)
+    if (error.code == "translation_coverage_invalid"
+        and candidate.get("schema_version") == TEXT_SLOT_RESULT_SCHEMA
+        and any("$" in block_text(block) for block in invalid)):
+        payload = {
+            "target_language": target_language,
+            "glossary": list(glossary),
+            "blocks": [{"block_id": block["block_id"], "parts": source_protected_parts(block)} for block in invalid],
+            "validation_feedback": str(error),
+        }
+        return LLMRequest(
+            _task_id("translation-paragraph-repair", {"parent": request.task_id, "contract": "v1", "payload": payload}),
+            "Contract: alc.translate.paragraph_repair.v1\n\nRepair only the supplied failed paragraphs. Translate every meaningful text part completely. "
+            "Return alc.translate.protected_atom_result.v1 with translations in source block order. "
+            "Each entry has block_id and parts. Parts contain kind=text,text or unchanged kind=atom,atom_id "
+            "or kind=link,atom_id,parts with translated text labels. Preserve every opaque atom ID exactly once "
+            "and preserve its kind and link membership; never generate formula payloads or URLs. "
+            "You may rearrange the language around these placeholders for natural target-language grammar. "
+            "Do not omit any source clause or qualifier; retain separate meaningful text parts around atoms. "
+            "Do not add explanations. User intent: " + user_intent + "\n\nInput JSON:\n" + json.dumps(payload, ensure_ascii=False),
+            JsonOutput(TRANSLATION_SCHEMA, repair="format"),
+            request.model, request.session, request.inputs,
+        )
     scoped = LLMRequest(
         _task_id(
             "translation-retry-scope",
@@ -4575,6 +4620,8 @@ def _apply_text_slot_review(
     draft: Sequence[Mapping[str, Any]],
     blocks: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
+    if isinstance(value, Mapping) and value.get("schema_version") == PROTECTED_ATOM_REVIEW_RESULT_SCHEMA:
+        return _apply_review(value, draft, blocks)
     document = _object(value, "text-slot translation review")
     _require_fields(
         document,

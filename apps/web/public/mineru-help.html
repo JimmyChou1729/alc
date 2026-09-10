@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MinerU 安装与配置 · ALC</title>
+<style>body{font:16px/1.8 system-ui,sans-serif;color:#243247;background:#f7f8fa;margin:0}main{max-width:850px;margin:40px auto;padding:28px;background:white;border:1px solid #e5e9ef;border-radius:12px}h1{font-size:28px}h2{margin-top:32px;font-size:21px}a{color:#235b83}pre{background:#edf4f9;padding:16px;overflow:auto;font-size:14px}code{overflow-wrap:anywhere}@media(max-width:600px){main{margin:12px;padding:18px}}</style>
+<main><a href="/">返回 ALC</a><h1>MinerU 安装与配置</h1>
+<h2>本机安装（macOS / Linux）</h2><p>当前 ALC 适配 MinerU <strong>3.4.5 pipeline</strong>。先准备 Python 3.11；系统、内存和加速要求请核对 <a href="https://opendatalab.github.io/MinerU/quick_start/">MinerU 官方安装说明</a>。以下命令由你在终端手动执行，使用独立虚拟环境，不修改 ALC 的 Python 环境。</p>
+<pre>python3.11 -m venv "$HOME/.local/share/alc-mineru/venv"
+"$HOME/.local/share/alc-mineru/venv/bin/python" -m pip install "mineru[pipeline]==3.4.5"
+"$HOME/.local/share/alc-mineru/venv/bin/mineru" --version</pre>
+<p>先用一份小 PDF 验证，替换下面的输入和输出路径：</p><pre>"$HOME/.local/share/alc-mineru/venv/bin/mineru" -p "/absolute/path/sample.pdf" -o "/absolute/path/ocr-output" -b pipeline</pre><p>首次运行可能下载模型，需要额外磁盘空间和时间。依赖安装成功或版本检测成功不代表模型已经准备好；若下载或推理失败，请按官方文档处理后再试。</p>
+<ol><li>打开 ALC“模型与设置”→“PDF 识别”，选择“本机 MinerU”。</li><li>填入上面安装的可执行文件的<strong>绝对路径</strong>，例如 <code>/Users/你的用户名/.local/share/alc-mineru/venv/bin/mineru</code>。不要填写未展开的 <code>$HOME</code> 或 <code>~</code>。</li><li>选择 OCR 语言，保存并检测配置，然后新建 PDF 任务。</li></ol>
+<h2>连接已有服务</h2><p>选择“已有 MinerU 服务”，填入支持 MinerU 3.4.5 FastAPI protocol 2 的服务地址。如需认证，按设置填写 token 的环境变量名，在启动 ALC 的环境中设置对应值。不要把密钥写进文档或发到聊天里。普通 OpenAI 兼容 API 地址不能代替 MinerU 服务。</p>
+<h2>在插件中使用</h2><ol><li>按上面的步骤安装 MinerU。</li><li>在使用 ALC 的对话中提供可执行文件的绝对路径，例如：“请为当前项目配置 MinerU，路径是 /Users/我的用户名/.local/share/alc-mineru/venv/bin/mineru，并检查是否可用。”</li><li>配置完成后，上传 PDF，说明需要翻译还是伴读。</li></ol><p>如果使用已有服务，请提供 MinerU 服务地址，并说明是否同意将 PDF 上传到该服务。只需要文字时，可以说明“仅提取文字”；这种方式不保留图片，也无法读取扫描页。</p>
+<p>配置按项目保存为 <code>.ac/mineru.json</code>，同项目插件和 Local Web 共用。修改配置只影响新建 Web 任务；旧任务不会自动改用新配置。</p></main></html>

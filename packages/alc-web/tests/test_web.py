@@ -152,7 +152,7 @@ def test_two_workspace_ports_do_not_replace_each_others_cookie(tmp_path):
         assert b.get("/api/jobs").status_code == 200
 
 
-def test_source_reader_runs_without_a_model_and_verifies_delivery(web):
+def test_source_reader_runs_without_a_model_and_verifies_delivery(web, monkeypatch):
     client, store = web
     source_id = upload(client)
     result = client.post("/api/jobs", json={"source_id": source_id, "output": "source"})
@@ -163,10 +163,19 @@ def test_source_reader_runs_without_a_model_and_verifies_delivery(web):
     job = client.get("/api/jobs/" + job_id).json()
     assert job["state"] == "completed", job.get("error")
     assert job["metrics"]["usage"]["total_calls"] == 0
-    response = client.get(f"/api/jobs/{job_id}/reader")
+    response = client.get(f"/api/jobs/{job_id}/reader?download=true")
     assert response.status_code == 200, response.text[:300]
     assert "A readable paragraph" in response.text
     assert "allow-same-origin" not in response.headers["content-security-policy"]
+    opened = []
+    def open_reader(_self, path, digest):
+        opened.append((path, digest))
+        return "http://127.0.0.1:54321/opaque-reader"
+    monkeypatch.setattr("alc_web.reader_host.ReaderHosts.open", open_reader)
+    response = client.get(f"/api/jobs/{job_id}/reader", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers['location'] == "http://127.0.0.1:54321/opaque-reader"
+    assert opened[0][1] == job['result']['sha256']
     path = store.project / job["result"]["reader"]
     path.write_text("tampered")
     assert client.get(f"/api/jobs/{job_id}/reader").status_code == 409
@@ -409,7 +418,7 @@ def test_article_reader_ignores_site_chrome_resource_paths(web):
     execute(str(store.project), job_id)
     result = store.get(job_id)
     assert result["state"] == "completed", result.get("error")
-    reader = client.get("/api/jobs/" + job_id + "/reader")
+    reader = client.get("/api/jobs/" + job_id + "/reader?download=true")
     assert reader.status_code == 200
     assert "Article body." in reader.text
     assert "/static/arxiv-logo.svg" not in reader.text
@@ -955,3 +964,18 @@ def test_keyring_isolated_between_workspaces(tmp_path, monkeypatch):
     b.forget_saved('same-profile')
     assert SecretVault(tmp_path / 'a').get('same-profile', remember=True) == 'fixture-a'
     assert SecretVault(tmp_path / 'b').get('same-profile', remember=True) is None
+
+
+def test_upload_accepts_pdf_larger_than_former_50_mib_limit(web, tmp_path):
+    client, store = web
+    path = tmp_path / 'large.pdf'
+    size = 50 * 1024 * 1024 + 1
+    with path.open('wb') as stream:
+        stream.write(b'%PDF-1.4\n')
+        stream.truncate(size)
+    with path.open('rb') as stream:
+        response = client.post('/api/sources', files={'file': ('large.pdf', stream, 'application/pdf')})
+    assert response.status_code == 200
+    source = store.source(response.json()['id'])
+    assert source['bytes'] == size
+    assert (store.root / source['path']).stat().st_size == size

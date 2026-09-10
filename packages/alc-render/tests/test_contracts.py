@@ -437,3 +437,40 @@ def test_publication_rejects_digest_tampering_and_unknown_fields() -> None:
     encoded["renderer_recipe"] = {}
     with pytest.raises(ValueError, match="fields"):
         publication_from_document(encoded)
+
+
+def test_source_edit_provenance_is_bound_to_source_block():
+    from dataclasses import replace
+    marker = {'source_edit': {'schema_version': 'alc.render.source_edit.v1', 'operation': 'replace'}}
+    value = replace(revision(), role='source', provenance=marker)
+    assert value.provenance['source_edit']['operation'] == 'replace'
+    with pytest.raises(ValueError, match='source edit'):
+        replace(revision(), provenance=marker)
+    with pytest.raises(ValueError, match='source edit'):
+        replace(value, provenance={'source_edit': {'schema_version': 'wrong', 'operation': 'replace'}})
+
+
+def test_parallel_edit_binding_requires_a_block_and_supported_role():
+    from dataclasses import replace
+    binding = {'parallel_edit': {'schema_version': 'alc.render.parallel_edit.v1', 'pair_id': 'pair-1'}}
+    value = replace(revision(), role='translation', priority=110, provenance=binding)
+    assert value.provenance['parallel_edit']['pair_id'] == 'pair-1'
+    for changes in ({'role': 'note'}, {'priority': 10}, {'role': 'source'}):
+        with pytest.raises(ValueError, match='parallel edit'):
+            replace(value, **changes)
+    source = replace(value, role='source', provenance={**binding, 'source_edit': {
+        'schema_version': 'alc.render.source_edit.v1', 'operation': 'insert'}})
+    assert source.role == 'source'
+
+
+def test_parallel_binding_round_trips_deleted_and_restored_revisions():
+    from dataclasses import replace
+    from alc_render.markdown import encode_fragment_revision, decode_fragment_revision
+    value = replace(revision(), role='translation', priority=110, provenance={
+        'parallel_edit': {'schema_version': 'alc.render.parallel_edit.v1', 'pair_id': 'pair-1'}})
+    deleted = replace(value, revision=2, parent_semantic_digest=value.semantic_digest, deleted=True)
+    restored = replace(deleted, revision=3, parent_semantic_digest=deleted.semantic_digest, deleted=False)
+    for item in (value, deleted, restored):
+        decoded = decode_fragment_revision(encode_fragment_revision(item))
+        assert decoded.provenance['parallel_edit']['pair_id'] == 'pair-1'
+        assert decoded.semantic_digest == item.semantic_digest
