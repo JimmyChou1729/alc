@@ -390,3 +390,13 @@ With a positive limit, cross-chapter editorial review also runs, with at most
 that many reviewed proposals. Only explicitly approved, digest-bound edits are
 applied; an unapproved final proposal never changes the guide. These rounds
 are limits per stage, not a total model-call budget or a quality guarantee.
+
+## Verified PDF sources
+
+After `ac-document parse-pdf-mineru` (or `parse-pdf-configured-mineru`), pass its
+normalized source HTML with `--pdf-source-manifest <manifest.json>`. This binds
+all content to the original PDF pages and preserves extraction warnings, images
+and structure. The manifest is verified before learning work; OCR is not marked
+as proofread. Do not combine this route with an HTML acquisition manifest or
+a PDF text-layer validator.
+Use this flag on build; subsequent resume uses the frozen source identity.

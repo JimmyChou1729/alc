@@ -202,13 +202,17 @@ def resolve_translation_source(
     source: str | Path,
     *,
     refresh: bool = False,
+    pdf_source_manifest: str | Path | None = None,
 ) -> TranslationSource:
     """Resolve an existing local source through public ac-document APIs."""
 
     source_text = str(source)
     try:
-        artifact = document.resolve_local_source(source_text)
-        rich = RichDocumentParserService(document.repository).parse_source(artifact)
+        if pdf_source_manifest is not None:
+            rich = document.parse_pdf_source(source_text, manifest=pdf_source_manifest)
+        else:
+            artifact = document.resolve_local_source(source_text)
+            rich = RichDocumentParserService(document.repository).parse_source(artifact)
     except (
         ParseError,
         RichDocumentValidationError,

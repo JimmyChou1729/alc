@@ -108,6 +108,7 @@ def _parser() -> _Parser:
         description="Build a durable Companion from a verified local document.",
     )
     build.add_argument("source", help="local source path")
+    build.add_argument("--pdf-source-manifest", help="verified PDF source bundle manifest")
     build.add_argument(
         "--html-source-manifest",
         help=(
@@ -338,6 +339,8 @@ def main(argv: list[str] | None = None, *, event_sink: Any = None, llm_options: 
         args = _parser().parse_args(arguments)
         args.event_sink = event_sink
         args.llm_options = llm_options
+        from alc_catalog import register_cli_project
+        register_cli_project(getattr(args, "project_dir", None))
         result = _dispatch(args)
     except _HelpRequested:
         return 0
@@ -445,6 +448,8 @@ def _build(args: argparse.Namespace) -> CommandResult:
         and not Path(args.pdf).is_file()
     ):
         raise _UsageError("--pdf must be an existing path or 'fetch'")
+    if getattr(args, "pdf_source_manifest", None) and (args.pdf or getattr(args, "html_source_manifest", None)):
+        raise _UsageError("--pdf-source-manifest cannot be combined with --pdf or --html-source-manifest")
     try:
         source_manifest = (
             load_html_source_manifest(
@@ -466,6 +471,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
         args.source,
         pdf=args.pdf,
         refresh=args.refresh,
+        pdf_source_manifest=getattr(args, "pdf_source_manifest", None),
     )
     if source_manifest is not None:
         warnings = (*warnings, *source_manifest.warnings)
@@ -1078,12 +1084,17 @@ def _resolve_source(
     *,
     pdf: str | None,
     refresh: bool,
+    pdf_source_manifest: str | None = None,
 ) -> tuple[Any, tuple[str, ...], tuple[str, ...]]:
     if pdf == "fetch":
         raise _UsageError(
             "--pdf fetch is unavailable in alc-companion; provide a local PDF"
         )
     del refresh  # Local content-addressed imports need no provider refresh.
+    if pdf_source_manifest is not None:
+        from ac_document import verify_pdf_source_bundle
+        rich = document.parse_pdf_source(source, manifest=pdf_source_manifest)
+        return rich, (), tuple(verify_pdf_source_bundle(pdf_source_manifest)["warnings"])
     primary = document.resolve_local_source(source)
     validators = (
         (document.import_source(Path(pdf)),) if pdf is not None else ()

@@ -147,6 +147,7 @@ def _project_argument(parser: argparse.ArgumentParser) -> None:
 
 
 def _generation_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--pdf-source-manifest", help="verified PDF source bundle manifest")
     parser.add_argument("--provider", default="auto", help="LLM provider (default: auto)")
     parser.add_argument("--model", help="provider-specific model name")
     parser.add_argument(
@@ -253,6 +254,8 @@ def main(
         args = _parser().parse_args(arguments)
         args.event_sink = event_sink
         args.llm_options = llm_options
+        from alc_catalog import register_cli_project
+        register_cli_project(getattr(args, "project_dir", None))
         result = _dispatch(args)
     except _HelpRequested:
         return 0
@@ -321,7 +324,7 @@ def _detect_language(args: argparse.Namespace) -> CommandResult:
     project = TranslationProject.open(args.project_dir)
     paper = AcDocumentService(cache_root=args.document_cache_root)
     source = resolve_translation_source(
-        paper, args.source, refresh=args.refresh
+        paper, args.source, refresh=args.refresh, pdf_source_manifest=getattr(args, "pdf_source_manifest", None)
     )
     service = TranslationService(project.jobs_root)
     snapshot = service.prepare_language(
@@ -354,7 +357,7 @@ def _build_glossary(args: argparse.Namespace) -> CommandResult:
         )
     paper = AcDocumentService(cache_root=args.document_cache_root)
     source = resolve_translation_source(
-        paper, args.source, refresh=args.refresh
+        paper, args.source, refresh=args.refresh, pdf_source_manifest=getattr(args, "pdf_source_manifest", None)
     )
     _require_same_source(language, source)
     snapshot = service.prepare_glossary(
@@ -398,7 +401,7 @@ def _translate_blocks(args: argparse.Namespace) -> CommandResult:
         )
     paper = AcDocumentService(cache_root=args.document_cache_root)
     source = resolve_translation_source(
-        paper, args.source, refresh=args.refresh
+        paper, args.source, refresh=args.refresh, pdf_source_manifest=getattr(args, "pdf_source_manifest", None)
     )
     _require_same_source(language, source)
     publish_translation_glossary(

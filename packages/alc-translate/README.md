@@ -335,3 +335,13 @@ The default `standard` keeps normal host execution behavior; `local-app` selects
 the isolated local application profile explicitly. Injected execution options
 from the Web application retain precedence. This execution choice does not
 modify the frozen review recipe.
+
+## Verified PDF sources
+
+After `ac-document parse-pdf-mineru` (or `parse-pdf-configured-mineru`), pass its
+normalized source HTML with `--pdf-source-manifest <manifest.json>`. This binds
+all content to the original PDF pages and preserves extraction warnings, images
+and structure. The manifest is verified before learning work; OCR is not marked
+as proofread. Do not combine this route with an HTML acquisition manifest or
+a PDF text-layer validator.
+Use the same manifest on detect-language, build-glossary and translate-blocks.
