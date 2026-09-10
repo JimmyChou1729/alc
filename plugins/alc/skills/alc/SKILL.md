@@ -84,6 +84,18 @@ PDF or another format, identify that format and use its supported explicit input
 workflow; do not silently replace the requested source with a different edition.
 Acquisition warnings and source identity remain attached to the result.
 
+## PDF sources
+
+For PDF translation, rendering or Companion, read the PDF input section of
+`manuals/ac-document.md` first. It routes through the project's configured
+MinerU and preserves the PDF manifest throughout the learning workflow. Local
+Web and this plugin share that project configuration; remote upload still
+requires authorization for the selected destination. OCR extraction alone
+must not be labeled proofreading. For optional native PDF proofreading, read
+`manuals/alc-ocr-proofread.md`: use `proofread-bundle`, retain all page mappings
+and assets, and obtain explicit user approval of the candidate before adopting
+the revised bundle.
+
 ## Completion
 
 Validate the owning workflow before delivery. Publish visible HTML or native
@@ -128,3 +140,12 @@ Concurrency is a per-task upper limit. Independent tasks do not divide one
 user-wide pool: two tasks configured for eight can issue sixteen requests in
 total. Hardware, network and provider limits can reduce actual throughput.
 Local Web separately limits the number of simultaneous document jobs.
+
+## Local history discovery
+
+The installed learning CLIs register their `--project-dir` in a local catalog,
+independently of LocalWeb. Keep project directories durable so users can open
+those records in LocalWeb later. Do not put persistent results in temporary
+folders. Existing projects can be registered by running their normal status
+command or through LocalWeb's “导入插件项目”. LocalWeb currently exposes these
+records and results read-only; use the original Agent command to resume them.

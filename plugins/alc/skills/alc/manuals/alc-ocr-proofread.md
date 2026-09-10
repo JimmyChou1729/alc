@@ -100,3 +100,36 @@ repairs, and reports corrections per page.
 alc-ocr-proofread --help
 alc-ocr-proofread <command> --help
 ```
+
+## Optional proofreading of a native PDF bundle
+
+For the PDF translation/Companion route, prefer `proofread-bundle` with the
+verified manifest returned by `ac-document`. First obtain authorization to send
+original page images and OCR text to the user's selected vision-capable
+provider/model. Do not silently substitute a model or enable proofreading.
+
+```bash
+alc-ocr-proofread proofread-bundle --manifest bundle/manifest.json \
+  --project-dir project --provider provider-id --model model-id --workers 4
+alc-ocr-proofread get-result-bundle --project-dir project --run-id RUN_ID
+```
+
+This mode returns an unapproved HTML candidate and preserves source IDs, image
+assets, tables and formulas. Present its page edits and uncertainties alongside
+the original PDF. Model success is not approval. The user must review all pages;
+unresolved uncertainties prohibit adoption. Only after explicit approval of the
+exact candidate may the agent run:
+
+```bash
+alc-ocr-proofread approve-bundle --manifest bundle/manifest.json \
+  --project-dir project --run-id RUN_ID --candidate-digest CANDIDATE_SHA256 \
+  --confirm-reviewed --output-dir reviewed-bundle
+```
+
+Pass the returned source and manifest to the learning workflow. If declined,
+continue with the original bundle and retain the unproofread warning. Use
+`status-bundle`, `stop-bundle` and `resume-bundle` with `--project-dir` and
+`--run-id` to control this separate durable workflow. This mode does not perform
+the older Markdown workflow's adjacent-pair reconciliation or sample audit.
+Runtime pins must include these commands before using them in an installed
+plugin; a source checkout alone does not update the installed runtime.

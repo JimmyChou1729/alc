@@ -2,8 +2,8 @@
 
 English | [简体中文](README.zh-CN.md)
 
-ALC turns source documents into translations, interactive HTML readers, and
-source-anchored learning companions.
+ALC turns source documents (DOIs, arXiv IDs, HTML, PDF, Markdown, and more) into
+translations, interactive HTML readers, and source-anchored learning companions.
 
 ## Install
 
@@ -15,8 +15,9 @@ create translation or Companion tasks, and open or download Readers in a browser
 **Agent plugin** lets Codex, Claude Code, or DeepSeek Harness run ALC workflows
 from natural-language instructions.
 
-Both entry points use the same Python workflow packages. Their model settings
-and task state are not automatically shared; the plugin does not start Local Web.
+Both entry points use the same Python workflow packages. Local Web can discover
+Agent project history on the same computer; it does not take over those tasks.
+Model settings remain separate, and the plugin does not start Local Web.
 
 ### Local Web
 
@@ -101,6 +102,37 @@ The plugin prepares its runtime on demand using pinned Git revisions; no manual
 repository clone is needed. See the [Skill guide](plugins/alc/skills/alc/SKILL.md)
 for detailed workflows.
 
+### PDF recognition and OCR proofreading
+
+ALC uses **MinerU** to recognize PDF documents, preserving formulas, figures,
+tables, and page mappings while retaining the original PDF and extraction evidence.
+
+Processing flow:
+
+```mermaid
+flowchart TD
+    A["DOI, arXiv ID, HTML, PDF, Markdown, and more"] --> B["Acquire the document and resolve its source"]
+    B --> C{"PDF source?"}
+    C -->|Yes| D["MinerU: text, formulas, figures, and tables"]
+    D --> E["Optional: proofread against original PDF pages"]
+    E --> F["Build document structure, content blocks, and source anchors"]
+    C -->|No| F
+    F --> H{"Execute the selected task type"}
+    H -->|Original Reader| O["Compose the source and content produced by this task"]
+    H -->|Translation| T1["Detect source language and determine whether translation is needed"]
+    T1 --> T2["When needed: build glossary, translate blocks, and optionally review"]
+    T2 --> O
+    H -->|Companion| C1["Detect source language and determine whether translation is needed"]
+    C1 --> C2["When needed: build glossary, translate chapters, and optionally review"]
+    C2 --> C3["Generate and optionally review chapter guides; batch oversized chapters"]
+    C3 --> O
+    O --> P["Render an interactive HTML Reader"]
+    P --> Q["Read, edit, and restore history"]
+    Q --> R["Export HTML or a Markdown source package"]
+```
+
+See [Local Web PDF setup](packages/alc-web/README.md#pdf-ocr), [OCR proofreading contracts](packages/alc-ocr-proofread/README.md#native-pdf-source-bundles), and [local MinerU installation](packages/alc-ocr-proofread/README.md#opt-in-local-mineru-setup).
+
 ## Packages and architecture
 
 | Package | Responsibility |
@@ -109,6 +141,7 @@ for detailed workflows.
 | [`alc-translate`](packages/alc-translate/README.md) | Language detection, glossary, translation and review |
 | [`alc-render`](packages/alc-render/README.md) | Document composition and interactive HTML |
 | [`alc-companion`](packages/alc-companion/README.md) | Source-anchored Companion builds and revisions |
+| [`alc-catalog`](packages/alc-catalog/README.md) | Local project history discovery shared by Agent and Web |
 | [`alc-web`](packages/alc-web/README.md) | Local HTTP application, task queue and Reader delivery |
 
 [AC Foundation](https://github.com/tririver/ac-foundation) owns durable jobs,
@@ -141,7 +174,12 @@ scripts/release-alc.sh VERSION
 ```
 
 `VERSION` uses the `MAJOR.MINOR.PATCH` format. The release script coordinates
-package and plugin versions. No PyPI publication is assumed.
+package and plugin versions. It updates the product source SHA and package list
+together, excluding the optional Web application from the plugin runtime. Keep
+an existing runtime lock matched to its pinned tree until the replacement source
+commit exists. New Foundation APIs must be available in the pinned Foundation
+commit before clean-checkout CI or release validation; a working-tree override
+is only for local development. No PyPI publication is assumed.
 
 ## License
 
