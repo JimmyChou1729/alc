@@ -39,6 +39,7 @@
   };
   var READER_PREFERENCE_DEFAULTS = {
     layout: "parallel",
+    glossaryDisplay: "hover",
     editActivation: "double",
     englishFont: "system",
     chineseFont: "system",
@@ -201,6 +202,9 @@
   function iconButton(className, symbol, accessibleLabel) {
     var button = element("button", className, symbol);
     button.type = "button";
+    if (symbol === "+" || symbol === "−") {
+      button.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14' + (symbol === "+" ? 'M12 5v14' : '') + '"/></svg>';
+    }
     button.setAttribute("aria-label", accessibleLabel);
     button.title = accessibleLabel;
     return button;
@@ -480,8 +484,16 @@
       close: "关闭",
       deleteElement: "删除",
       deleteElementLabel: "删除此元素",
-      deleteConfirm: "删除此元素？旧版本仍会保留。",
+      deleteConfirm: "删除此项内容？删除后可在“已删除内容”中恢复。",
       deleteSuccess: "元素已删除。",
+      sourceRestore: "编辑原文",
+      storageSelect: "选择保存位置",
+      storagePermission: "获取读写权限",
+      storageRead: "读取保存位置",
+      storageRemember: "记录保存位置",
+      storageFailure: "失败：",
+      sourceChangedBeforeDelete: "保存位置中有更新的内容，已取消本次删除。请检查后重新删除。",
+      sourceInsert: "在原文后添加内容",
       history: "版本历史",
       source: "原文",
       translation: traditional ? "譯文" : "译文",
@@ -605,6 +617,12 @@
       compareHistorical: "历史版本",
       restore: "恢复为新版本",
       imageOmitted: "图片未加载",
+      closeDeletedContents: "关闭",
+      deletedContents: "已删除内容",
+      noDeletedContents: "没有已删除的内容",
+      restoreContent: "恢复",
+      glossaryDisplay: "术语显示",
+      termHover: "鼠标悬浮", termClick: "鼠标单击", termNone: "不显示",
       moreSettings: "更多设置",
       closeMoreSettings: "关闭更多设置",
       translationLayout: "译文布局",
@@ -649,8 +667,16 @@
       close: "Close",
       deleteElement: "Delete",
       deleteElementLabel: "Delete this element",
-      deleteConfirm: "Delete this element? Earlier revisions will be retained.",
+      deleteConfirm: "Delete this content? You can restore it from Deleted content.",
       deleteSuccess: "Element deleted.",
+      sourceRestore: "Edit original",
+      storageSelect: "Select storage",
+      storagePermission: "Request read/write permission",
+      storageRead: "Read storage",
+      storageRemember: "Remember storage",
+      storageFailure: " failed: ",
+      sourceChangedBeforeDelete: "Newer content was loaded from storage. Review it and retry deletion.",
+      sourceInsert: "Insert after original",
       history: "Revision history",
       source: "Source",
       translation: "Translation",
@@ -762,6 +788,12 @@
       compareHistorical: "Historical revision",
       restore: "Restore as new revision",
       imageOmitted: "Image not loaded",
+      closeDeletedContents: "Close",
+      deletedContents: "Deleted content",
+      noDeletedContents: "No deleted content",
+      restoreContent: "Restore",
+      glossaryDisplay: "Term definitions",
+      termHover: "On hover", termClick: "On click", termNone: "Hidden",
       moreSettings: "More settings",
       closeMoreSettings: "Close more settings",
       translationLayout: "Translation layout",
@@ -803,7 +835,8 @@
       state.selected.forEach(function (revision) {
         if (
           revision && revision.role === "translation" &&
-          revision.deleted !== true && normalizedNonblank(revision.language)
+          revision.deleted !== true && normalizedNonblank(revision.language) &&
+          String(revision.language).toLowerCase() !== "und"
         ) languages.add(String(revision.language).trim());
       });
     }
@@ -844,6 +877,7 @@
     var chineseFont = data.alcReaderChineseFont;
     return {
       layout: layout === "stacked" ? "stacked" : "parallel",
+      glossaryDisplay: ["hover", "click", "none"].includes(data.alcReaderGlossaryDisplay) ? data.alcReaderGlossaryDisplay : data.alcReaderGlossaryHover === "false" ? "click" : "hover",
       editActivation: activation === "single" ? "single" : "double",
       englishFont: READER_FONT_STACKS[englishFont] ? englishFont : "system",
       chineseFont: READER_FONT_STACKS[chineseFont] ? chineseFont : "system",
@@ -907,6 +941,9 @@
       "--alc-reader-width", String(96 * next.width / 100) + "rem"
     );
     body.classList.toggle("alc-stacked-layout", next.layout === "stacked");
+    body.dataset.alcReaderGlossaryDisplay = next.glossaryDisplay;
+    var hoverControl = document.getElementById("alc-settings-glossary-display");
+    if (hoverControl) { hoverControl.value = next.glossaryDisplay; syncCustomSelect(hoverControl); }
     body.dataset.alcReaderLayout = next.layout;
     body.dataset.alcReaderEditActivation = next.editActivation;
     body.dataset.alcReaderEnglishFont = next.englishFont;
@@ -950,6 +987,165 @@
       blockSpacing.textContent = Math.round(preferences.blockSpacing) + "%";
     }
     if (width) width.textContent = Math.round(preferences.width) + "%";
+  }
+
+  function removeDeletedContentControls(root) {
+    root.querySelectorAll("#alc-deleted-open").forEach(function (node) { node.remove(); });
+  }
+
+  function setupRecoverySettings(panel) {
+    var grid = panel.querySelector(".alc-settings-grid");
+    if (!grid) return;
+    var label = element("label", "alc-settings-field");
+    var select = element("select");
+    select.id = "alc-settings-glossary-display";
+    label.appendChild(element("span", "", labels().glossaryDisplay));
+    [["hover", labels().termHover], ["click", labels().termClick], ["none", labels().termNone]].forEach(function (item) {
+      var option = element("option", "", item[1]); option.value = item[0]; select.appendChild(option);
+    });
+    select.value = state.readerPreferences.glossaryDisplay;
+    label.appendChild(select);
+    var scale = document.getElementById("alc-settings-scale");
+    grid.insertBefore(label, scale.closest("label"));
+    installCustomSelect(select);
+    var wrapper = customSelectRegistry.get(select);
+    if (wrapper) wrapper.dataset.compact = "true";
+    select.addEventListener("change", function () {
+      applyReaderPreferences(Object.assign({}, state.readerPreferences, {glossaryDisplay: select.value}));
+      var tooltip = document.getElementById("alc-tooltip");
+      if (tooltip) tooltip.hidden = true;
+    });
+    removeDeletedContentControls(document);
+    var deleted = iconButton("alc-tool-button alc-tool-icon-button", "", labels().deletedContents);
+    deleted.id = "alc-deleted-open";
+    deleted.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg>';
+    deleted.addEventListener("click", showDeletedContents);
+    var control = document.querySelector(".alc-settings-control");
+    control.parentNode.insertBefore(deleted, control);
+    syncDeletedContentControl();
+  }
+
+  function syncDeletedContentControl() {
+    if (!state.readerSettingsReady || typeof document === "undefined") return;
+    var button = document.getElementById("alc-deleted-open");
+    if (button) button.hidden = deletedContentEntries().length === 0;
+  }
+
+  function deletionTimestamp(revision) {
+    var provenance = revision.provenance || {};
+    var value = provenance.deleted_at;
+    if (!value && provenance.last_editor === "alc-render-browser") {
+      var parent = (state.revisions.get(revision.fragment_id) || []).find(function (item) {
+        return item.semantic_digest === revision.parent_semantic_digest;
+      });
+      if (!parent || (parent.provenance || {}).edited_at !== provenance.edited_at) value = provenance.edited_at;
+    }
+    var timestamp = typeof value === "string" ? Date.parse(value) : NaN;
+    return Number.isFinite(timestamp) ? timestamp : null;
+  }
+
+  function deletedContentPosition(revision) {
+    var anchor = revision.anchor || {};
+    var blocks = anchor.related_blocks || [];
+    var target = blocks.find(function (block) { return block.block_id === anchor.target_id; });
+    if (target && Number.isInteger(target.ordinal)) return target.ordinal;
+    var positions = blocks.map(function (block) { return block.ordinal; }).filter(Number.isInteger);
+    return positions.length ? Math.min.apply(null, positions) : Number.MAX_SAFE_INTEGER;
+  }
+
+  function deletedContentEntries() {
+    var roles = ["source", "translation", "companion", "guide", "note"];
+    return Array.from(state.selected.values()).filter(function (revision) { return revision.deleted; }).sort(function (a, b) {
+      var at = deletionTimestamp(a), bt = deletionTimestamp(b);
+      if (at !== bt) {
+        if (at === null) return 1;
+        if (bt === null) return -1;
+        return bt - at;
+      }
+      var position = deletedContentPosition(a) - deletedContentPosition(b);
+      if (position) return position;
+      var ar = roles.indexOf(a.role), br = roles.indexOf(b.role);
+      var roleOrder = (ar < 0 ? roles.length : ar) - (br < 0 ? roles.length : br);
+      return roleOrder || comparePortableText(a.role || "", b.role || "") ||
+        (Number(a.priority) || 0) - (Number(b.priority) || 0) ||
+        comparePortableText(a.fragment_id || "", b.fragment_id || "");
+    });
+  }
+
+  async function restoreDeletedContent(revision) {
+    if (state.saveInProgress || state.exportInProgress || state.directorySelectionInProgress || !prepareForDraftSwitch()) return false;
+    if (!state.directory && !await connectDirectory()) return false;
+    if (!prepareForDraftSwitch()) return false;
+    var current = state.selected.get(revision.fragment_id);
+    if (!current || current.semantic_digest !== revision.semantic_digest) {
+      setStatus(labels().sourceChangedBeforeDelete, "error");
+      return false;
+    }
+    var prior = earlierVisibleSourceRevision(revision);
+    var block = ensureSourceIndexes().blocksById.get(fragmentTargetId(revision));
+    if (!prior && !(sourceEditOperation(revision) === "replace" && block)) return false;
+    var draft = draftFromFragment(revision);
+    draft.markdown_body = prior ? prior.markdown_body : sourceEditorMarkdown(block);
+    draft.title = prior ? prior.title : null;
+    state.activeDraft = draft;
+    state.editorKind = "fragment";
+    state.editorBase = revision;
+    state.editorAnchor = revision.anchor;
+    try {
+      await persistEditor(null, false);
+      var restored = state.selected.get(revision.fragment_id);
+      return !!restored && !restored.deleted;
+    } finally {
+      if (state.activeDraft === draft) {
+        state.activeDraft = null;
+        state.editorBase = null;
+        state.editorAnchor = null;
+        state.editorHistorical = null;
+      }
+    }
+  }
+
+  function showDeletedContents() {
+    if (!prepareForDraftSwitch()) return;
+    loadAllPayload(false);
+    var dialog = document.getElementById("alc-deleted-dialog");
+    if (!dialog) {
+      dialog = element("dialog", "alc-deleted-dialog");
+      dialog.id = "alc-deleted-dialog";
+      dialog.setAttribute("aria-labelledby", "alc-deleted-heading");
+      document.body.appendChild(dialog);
+    }
+    dialog.replaceChildren();
+    var heading = element("h2", "", labels().deletedContents);
+    heading.id = "alc-deleted-heading";
+    var header = element("header", "alc-settings-header alc-deleted-header");
+    header.appendChild(heading);
+    var close = iconButton("alc-settings-close", "", labels().closeDeletedContents);
+    close.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+    close.addEventListener("click", function () { dialog.close(); });
+    header.appendChild(close);
+    dialog.appendChild(header);
+    var content = element("div", "alc-deleted-list");
+    dialog.appendChild(content);
+    var entries = deletedContentEntries();
+    if (!entries.length) content.appendChild(element("p", "", labels().noDeletedContents));
+    entries.forEach(function (revision) {
+      var row = element("div", "alc-deleted-row");
+      var prior = earlierVisibleSourceRevision(revision);
+      var block = ensureSourceIndexes().blocksById.get(fragmentTargetId(revision));
+      var text = prior ? prior.markdown_body : block ? sourceEditorMarkdown(block) : "";
+      row.appendChild(element("div", "alc-deleted-preview", roleLabel(revision.role) + " · " + text.slice(0, 180)));
+      var restore = element("button", "", labels().restoreContent);
+      restore.type = "button";
+      restore.disabled = !prior && !(sourceEditOperation(revision) === "replace" && block);
+      restore.addEventListener("click", async function () {
+        dialog.close();
+        await restoreDeletedContent(revision);
+      });
+      row.appendChild(restore);
+      content.appendChild(row);
+    });
+    if (!dialog.open) dialog.showModal();
   }
 
   function setupReaderSettings() {
@@ -1007,6 +1203,7 @@
     state.readerPreferences = readerPreferenceSnapshot();
     applyReaderPreferences(state.readerPreferences);
     state.readerSettingsReady = true;
+    setupRecoverySettings(panel);
 
     trigger.addEventListener("click", function () {
       panel.hidden = !panel.hidden;
@@ -1032,6 +1229,7 @@
           editActivation: activation.value,
           englishFont: document.getElementById("alc-settings-english-font").value,
           chineseFont: document.getElementById("alc-settings-chinese-font").value,
+          glossaryDisplay: state.readerPreferences.glossaryDisplay,
           scale: state.readerPreferences.scale,
           lineHeight: state.readerPreferences.lineHeight,
           blockSpacing: state.readerPreferences.blockSpacing,
@@ -2694,6 +2892,7 @@
   }
 
   function rebuildDiagnostics() {
+    syncDeletedContentControl();
     state.diagnostics = (state.payload.diagnostics || []).slice().concat(
       state.fileDiagnostics
     );
@@ -2859,10 +3058,38 @@
     return ledger;
   }
 
+  var deliverySummaryDismissed = false;
+
+  function deliverySummaryStorageKey() {
+    var identity = state.payload && state.payload.source_identity;
+    return identity ? "alc:quality-dismissed:" + stableStringify(identity) : null;
+  }
+
+  function deliverySummaryIsDismissed() {
+    if (deliverySummaryDismissed || document.body.dataset.alcQualityDismissed === "true") return true;
+    try {
+      var key = deliverySummaryStorageKey();
+      return key !== null && window.localStorage.getItem(key) === "true";
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function dismissDeliverySummary() {
+    deliverySummaryDismissed = true;
+    document.body.dataset.alcQualityDismissed = "true";
+    try {
+      var key = deliverySummaryStorageKey();
+      if (key !== null) window.localStorage.setItem(key, "true");
+    } catch (_error) {
+      // Exported HTML retains the body flag even when browser storage is blocked.
+    }
+  }
+
   function renderDeliverySummary() {
     var ledger = deliveryLedger();
     if (
-      !ledger || ledger.delivery_grade === "complete" ||
+      deliverySummaryIsDismissed() || !ledger || ledger.delivery_grade === "complete" ||
       document.body.dataset.alcExportSnapshot === "true"
     ) return null;
     var chinese = targetLanguage().toLowerCase().indexOf("zh") === 0;
@@ -2887,6 +3114,7 @@
     );
     close.innerHTML = speechIcon("close");
     close.addEventListener("click", function () {
+      dismissDeliverySummary();
       panel.hidden = true;
     });
     header.appendChild(close);
@@ -2900,7 +3128,9 @@
     var categoryLabels = new Map([
       ["translation_source_text", chinese ? "处保留原文" : "source-text fallbacks"],
       ["translation_review_skipped", chinese ? "处使用审阅前译文" : "pre-review translations"],
-      ["glossary_omitted", chinese ? "个术语未显示" : "omitted glossary terms"]
+      ["glossary_omitted", chinese ? "个术语未显示" : "omitted glossary terms"],
+      ["glossary_recovered", chinese ? "个术语使用恢复内容" : "recovered glossary entries"],
+      ["guide_evaluated_omitted", chinese ? "个章节未生成伴读" : "chapters without guides"]
     ]);
     var list = element("ul", "alc-delivery-summary-list");
     var known = 0;
@@ -2939,7 +3169,37 @@
     }) || null : null;
   }
 
+  var dismissedQualityFragments = new Set();
+
+  function translationQualityResolved(fragment) {
+    if (!fragment) return false;
+    var provenance = fragment.provenance || {};
+    if (provenance.translation_quality_resolved || dismissedQualityFragments.has(fragment.fragment_id)) return true;
+    if (provenance.last_editor !== "alc-render-browser" || !state.revisions) return false;
+    var original = (state.revisions.get(fragment.fragment_id) || []).find(function (revision) {
+      var origin = revision.provenance || {};
+      return revision.revision < fragment.revision && origin.last_editor !== "alc-render-browser" &&
+        (origin.translation_fallback || origin.translation_quality);
+    });
+    return !!(original && normalizeMarkdown(original.markdown_body) !== normalizeMarkdown(fragment.markdown_body));
+  }
+
+  function dismissTranslationQuality(term) {
+    var card = term.closest("[data-fragment-id]");
+    if (card) dismissedQualityFragments.add(card.dataset.fragmentId);
+    var row = term.closest(".alc-source-row");
+    if (row) row.classList.remove("alc-source-text-fallback");
+    term.hidden = true;
+  }
+
   function markDeliveryState(row, blockId) {
+    row.classList.remove("alc-source-text-fallback");
+    var resolved = false;
+    state.selected.forEach(function (fragment) {
+      if (fragment.role === "translation" && fragment.priority <= 100 && fragment.anchor.target_id === blockId &&
+          translationQualityResolved(fragment)) resolved = true;
+    });
+    if (resolved) return;
     var issue = deliveryIssueForBlock(blockId);
     if (!issue) return;
     row.dataset.deliveryCategory = String(issue.category || "fallback");
@@ -3357,20 +3617,21 @@
       if (chunk) chunks.add(chunk);
     });
     chunks.forEach(rerenderChunk);
+    if (changedAnchors.some(anchorHasContentsTitle)) updateContentsTitles();
   }
 
   function refreshGlossarySurfaces(previousGlossary) {
     if (!state.readerShellReady) return;
     var changed = state.selectedGlossary.size !== previousGlossary.size;
     state.selectedGlossary.forEach(function (entry, entryId) {
-      if (previousGlossary.get(entryId) !== entry) changed = true;
+      if (stableStringify(previousGlossary.get(entryId) || null) !== stableStringify(entry)) changed = true;
     });
     if (!changed && !state.glossaryDiagnostics.length) return;
     state.glossarySurfaceCache = {source: null, target: null};
     var tooltip = document.getElementById("alc-tooltip");
     if (tooltip) {
-      tooltip.hidden = true;
-      tooltip.textContent = "";
+      if (state.closeTooltipIfOutside) state.closeTooltipIfOutside();
+      else { tooltip.hidden = true; tooltip.textContent = ""; }
     }
     syncPromotedTitleSurface();
     state.renderedChunkIds.forEach(function (chunkId) {
@@ -3391,6 +3652,7 @@
   function refreshFragmentGroup(fragmentId, anchor) {
     updateFragmentGroup(fragmentId, anchor);
     syncPromotedTitleSurface();
+    if (state.readerShellReady && anchorHasContentsTitle(anchor)) updateContentsTitles();
   }
 
   function updateFragmentGroup(fragmentId, anchor) {
@@ -4425,7 +4687,260 @@
     return row;
   }
 
+  function sourceEditOperation(revision) {
+    var edit = revision && revision.role === "source" &&
+      (revision.provenance || {}).source_edit;
+    return edit && edit.schema_version === "alc.render.source_edit.v1" ? edit.operation : null;
+  }
+
+  function sourceReplacement(blockId) {
+    var matches = Array.from(state.selected.values()).filter(function (revision) {
+      return sourceEditOperation(revision) === "replace" &&
+        fragmentTargetId(revision) === blockId;
+    });
+    if (matches.length > 1) throw new Error("Conflicting source replacements");
+    return matches[0] || null;
+  }
+
+  function sourceInsertions(blockId) {
+    return Array.from(state.selected.values()).filter(function (revision) {
+      return sourceEditOperation(revision) === "insert" &&
+        fragmentTargetId(revision) === blockId && fragmentIsVisible(revision);
+    }).sort(function (a, b) { return a.priority - b.priority || a.fragment_id.localeCompare(b.fragment_id); });
+  }
+
+  function parallelPairId(fragment) {
+    if (!fragment) return null;
+    var binding = (fragment.provenance || {}).parallel_edit;
+    if (binding) return binding.pair_id;
+    if (sourceEditOperation(fragment) === "insert" ||
+        (fragment.role === "translation" && fragment.priority >= 101 && fragment.anchor.kind === "block")) {
+      return fragment.fragment_id;
+    }
+    return null;
+  }
+
+  function parallelGroups(blockId) {
+    var groups = new Map();
+    state.selected.forEach(function (fragment) {
+      var id = parallelPairId(fragment);
+      if (!id || fragmentTargetId(fragment) !== blockId) return;
+      var group = groups.get(id) || {id: id, priority: fragment.priority};
+      group.priority = Math.min(group.priority, fragment.priority);
+      if (group[fragment.role]) throw new Error("Conflicting parallel content binding");
+      group[fragment.role] = fragment;
+      groups.set(id, group);
+    });
+    return Array.from(groups.values()).filter(function (group) {
+      return fragmentIsVisible(group.source) || fragmentIsVisible(group.translation);
+    }).sort(function (a, b) { return a.priority - b.priority || a.id.localeCompare(b.id); });
+  }
+
+  function renderParallelGroup(group, block) {
+    var lanes = element("div", "alc-lanes alc-added-pair has-parallel-translation");
+    lanes.dataset.pairId = group.id;
+    ["source", "translation"].forEach(function (role) {
+      var fragment = group[role];
+      var slot = element("section", "alc-pair-slot");
+      slot.dataset.role = role;
+      if (fragmentIsVisible(fragment)) {
+        slot.appendChild(renderFragment(fragment));
+      } else {
+        slot.classList.add("alc-pair-empty");
+        var label = role === "source" ? "添加对应原文" : "添加对应译文";
+        var add = iconButton("alc-card-action alc-pair-add", "+", label);
+        add.type = "button";
+        add.addEventListener("click", function (event) {
+          event.preventDefault(); event.stopPropagation();
+          openParallelEditor(group, block, role);
+        });
+        slot.appendChild(add);
+      }
+      lanes.appendChild(slot);
+    });
+    return lanes;
+  }
+
+  function openParallelEditor(group, block, role) {
+    var opposite = role === "source" ? "translation" : "source";
+    var available = parallelGroups(block.block_id).filter(function (item) {
+      return item.id !== group.id && fragmentIsVisible(item[role]) && !item[opposite];
+    });
+    if (!available.length || group[role]) { startParallelEditor(group, block, role); return; }
+    if (!prepareForDraftSwitch()) return;
+    var dialog = element("dialog", "alc-deleted-dialog");
+    var header = element("header", "alc-settings-header alc-deleted-header");
+    header.appendChild(element("h2", "", role === "source" ? "添加对应原文" : "添加对应译文"));
+    var close = iconButton("alc-settings-close", "", labels().closeDeletedContents);
+    close.innerHTML = speechIcon("close");
+    close.addEventListener("click", function () { dialog.close(); });
+    header.appendChild(close); dialog.appendChild(header);
+    function choice(text, revision) {
+      var row = element("div", "alc-deleted-row");
+      row.appendChild(element("div", "alc-deleted-preview", text));
+      var select = element("button", "", revision ? "关联" : "新建");
+      select.type = "button";
+      select.addEventListener("click", function () {
+        dialog.close();
+        startParallelEditor(group, block, role, revision);
+      });
+      row.appendChild(select); dialog.appendChild(row);
+    }
+    choice(role === "source" ? "新建原文内容" : "新建译文内容", null);
+    available.forEach(function (item) { choice(item[role].markdown_body.slice(0,160), item[role]); });
+    dialog.addEventListener("close", function () { dialog.remove(); }, {once:true});
+    document.body.appendChild(dialog); dialog.showModal();
+  }
+
+  function startParallelEditor(group, block, role, linkedRevision) {
+    if (state.saveInProgress || state.exportInProgress || state.directorySelectionInProgress || !prepareForDraftSwitch()) return;
+    var current = parallelGroups(block.block_id).find(function (item) { return item.id === group.id; }) || group;
+    var existing = linkedRevision || current[role];
+    if (!linkedRevision && fragmentIsVisible(existing)) { beginInlineEdit(existing); return; }
+    state.editorKind = "fragment";
+    state.activeDraft = existing ? draftFromFragment(existing) : {
+      base: null, anchor: {kind: "block", target_id: block.block_id, related_blocks: [anchorBlock(block)]},
+      title: null, role: role, priority: group.priority, markdown_body: "", appearance: appearanceForGroup(role, group.priority)
+    };
+    state.activeDraft.parallelPairId = group.id;
+    state.activeDraft.lockParallelRole = true;
+    if (role === "source") state.activeDraft.sourceEdit = {schema_version: "alc.render.source_edit.v1", operation: "insert"};
+    state.editorBase = existing || null;
+    state.editorHistorical = existing || null;
+    state.editorAnchor = state.activeDraft.anchor;
+    openAdvancedEditor(null, role === "source" ? "添加对应原文" : "添加对应译文");
+  }
+
+  function translationWasDeleted(blockId) {
+    return Array.from(state.selected.values()).some(function (revision) {
+      return revision.role === "translation" && revision.priority <= 100 &&
+        revision.deleted === true && fragmentTargetId(revision) === blockId;
+    });
+  }
+
+  function sourceEditorMarkdown(block) {
+    var paths = new Map();
+    ensureSourceIndexes().resourcesByDigest.forEach(function (resource, digest) {
+      paths.set(digest, resource.logical_name);
+      paths.set(resource.logical_name, resource.logical_name);
+    });
+    return exportOriginalSourceBlockMarkdown(block, state.payload.publication.source_document, paths);
+  }
+
+  function earlierVisibleSourceRevision(revision) {
+    var current = revision;
+    var seen = new Set();
+    while (current && current.deleted && !seen.has(current.semantic_digest)) {
+      seen.add(current.semantic_digest);
+      var earlier = latestEarlierRevision(current);
+      if (earlier === current) return null;
+      current = earlier;
+    }
+    return current && !current.deleted ? current : null;
+  }
+
+  function prepareSourceDraft(block, insertion) {
+    if (state.saveInProgress || state.exportInProgress || state.directorySelectionInProgress || !prepareForDraftSwitch()) return false;
+    var existing = insertion ? null : sourceReplacement(block.block_id);
+    var priority = insertion ? Array.from(state.selected.values()).reduce(function (highest, revision) {
+      return sourceEditOperation(revision) === "insert" && fragmentTargetId(revision) === block.block_id ? Math.max(highest, revision.priority) : highest;
+    }, 109) + 1 : 50;
+    var anchor = {kind: "block", target_id: block.block_id, related_blocks: [anchorBlock(block)]};
+    state.editorKind = "fragment";
+    state.activeDraft = existing ? draftFromFragment(existing) : {
+      base: null, anchor: anchor, title: null, role: "source", priority: priority,
+      markdown_body: insertion ? "" : sourceEditorMarkdown(block),
+      appearance: appearanceForGroup("source", priority)
+    };
+    if (existing && existing.deleted) {
+      var prior = earlierVisibleSourceRevision(existing);
+      state.activeDraft.markdown_body = prior && !prior.deleted ? prior.markdown_body : sourceEditorMarkdown(block);
+    }
+    state.activeDraft.sourceEdit = {schema_version: "alc.render.source_edit.v1", operation: insertion ? "insert" : "replace"};
+    if (!existing && !insertion) {
+      state.activeDraft.initialEditableState = editableDraftState(state.activeDraft);
+    }
+    state.editorBase = existing;
+    state.editorHistorical = existing;
+    state.editorAnchor = anchor;
+    return true;
+  }
+
+  function editSourceBlock(block, insertion) {
+    if (!prepareSourceDraft(block, insertion)) return;
+    if (state.closeTooltip) state.closeTooltip();
+    if (insertion) { openAdvancedEditor(null, labels().original); return; }
+    state.activeDraft.inlineFragmentId = state.activeDraft.base ? state.activeDraft.base.fragment_id : "source-draft-" + block.block_id;
+    refreshChunkForAnchor(state.activeDraft.anchor);
+    focusInlineEditor(state.activeDraft.inlineFragmentId);
+  }
+
+  function sourceInlineDraft(block) {
+    var draft = state.activeDraft;
+    if (!draft || !draft.inlineFragmentId || draft.anchor.target_id !== block.block_id ||
+        sourceEditOperation(draft.base) === "insert" || draft.sourceEdit && draft.sourceEdit.operation === "insert") return null;
+    return {
+      fragment_id: draft.inlineFragmentId, revision: draft.base ? draft.base.revision : 0,
+      role: "source", priority: draft.priority, title: draft.title,
+      language: (state.payload.publication.reader_profile || {}).source_language || "und",
+      anchor: draft.anchor, markdown_body: draft.markdown_body,
+      provenance: {source_edit: draft.sourceEdit}, appearance: draft.appearance
+    };
+  }
+
+  async function removeReaderContent(block, fragment) {
+    if (state.saveInProgress || state.exportInProgress || state.directorySelectionInProgress || !prepareForDraftSwitch()) return;
+    if (fragment && fragment.deleted) return;
+    if (!fragment && sourceReplacement(block.block_id) && sourceReplacement(block.block_id).deleted) return;
+    if (!await confirmReaderAction(labels().deleteConfirm)) return;
+    if (state.saveInProgress || !prepareForDraftSwitch()) return;
+    // Choose storage before creating the temporary deletion draft: cancellation
+    // or a connection failure must not leave an invisible editor locking the UI.
+    var previous = fragment || sourceReplacement(block.block_id);
+    if (!state.directory && !await connectDirectory()) return;
+    if (state.saveInProgress || state.exportInProgress || !prepareForDraftSwitch()) return;
+    var current = fragment ? state.selected.get(fragment.fragment_id) : sourceReplacement(block.block_id);
+    if ((previous && previous.semantic_digest) !== (current && current.semantic_digest)) {
+      setStatus(labels().sourceChangedBeforeDelete, "error");
+      return;
+    }
+    if (fragment) {
+      state.editorKind = "fragment";
+      state.activeDraft = draftFromFragment(fragment);
+      state.editorBase = fragment;
+      state.editorHistorical = fragment;
+      state.editorAnchor = fragment.anchor;
+    } else if (!prepareSourceDraft(block, false)) return;
+    var deletionDraft = state.activeDraft;
+    try {
+      await persistEditor(null, true);
+    } finally {
+      if (state.activeDraft === deletionDraft) {
+        state.activeDraft = null;
+        state.editorBase = null;
+        state.editorHistorical = null;
+        state.editorAnchor = null;
+      }
+    }
+  }
+
+  function sourceActions(block) {
+    var root = renderCardActions("source", block.block_id, null);
+    [["✎", labels().sourceRestore, function () { editSourceBlock(block, false); }],
+     ["−", labels().deleteElement, function () { removeReaderContent(block, null); }],
+     ["+", labels().sourceInsert, function () { editSourceBlock(block, true); }]].forEach(function (entry) {
+      var button = iconButton("alc-card-action", entry[0], entry[1]);
+      button.type = "button";
+      if (entry[0] === "✎") button.innerHTML = speechIcon("edit");
+      if (entry[0] === "−" && sourceReplacement(block.block_id) && sourceReplacement(block.block_id).deleted) button.disabled = true;
+      button.addEventListener("click", function (event) { event.preventDefault(); event.stopPropagation(); entry[2](); });
+      root.appendChild(button);
+    });
+    return root;
+  }
+
   function renderSourceRow(block, fragments) {
+    fragments = fragments.filter(function (item) { return !sourceEditOperation(item); });
     var row = element("article", "alc-source-row");
     row.id = "block-" + safeToken(block.block_id);
     row.dataset.blockId = block.block_id;
@@ -4461,7 +4976,7 @@
     var lanes = element("div", "alc-lanes");
     lanes.classList.toggle(
       "has-parallel-translation",
-      fragments.some(function (item) {
+      translationWasDeleted(block.block_id) || fragments.some(function (item) {
         return item.priority <= 100 && item.role === "translation" &&
           item.fragment_id !== state.primaryTitleFragmentId;
       })
@@ -4470,7 +4985,24 @@
     source.dataset.role = "source";
     source.lang = (state.payload.publication.reader_profile || {}).source_language ||
       document.documentElement.lang;
-    var sourceBlock = renderSourceBlock(block);
+    var replacement = sourceReplacement(block.block_id);
+    var inlineDraft = sourceInlineDraft(block);
+    var sourceBlock = inlineDraft ? renderFragment(inlineDraft) : replacement ? (replacement.deleted ?
+      element("div", "alc-source-deleted") : renderFragment(replacement)) : renderSourceBlock(block);
+    if (!replacement) {
+      ["click", "dblclick"].forEach(function (type) {
+        source.addEventListener(type, function (event) {
+          if ((state.readerPreferences.editActivation === "single") !== (type === "click")) return;
+          if (event.target && event.target.closest && event.target.closest(".alc-source-edit")) return;
+          var interactive = type === "dblclick" ? interactiveGlossaryEditTarget : interactiveFragmentTarget;
+          if (!interactive(event.target)) {
+            event.preventDefault();
+            event.stopPropagation();
+            editSourceBlock(block, false);
+          }
+        });
+      });
+    }
     if (listPathEntries(block).length) {
       var sourceContent = element("div", "alc-list-owned-content");
       sourceContent.appendChild(sourceBlock);
@@ -4485,24 +5017,44 @@
     } else {
       source.appendChild(sourceBlock);
     }
-    source.appendChild(renderCardActions("source", block.block_id, null));
-    setupTouchCardActions(source);
+    if (!replacement || !replacement.deleted) {
+      source.appendChild(sourceActions(block));
+      setupTouchCardActions(source);
+    } else if (!inlineDraft) {
+      source.classList.add("alc-source-empty");
+    }
     lanes.appendChild(source);
 
     fragments.filter(function (item) {
-      return item.priority <= 100 &&
+      return !parallelPairId(item) && item.priority <= 100 &&
         item.fragment_id !== state.primaryTitleFragmentId;
     }).forEach(function (item) {
       var card = renderFragment(item);
       if (block.kind === "figure" && item.role === "translation") {
-        mirrorSourceFigure(source, card, block);
+        var originalFigure = element("section");
+        originalFigure.appendChild(renderSourceBlock(block));
+        mirrorSourceFigure(originalFigure, card, block);
       }
       if (block.kind === "table" && item.role === "translation") {
-        mirrorSourceTable(source, card, block);
+        var originalTable = element("section");
+        originalTable.appendChild(renderSourceBlock(block));
+        mirrorSourceTable(originalTable, card, block);
       }
       decorateListOwnedFragment(card, block);
       lanes.appendChild(card);
     });
+    var mirrorUncaptionedFigure = block.kind === "figure" &&
+      !String((block.payload || {}).caption || "").trim() &&
+      !translationWasDeleted(block.block_id) &&
+      !fragments.some(function (item) { return item.role === "translation" && item.priority <= 100; }) &&
+      (state.payload.publication.layers || []).some(function (layer) { return layer.producer === "alc-translate"; });
+    if (mirrorUncaptionedFigure) {
+      lanes.classList.add("has-parallel-translation");
+      var imageCard = element("section", "alc-fragment-card alc-translation-figure-card");
+      imageCard.dataset.role = "translation";
+      imageCard.appendChild(renderSourceBlock(block));
+      lanes.appendChild(imageCard);
+    }
     row.appendChild(lanes);
     if (block.kind === "table") {
       syncParallelTableCaptionAlignment(lanes, block);
@@ -4514,8 +5066,11 @@
       row.appendChild(sourceNoteGroup);
     }
 
+    parallelGroups(block.block_id).forEach(function (group) {
+      row.appendChild(renderParallelGroup(group, block));
+    });
     var full = fragments.filter(function (item) {
-      return item.priority >= 101;
+      return !parallelPairId(item) && item.priority >= 101;
     });
     if (full.length) {
       var fullRows = element("div", "alc-full-rows");
@@ -4523,13 +5078,6 @@
       row.appendChild(fullRows);
     }
     markDeliveryState(row, block.block_id);
-    var noteButton = iconButton(
-      "alc-note-button alc-icon-button", "+", labels().addNote
-    );
-    noteButton.addEventListener("click", function () {
-      openNewEditor(block);
-    });
-    row.appendChild(noteButton);
     syncSourceBibliographyAlignment(row);
     return row;
   }
@@ -4540,6 +5088,7 @@
     if (!sourceFigure || !saved || saved.querySelector("img")) return;
     var figure = sourceFigure.cloneNode(true);
     figure.classList.add("alc-translation-figure");
+    figure.querySelectorAll("img.alc-figure-panel").forEach(setupFigurePanelNaturalSize);
     if (figure.id) figure.removeAttribute("id");
     Array.prototype.forEach.call(figure.querySelectorAll("[id]"), function (node) {
       node.removeAttribute("id");
@@ -4931,7 +5480,8 @@
           "aspect_ratio,aspect_ratio_source,column_index,dimension_source," +
           "display_height,display_width,panel_index,row_index,source_id" ||
         !target || panel.panel_index !== index || target.panel_index !== index ||
-        !normalizedNonblank(panel.source_id) ||
+        typeof panel.source_id !== "string" ||
+        (panel.source_id !== "" && !normalizedNonblank(panel.source_id)) ||
         panel.source_id !== target.source_id
       ) throw new Error("source Figure panel binding is invalid");
       if (neutral) {
@@ -5936,6 +6486,17 @@
     return container;
   }
 
+  function setupFigurePanelNaturalSize(image) {
+    function applySize() {
+      if (!image.dataset.panelDisplayWidth && image.naturalWidth > 0) {
+        image.style.maxWidth = String(image.naturalWidth) + "px";
+        image.style.justifySelf = "center";
+      }
+    }
+    image.addEventListener("load", applySize);
+    applySize();
+  }
+
   function renderSourceFigurePanelImage(panel, descriptor, payload) {
     if (panel.status !== "available") return null;
     var panelResource = resourceForDigest(panel.asset_digest || "");
@@ -5955,6 +6516,7 @@
     if (descriptor && descriptor.aspect_ratio !== null) {
       panelImage.style.aspectRatio = descriptor.aspect_ratio.join(" / ");
     }
+    setupFigurePanelNaturalSize(panelImage);
     return panelImage;
   }
 
@@ -6376,6 +6938,13 @@
     };
   }
 
+  function sourceDefaultAppearance(role, appearance) {
+    if (role === "source" && !appearance) {
+      return {foreground: "inherit", background: "transparent"};
+    }
+    return effectiveAppearance(role, appearance);
+  }
+
   function appearanceGroupKey(role, priority) {
     return String(role) + "\u0000" + String(priority);
   }
@@ -6443,7 +7012,7 @@
     }
     var rules = [];
     state.appearanceGroups.forEach(function (entry) {
-      var colors = effectiveAppearance(entry.role, entry.appearance);
+      var colors = sourceDefaultAppearance(entry.role, entry.appearance);
       rules.push(
         '.alc-fragment[data-role-slot="' + roleSlot(entry.role) + '"]' +
         '[data-priority="' + entry.priority + '"]{' +
@@ -6455,7 +7024,7 @@
   }
 
   function applyFragmentAppearance(node, role, appearance) {
-    var colors = effectiveAppearance(role, appearance);
+    var colors = sourceDefaultAppearance(role, appearance);
     if (node.style && typeof node.style.setProperty === "function") {
       node.style.setProperty("--alc-fragment-foreground", colors.foreground);
       node.style.setProperty("--alc-fragment-background", colors.background);
@@ -6468,7 +7037,7 @@
   function renderFragment(fragment) {
     var draft = state.activeDraft;
     var editing = Boolean(
-      draft && draft.base && draft.base.fragment_id === fragment.fragment_id
+      draft && ((draft.base && draft.base.fragment_id === fragment.fragment_id) || draft.inlineFragmentId === fragment.fragment_id)
     );
     var visual = editing ? Object.assign({}, fragment, {
       title: draft.title,
@@ -6477,6 +7046,10 @@
       appearance: draft.appearance
     }) : fragment;
     var card = element("aside", "alc-fragment");
+    if (sourceEditOperation(fragment)) {
+      card.classList.add("alc-source-edit");
+      card.dataset.sourceEdit = sourceEditOperation(fragment);
+    }
     card.dataset.fragmentId = fragment.fragment_id;
     card.dataset.revision = String(fragment.revision);
     card.dataset.role = visual.role;
@@ -6520,7 +7093,7 @@
     card.appendChild(header);
     var fallback = (fragment.provenance || {}).translation_fallback;
     var diagnostic = (fragment.provenance || {}).translation_quality;
-    if ((fallback && fallback.schema_version === "alc.translate.fallback.v1") || diagnostic) {
+    if (!translationQualityResolved(fragment) && ((fallback && fallback.schema_version === "alc.translate.fallback.v1") || diagnostic)) {
       var warning = diagnostic ? labels().translationWarning :
         fallback.kind === "source_text" ? labels().sourceFallback :
         fallback.kind === "review_skipped" ? labels().reviewSkipped : null;
@@ -6616,6 +7189,28 @@
         beginInlineEdit(fragment);
       });
       root.appendChild(edit);
+      var add = iconButton("alc-card-action", "+", labels().addNote);
+      add.type = "button";
+      add.addEventListener("click", function (event) {
+        event.preventDefault(); event.stopPropagation();
+        var pair = parallelPairId(fragment);
+        var block = pair && state.payload.publication.source_document.blocks.find(function (item) { return item.block_id === fragmentTargetId(fragment); });
+        var group = block && parallelGroups(block.block_id).find(function (item) { return item.id === pair; });
+        var opposite = fragment.role === "source" ? "translation" : "source";
+        if (group && !fragmentIsVisible(group[opposite])) {
+          openParallelEditor(group, block, opposite);
+        } else if (sourceEditOperation(fragment)) {
+          var target = state.payload.publication.source_document.blocks.find(function (item) { return item.block_id === fragmentTargetId(fragment); });
+          if (target) editSourceBlock(target, true);
+        } else openNewEditorForAnchor(fragment.anchor);
+      });
+      var remove = iconButton("alc-card-action", "−", labels().deleteElement);
+      remove.type = "button";
+      remove.addEventListener("click", function (event) {
+        event.preventDefault(); event.stopPropagation(); removeReaderContent(null, fragment);
+      });
+      root.appendChild(remove);
+      root.appendChild(add);
     }
     return root;
   }
@@ -6700,7 +7295,8 @@
 
   function interactiveFragmentTarget(target) {
     return Boolean(target && target.closest && target.closest(
-      "a, button, input, textarea, select, .glossary-term"
+      "a, button, input, textarea, select" +
+        (state.readerPreferences.glossaryDisplay === "none" ? "" : ", .glossary-term")
     ));
   }
 
@@ -7720,6 +8316,13 @@
   }
 
   function sourceSpeechText(block, card) {
+    if (!block) return "";
+    var replacement = sourceReplacement(block.block_id);
+    var text = replacement ? (replacement.deleted ? "" : fragmentSpeechText(replacement)) : originalSourceSpeechText(block, card);
+    return text;
+  }
+
+  function originalSourceSpeechText(block, card) {
     var payload = (block && block.payload) || {};
     if (!block) return "";
     if (block.kind === "heading") return normalizeSpeechText(payload.text);
@@ -7829,7 +8432,7 @@
         });
       }
       (state.fragmentGroups.get(block.block_id) || []).forEach(function (fragment) {
-        if (!fragmentIsVisible(fragment) || !roles.has(fragment.role)) return;
+        if (sourceEditOperation(fragment) || parallelPairId(fragment) || !fragmentIsVisible(fragment) || !roles.has(fragment.role)) return;
         queue.push({
           text: null,
           fragment: fragment,
@@ -7840,11 +8443,21 @@
           fragmentId: fragment.fragment_id
         });
       });
+      parallelGroups(block.block_id).forEach(function (group) {
+        ["source", "translation"].forEach(function (role) {
+          var fragment = group[role];
+          if (!roles.has(role) || !fragmentIsVisible(fragment)) return;
+          queue.push({text: null, fragment: fragment, role: role,
+            language: speechLanguage(role, fragment), blockId: block.block_id,
+            blockIndex: blockIndex, fragmentId: fragment.fragment_id});
+        });
+      });
     });
     return queue;
   }
 
   function playSpeechFromCard(role, blockId, fragmentId) {
+    if (role === "source" && sourceEditOperation(state.selected.get(fragmentId)) === "replace") fragmentId = null;
     if (!state.speechSupported) {
       setSpeechStatus(labels().speechUnavailable, true);
       return;
@@ -7932,7 +8545,7 @@
     }
     if (segment.blockId === state.primaryTitleBlockId) {
       var header = document.getElementById("alc-book-header");
-      if (header && segment.role === "source") {
+      if (header && segment.role === "source" && !segment.fragmentId) {
         return header.querySelector(":scope > h1");
       }
       if (
@@ -7947,7 +8560,7 @@
     if (chunk) renderChunk(chunk);
     var row = document.getElementById("block-" + safeToken(segment.blockId));
     if (!row) return null;
-    if (segment.role === "source") return row.querySelector(".alc-source-card");
+    if (segment.role === "source" && !segment.fragmentId) return row.querySelector(".alc-source-card");
     return row.querySelector(
       '.alc-fragment[data-fragment-id="' + cssString(segment.fragmentId) + '"]'
     );
@@ -8217,6 +8830,8 @@
     sections.forEach(function (section) {
       var item = element("li");
       item.dataset.level = String(section.level);
+      var sourceEdit = sourceReplacement(section.anchor_block_id);
+      item.hidden = Boolean(sourceEdit && sourceEdit.deleted);
       var link = element("a");
       link.href = section.anchor_block_id === state.primaryTitleBlockId ?
         "#alc-book-header" : "#block-" + safeToken(section.anchor_block_id);
@@ -8233,7 +8848,7 @@
       appendContentsLink(list, strings.references, "#alc-references");
     }
     appendSupplementCoverage(list);
-    appendEditorialReview(list);
+
   }
 
   function appendSupplementCoverage(list) {
@@ -8295,22 +8910,30 @@
     typeset(parent);
   }
 
+  function anchorHasContentsTitle(anchor) {
+    var target = fragmentTargetId({anchor: anchor});
+    return ((state.payload.publication || {}).outline || []).some(function (section) {
+      return section.anchor_block_id === target;
+    });
+  }
+
   function updateContentsTitles() {
     var list = document.getElementById("alc-contents-list");
     if (!list || !state.md) return;
     Array.prototype.forEach.call(
       list.querySelectorAll("a[data-block-id]"),
       function (link) {
+        var sourceEdit = sourceReplacement(link.dataset.blockId);
+        link.parentElement.hidden = Boolean(sourceEdit && sourceEdit.deleted);
+        if (link.parentElement.hidden) return;
         link.replaceChildren();
-        var heading = state.sourceVisible ? null : visibleHeadingForBlock(
-          link.dataset.blockId
-        );
+        var heading = visibleHeadingForBlock(link.dataset.blockId);
         if (heading) {
           Array.prototype.forEach.call(heading.childNodes, function (child) {
             link.appendChild(child.cloneNode(true));
           });
           removeVisibleHtmlTags(link);
-          decorateGlossary(link, "target");
+          decorateGlossary(link, state.sourceVisible ? "source" : "target");
           typeset(link);
         } else {
           appendTocTitle(link, link.dataset.sourceTitle);
@@ -8322,12 +8945,14 @@
   function visibleHeadingForBlock(blockId) {
     var candidates = [];
     var loadedIds = new Set();
-    (state.fragmentGroups.get(blockId) || []).forEach(function (fragment) {
+    state.selected.forEach(function (fragment) {
+      if (fragmentTargetId(fragment) !== blockId) return;
       loadedIds.add(fragment.fragment_id);
-      candidates.push(fragment);
+      if (fragmentIsVisible(fragment)) candidates.push(fragment);
     });
     (state.payload.selected_heading_fragments || []).forEach(function (fragment) {
-      if (fragment.target_id === blockId && !loadedIds.has(fragment.fragment_id)) {
+      if (fragment.target_id === blockId && !loadedIds.has(fragment.fragment_id) &&
+          !state.revisions.has(fragment.fragment_id)) {
         candidates.push(fragment);
       }
     });
@@ -8337,7 +8962,11 @@
     });
     for (var index = 0; index < candidates.length; index += 1) {
       var candidate = candidates[index];
-      if (state.hiddenRoles.has(candidate.role)) continue;
+      if (state.sourceVisible) {
+        if (candidate.role !== "source" || candidate.priority > 100) continue;
+      } else if (candidate.role === "source" || state.hiddenRoles.has(candidate.role)) {
+        continue;
+      }
       var holder = element("div");
       holder.innerHTML = state.md.render(projectGlossaryMarkdown(
         candidate.markdown_body, candidate
@@ -9303,12 +9932,56 @@
   function setupTooltip() {
     var tooltip = document.getElementById("alc-tooltip");
     var active = null;
+    var closeTimer = null;
+    var pointerInside = false;
+    var pointerPosition = null;
+    function rememberPointer(event) {
+      if (event && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+        pointerPosition = {x: event.clientX, y: event.clientY};
+      }
+    }
+    function pointerOver(node, margin) {
+      if (!pointerPosition || !node || node.isConnected === false) return false;
+      var rect = node.getBoundingClientRect();
+      return pointerPosition.x >= rect.left - margin && pointerPosition.x <= rect.right + margin &&
+        pointerPosition.y >= rect.top - margin && pointerPosition.y <= rect.bottom + margin;
+    }
+    function cancelClose() { if (closeTimer !== null) window.clearTimeout(closeTimer); closeTimer = null; }
+    function panelEngaged() {
+      return pointerInside || pointerOver(tooltip, 8) || pointerOver(active, 2) ||
+        (document.activeElement && tooltip.contains(document.activeElement));
+    }
+    function closeIfOutside() { if (!panelEngaged()) close(); }
+    state.closeTooltipIfOutside = closeIfOutside;
+    state.closeTooltip = close;
+    document.addEventListener("pointermove", function (event) {
+      rememberPointer(event);
+      if (!active || tooltip.hidden) return;
+      pointerInside = tooltip.contains(event.target);
+      if (panelEngaged()) cancelClose();
+      else if (state.readerPreferences.glossaryDisplay === "hover" && closeTimer === null) scheduleClose();
+    }, {passive: true});
+    function scheduleClose() {
+      cancelClose();
+      if (!panelEngaged()) closeTimer = window.setTimeout(closeIfOutside, 250);
+    }
+    tooltip.addEventListener("mouseenter", function () { pointerInside = true; cancelClose(); });
+    tooltip.addEventListener("mouseleave", function (event) {
+      rememberPointer(event);
+      pointerInside = false;
+      if (state.readerPreferences.glossaryDisplay === "hover") scheduleClose();
+    });
     function close() {
+      cancelClose();
       tooltip.hidden = true;
       tooltip.replaceChildren();
+      pointerInside = false;
       active = null;
     }
     function open(term) {
+      if (!term.dataset.qualityTooltip && state.readerPreferences.glossaryDisplay === "none") return;
+      cancelClose();
+      if (active === term && !tooltip.hidden) return;
       var content = term && (term.dataset.glossaryTooltip || term.dataset.qualityTooltip);
       var entries = term && term._alcGlossaryEntries;
       if ((!entries || !entries.length) && !content) return;
@@ -9319,13 +9992,13 @@
         tooltip.textContent = content;
       }
       tooltip.classList.toggle("has-quality-dismiss", !!term.dataset.qualityTooltip);
-      tooltip.style.pointerEvents = term.dataset.qualityTooltip ? "auto" : "none";
+      tooltip.style.pointerEvents = "auto";
       if (term.dataset.qualityTooltip) {
         var dismiss = element("button", "alc-quality-dismiss");
         dismiss.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
         dismiss.type = "button";
         dismiss.setAttribute("aria-label", "关闭此提示");
-        dismiss.onclick = function () { term.hidden = true; close(); };
+        dismiss.onclick = function () { dismissTranslationQuality(term); close(); };
         tooltip.appendChild(dismiss);
       }
       tooltip.hidden = false;
@@ -9347,18 +10020,28 @@
       tooltip.style.left = Math.round(left) + "px";
     }
     document.addEventListener("mouseover", function (event) {
+      rememberPointer(event);
+      if (tooltip.contains(event.target)) return;
       var term = event.target.closest && event.target.closest(".glossary-term, .alc-translation-quality");
-      if (term) open(term);
+      if (term && (term.dataset.qualityTooltip || state.readerPreferences.glossaryDisplay === "hover")) open(term);
+    });
+    document.addEventListener("click", function (event) {
+      if (tooltip.contains(event.target)) return;
+      var term = event.target.closest && event.target.closest(".glossary-term");
+      if (term && state.readerPreferences.glossaryDisplay !== "none") open(term);
     });
     document.addEventListener("mouseout", function (event) {
+      rememberPointer(event);
+      if (tooltip.contains(event.target)) return;
       var term = event.target.closest && event.target.closest(".glossary-term, .alc-translation-quality");
-      if (term && !term.dataset.qualityTooltip && (!event.relatedTarget || !term.contains(event.relatedTarget))) close();
+      if (term && !term.dataset.qualityTooltip && state.readerPreferences.glossaryDisplay === "hover" && (!event.relatedTarget || (!term.contains(event.relatedTarget) && !tooltip.contains(event.relatedTarget)))) scheduleClose();
     });
     document.addEventListener("focusin", function (event) {
+      if (tooltip.contains(event.target)) { cancelClose(); return; }
       if (event.target.matches && event.target.matches(".glossary-term, .alc-translation-quality")) open(event.target);
     });
     document.addEventListener("focusout", function (event) {
-      if (event.target === active && !active.dataset.qualityTooltip) close();
+      if (event.target === active && !active.dataset.qualityTooltip && (!event.relatedTarget || !tooltip.contains(event.relatedTarget))) scheduleClose();
     });
     document.addEventListener("keydown", function (event) {
       if (event.key === "Escape") close();
@@ -9366,8 +10049,8 @@
     document.addEventListener("pointerdown", function (event) {
       if (active && !active.contains(event.target) && !tooltip.contains(event.target)) close();
     });
-    window.addEventListener("scroll", close, {passive: true});
-    window.addEventListener("resize", close);
+    window.addEventListener("scroll", closeIfOutside, {passive: true});
+    window.addEventListener("resize", closeIfOutside);
   }
 
   function captureExportTemplate() {
@@ -9376,6 +10059,7 @@
     );
     if (!state.exportStandaloneSupported) return;
     var root = document.documentElement.cloneNode(true);
+    removeDeletedContentControls(root);
     var body = root.querySelector("body");
     var readingArea = root.querySelector("#ac-document");
     var header = root.querySelector("#alc-book-header");
@@ -9554,7 +10238,9 @@
   }
 
   function selectedForMarkdown(scope) {
-    var values = Array.from(state.selected.values()).filter(fragmentIsVisible);
+    var values = Array.from(state.selected.values()).filter(function (revision) {
+      return fragmentIsVisible(revision) || (scope === "changed" && sourceEditOperation(revision));
+    });
     if (scope === "changed") {
       values = values.filter(function (revision) {
         return state.initialSelectedDigests.get(revision.fragment_id) !==
@@ -9596,7 +10282,7 @@
       input.value = role;
       input.checked = state.exportMarkdownRoles.has(role);
       var unavailable = changedOnly && (
-        role === "source" || !changedRoles.has(role)
+        !changedRoles.has(role)
       );
       input.disabled = state.exportInProgress || unavailable;
       input.addEventListener("change", function () {
@@ -9729,7 +10415,7 @@
       ));
       if (changedGlossaryEntries().length) changedRoles.add("glossary");
       categories = new Set(Array.from(categories).filter(function (role) {
-        return role !== "source" && changedRoles.has(role);
+        return changedRoles.has(role);
       }));
     } else {
       var availableValues = ["source"].concat(
@@ -9857,17 +10543,26 @@
       }
       var translation = translations.get(block.block_id) || null;
       var sourceMarkdown = exportSourceBlockMarkdown(
-        block, documentValue, resourcePaths
+        block, documentValue, resourcePaths, false
       );
       sourceMarkdown = exportListOwnedMarkdown(block, sourceMarkdown, false);
-      if (sourceSelected) pushExportPart(parts, sourceMarkdown);
+      if (sourceSelected) {
+        pushExportPart(parts, sourceMarkdown);
+        var sourceRevision = sourceReplacement(block.block_id);
+        if (sourceRevision) selectedRevisionDigests.push(sourceRevision.semantic_digest);
+
+      }
       if (translationSelected) {
         if (translation) {
           var translatedMarkdown = exportSelectedRevisionMarkdown(
             block, documentValue, translation, resourcePaths
           );
           if (sourceSelected) {
-            if (block.kind === "figure") {
+            if (block.kind === "equation" && !translation.title &&
+                normalizeMarkdown(sourceMarkdown).trim() === normalizeMarkdown(translatedMarkdown).trim()) {
+              translatedMarkdown = "";
+            }
+            if (block.kind === "figure" && !sourceReplacement(block.block_id)) {
               translatedMarkdown = rewriteMarkdownResourceTargets(
                 projectedRevisionMarkdown(translation), resourcePaths
               );
@@ -9882,8 +10577,10 @@
           pushExportPart(parts, translatedMarkdown);
           selectedTranslationDigests.push(translation.semantic_digest);
           selectedRevisionDigests.push(translation.semantic_digest);
-        } else if (!sourceSelected) {
-          pushExportPart(parts, sourceMarkdown);
+        } else if (!sourceSelected && !translationWasDeleted(block.block_id)) {
+          pushExportPart(parts, exportListOwnedMarkdown(
+            block, exportOriginalSourceBlockMarkdown(block, documentValue, resourcePaths), false
+          ));
         }
       } else if (
         !sourceSelected && supplementSelected && block.kind === "heading"
@@ -9910,6 +10607,15 @@
             );
           }
         }
+      });
+      parallelGroups(block.block_id).forEach(function (group) {
+        [["source", sourceSelected], ["translation", translationSelected]].forEach(function (selection) {
+          var revision = group[selection[0]];
+          if (!selection[1] || !fragmentIsVisible(revision)) return;
+          pushExportPart(parts, rewriteMarkdownResourceTargets(revision.markdown_body, resourcePaths));
+          selectedRevisionDigests.push(revision.semantic_digest);
+          if (revision.role === "translation") selectedTranslationDigests.push(revision.semantic_digest);
+        });
       });
       appendFrontMatter(blockIndex + 1);
       (supplements.get(block.block_id) || []).forEach(function (revision) {
@@ -10040,7 +10746,7 @@
     var changedNoteTranslations = categories.has("translation") ?
       sourceNoteTranslations(documentValue, changedValues) : new Map();
     var revisions = changedValues.filter(function (revision) {
-      return categories.has(revision.role) && revision.role !== "source" &&
+      return categories.has(revision.role) &&
         !sourceNoteTranslationId(documentValue, revision);
     });
     revisions.sort(function (left, right) {
@@ -10071,7 +10777,7 @@
     var selectedGlossaryRevisionDigests = [];
     revisions.forEach(function (revision) {
       var block = blockById.get(fragmentTargetId(revision));
-      var markdown = block && revision.role === "translation" ?
+      var markdown = revision.deleted ? labels().deleteSuccess : block && revision.role === "translation" ?
         exportSelectedRevisionMarkdown(
           block, documentValue, revision, resourcePaths
         ) : rewriteMarkdownResourceTargets(
@@ -10129,7 +10835,7 @@
       if (
         !fragmentIsVisible(revision) ||
         sourceNoteTranslationId(documentValue, revision) ||
-        revision.role !== "translation" ||
+        revision.role !== "translation" || parallelPairId(revision) ||
         anchor.kind !== "block" ||
         !blockIds.has(anchor.target_id) ||
         !Array.isArray(related) || related.length !== 1 ||
@@ -10216,7 +10922,17 @@
     });
   }
 
-  function exportSourceBlockMarkdown(block, documentValue, resourcePaths) {
+  function exportSourceBlockMarkdown(block, documentValue, resourcePaths, includeInsertions) {
+    var replacement = sourceReplacement(block.block_id);
+    var body = replacement ? (replacement.deleted ? "" : rewriteMarkdownResourceTargets(replacement.markdown_body, resourcePaths)) :
+      exportOriginalSourceBlockMarkdown(block, documentValue, resourcePaths);
+    if (includeInsertions === false) return body;
+    return [body].concat(sourceInsertions(block.block_id).map(function (revision) {
+      return rewriteMarkdownResourceTargets(revision.markdown_body, resourcePaths);
+    })).filter(Boolean).join("\n\n");
+  }
+
+  function exportOriginalSourceBlockMarkdown(block, documentValue, resourcePaths) {
     var payload = block.payload || {};
     if (block.kind === "heading") {
       var headingPresentation = sourcePresentationBlock(
@@ -11735,10 +12451,13 @@
         '"].is-inline-editing'
       );
     }
-    if (!state.activeDraft || !state.activeDraft.base) return null;
+    if (!state.activeDraft) return null;
+    var fragmentId = state.activeDraft.inlineFragmentId ||
+      (state.activeDraft.base && state.activeDraft.base.fragment_id);
+    if (!fragmentId) return null;
     return document.querySelector(
       '.alc-fragment[data-fragment-id="' +
-      cssString(state.activeDraft.base.fragment_id) + '"].is-inline-editing'
+      cssString(fragmentId) + '"].is-inline-editing'
     );
   }
 
@@ -11766,6 +12485,9 @@
   }
 
   function attemptInlineDraftExit(event) {
+    // A selection drag can dispatch its final click on an outside ancestor.
+    // Pointer gestures are handled at pointerdown; click is for keyboard activation.
+    if (event.type === "click" && event.detail > 0) return;
     var card = activeInlineDraftCard();
     var advanced = document.getElementById("alc-editor-dialog");
     var guard = document.getElementById("alc-unsaved-dialog");
@@ -12065,15 +12787,19 @@
     }
     state.directorySelectionInProgress = true;
     var previousDirectory = state.directory;
+    var connectionStage = labels().storageSelect;
     try {
       var handle = await window.showDirectoryPicker({
         id: "alc-render-project",
         mode: "readwrite"
       });
+      connectionStage = labels().storagePermission;
       var permission = await handle.requestPermission({mode: "readwrite"});
       if (permission !== "granted") throw new Error("read/write permission was not granted");
       setStatus(labels().loading);
+      connectionStage = labels().storageRead;
       if (!await loadDirectoryRevisions(handle)) return false;
+      connectionStage = labels().storageRemember;
       await rememberDirectoryHandle(handle);
       updateDirectoryControl();
       setStatus(labels().connected);
@@ -12082,7 +12808,7 @@
       if (error && error.name === "AbortError") return false;
       state.directory = previousDirectory;
       updateDirectoryControl();
-      setStatus(String(error.message || error), "error");
+      setStatus(connectionStage + labels().storageFailure + String(error.message || error), "error", true);
       return false;
     } finally {
       state.directorySelectionInProgress = false;
@@ -12818,7 +13544,9 @@
       role: fragment.role,
       priority: fragment.priority,
       markdown_body: fragment.markdown_body || "",
-      appearance: appearanceForGroup(fragment.role, fragment.priority)
+      appearance: appearanceForGroup(fragment.role, fragment.priority),
+      parallelPairId: parallelPairId(fragment),
+      lockParallelRole: Boolean(parallelPairId(fragment))
     };
   }
 
@@ -12871,7 +13599,9 @@
       if (markdown && typeof markdown.focus === "function") markdown.focus();
       return;
     }
-    if (state.activeDraft.base) {
+    if (state.activeDraft.inlineFragmentId) {
+      focusInlineEditor(state.activeDraft.inlineFragmentId);
+    } else if (state.activeDraft.base) {
       focusInlineEditor(state.activeDraft.base.fragment_id);
     }
   }
@@ -12936,7 +13666,7 @@
 
   function recoverableFragmentAtAnchor(anchor) {
     var candidates = Array.from(state.selected.values()).filter(function (fragment) {
-      return !fragmentIsVisible(fragment) && fragment.anchor &&
+      return !sourceEditOperation(fragment) && !fragmentIsVisible(fragment) && fragment.anchor &&
         fragment.anchor.kind === anchor.kind &&
         fragment.anchor.target_id === anchor.target_id;
     });
@@ -13011,6 +13741,10 @@
       document.getElementById("alc-editor-markdown").value = draft.definition;
     } else {
       var role = document.getElementById("alc-editor-role");
+      role.disabled = Boolean(draft.sourceEdit || sourceEditOperation(draft.base) || draft.lockParallelRole);
+      Array.prototype.forEach.call(role.options || [], function (option) {
+        if (option.value === "source") option.hidden = !role.disabled;
+      });
       role.value = draft.role || "note";
       syncCustomSelect(role);
       document.getElementById("alc-editor-priority").value = String(draft.priority || 110);
@@ -13073,6 +13807,7 @@
     state.editorHistorical = null;
     var dialog = document.getElementById("alc-editor-dialog");
     if (dialog && dialog.open) dialog.close();
+    refreshChunkForAnchor(anchor);
     if (fragmentId) replaceFragmentCard(fragmentId, anchor);
   }
 
@@ -13746,7 +14481,7 @@
       assertKnownCitations(revisionEditable.citation_ids);
       if (base) assertEditorBaseCurrent(base);
       if (
-        base && !deleting &&
+        base && !deleting && (!draft.parallelPairId || draft.parallelPairId === parallelPairId(base)) &&
         stableStringify(editable) ===
           stableStringify(editableRevisionState(base))
       ) {
@@ -13761,6 +14496,20 @@
       if (base) assertEditorBaseCurrent(base);
       var metadata = base ? metadataOnly(base) : newNoteMetadata(editorAnchor);
       metadata.schema_version = FRAGMENT_SCHEMA;
+      if (draft.sourceEdit) {
+        metadata.provenance.source_edit = draft.sourceEdit;
+        metadata.language = (state.payload.publication.reader_profile || {}).source_language || "und";
+        if (!base && draft.sourceEdit.operation === "replace") {
+          metadata.fragment_id = "source-" + await semanticDigest({target: editorAnchor.target_id}, "");
+          if (state.revisions.has(metadata.fragment_id) || sourceReplacement(editorAnchor.target_id)) {
+            throw new Error(labels().historyChanged);
+          }
+        }
+      }
+      if (draft.parallelPairId || (!base && editorAnchor.kind === "block" &&
+          (draft.sourceEdit && draft.sourceEdit.operation === "insert" || revisionEditable.role === "translation" && revisionEditable.priority >= 101))) {
+        metadata.provenance.parallel_edit = {schema_version: "alc.render.parallel_edit.v1", pair_id: draft.parallelPairId || metadata.fragment_id};
+      }
       metadata.appearance = revisionEditable.appearance;
       metadata.deleted = deleting;
       metadata.revision = base ? base.revision + 1 : 1;
@@ -13774,11 +14523,25 @@
         edited_at: new Date().toISOString(),
         appearance_scope: "role_priority"
       });
+      if (!deleting && base && metadata.role === "translation" &&
+          normalizeMarkdown(base.markdown_body) !== normalizeMarkdown(revisionEditable.markdown_body)) {
+        metadata.provenance.translation_quality_resolved = {by: "user_edit", edited_at: metadata.provenance.edited_at};
+      }
+      if (deleting) metadata.provenance.deleted_at = metadata.provenance.edited_at;
+      else delete metadata.provenance.deleted_at;
       updateGlossaryMentionProvenance(
         metadata.provenance, metadata, revisionEditable.markdown_body,
         state.payload.publication.glossary || []
       );
       validateRevisionMetadata(metadata);
+      if (metadata.provenance.parallel_edit) {
+        state.selected.forEach(function (other) {
+          if (other.fragment_id === metadata.fragment_id || parallelPairId(other) !== metadata.provenance.parallel_edit.pair_id) return;
+          if (other.anchor.target_id !== metadata.anchor.target_id || other.role === metadata.role) {
+            throw new Error("此对照位置已有内容，请重新打开该行后编辑。");
+          }
+        });
+      }
       var digest = await semanticDigest(metadata, revisionEditable.markdown_body);
       var encoded = FRONT_BEGIN + "\n" + stableStringify(metadata) + "\n" +
         FRONT_END + "\n" + revisionEditable.markdown_body;
@@ -13891,7 +14654,7 @@
     if (!draft) return false;
     try {
       if (!draft.base) {
-        return stableStringify(editableDraftState(draft)) !== stableStringify({
+        return stableStringify(editableDraftState(draft)) !== stableStringify(draft.initialEditableState || {
           title: null,
           markdown_body: normalizeMarkdown(""),
           role: "note",
@@ -13900,7 +14663,8 @@
           appearance: null
         });
       }
-      return stableStringify(editableDraftState(draft)) !==
+      return Boolean(draft.parallelPairId && draft.parallelPairId !== parallelPairId(draft.base)) ||
+        stableStringify(editableDraftState(draft)) !==
         stableStringify(editableRevisionState(draft.base));
     } catch (_error) {
       return true;
@@ -14108,7 +14872,7 @@
       anchor: anchor,
       priority: 110,
       role: "note",
-      language: profile.target_language || profile.source_language || "und",
+      language: profile.target_language || targetLanguage() || profile.source_language || "und",
       title: null,
       citation_ids: [],
       appearance: null,
@@ -14352,6 +15116,24 @@
     if (!plainObject(metadata.provenance)) {
       throw new Error("fragment provenance must be an object");
     }
+    if (metadata.provenance.source_edit !== undefined) {
+      var sourceEdit = metadata.provenance.source_edit;
+      requireExactObject(sourceEdit, ["schema_version", "operation"], "source edit");
+      if (sourceEdit.schema_version !== "alc.render.source_edit.v1" ||
+          ["replace", "insert"].indexOf(sourceEdit.operation) < 0 ||
+          metadata.role !== "source" || metadata.anchor.kind !== "block") {
+        throw new Error("invalid source edit provenance");
+      }
+    }
+    if (metadata.provenance.parallel_edit !== undefined) {
+      var pairing = metadata.provenance.parallel_edit;
+      requireExactObject(pairing, ["schema_version", "pair_id"], "parallel edit");
+      if (pairing.schema_version !== "alc.render.parallel_edit.v1" || !normalizedNonblank(pairing.pair_id) ||
+          ["source", "translation"].indexOf(metadata.role) < 0 || metadata.anchor.kind !== "block" || metadata.priority < 101 ||
+          metadata.role === "source" && (!metadata.provenance.source_edit || metadata.provenance.source_edit.operation !== "insert")) {
+        throw new Error("invalid parallel edit provenance");
+      }
+    }
     normalizeAppearance(metadata.appearance);
     if (typeof metadata.deleted !== "boolean") {
       throw new Error("fragment deleted flag must be a boolean");
@@ -14561,7 +15343,7 @@
     return String(value).replace(/[^A-Za-z0-9_.:-]/g, "-");
   }
 
-  function setStatus(value, kind) {
+  function setStatus(value, kind, persistent) {
     var status = document.getElementById("alc-storage-status");
     if (state.statusTimer !== null) {
       window.clearTimeout(state.statusTimer);
@@ -14575,7 +15357,7 @@
       status.setAttribute("role", kind === "error" ? "alert" : "status");
       status.setAttribute("aria-live", kind === "error" ? "assertive" : "polite");
     }
-    if (!value) return;
+    if (!value || persistent) return;
     var timer = window.setTimeout(function () {
       if (state.statusTimer !== timer) return;
       state.statusTimer = null;
@@ -14656,8 +15438,8 @@
       captureInitialSelection();
       captureInitialGlossarySelection();
       setupCustomSelectEvents();
-      setupReaderSettings();
       renderReader();
+      setupReaderSettings();
       setupVisibility();
       setupSpeech();
       setupTooltip();
