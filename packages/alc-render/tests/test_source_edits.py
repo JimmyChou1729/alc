@@ -68,7 +68,7 @@ def test_source_revisions_render_export_and_restore_independently():
     console.log('source revision projection passed');
 }());
 '''
-    result = subprocess.run([node,'-e',script],capture_output=True,text=True)
+    result = subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 
@@ -112,7 +112,7 @@ def test_first_delete_cancel_failure_and_newer_storage_leave_no_hidden_draft():
     }()).catch(error=>{console.error(error);process.exitCode=1;});
 }());
 '''
-    result=subprocess.run([node,'-e',script],capture_output=True,text=True)
+    result=subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode==0,result.stderr
 
 
@@ -202,7 +202,7 @@ def test_source_delete_writes_verified_revision_and_reloads():
     })().catch(error=>{console.error(error);process.exitCode=1;});
 }());
 '''
-    result = subprocess.run([node, '-e', script], capture_output=True, text=True)
+    result = subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 
@@ -231,7 +231,7 @@ def test_translation_only_fallback_preserves_source_list_ownership():
     assert.deepEqual(result.selectedRevisionDigests,[]);
 }());
 '''
-    result = subprocess.run([node, '-e', script], capture_output=True, text=True)
+    result = subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 
@@ -254,7 +254,7 @@ def test_connection_failure_retains_stage_and_releases_busy_state():
     })().catch(error=>{console.error(error);process.exitCode=1;});
 }());
 '''
-    result = subprocess.run([node, '-e', script], capture_output=True, text=True)
+    result = subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 
@@ -313,7 +313,7 @@ def test_unsaved_source_inline_draft_and_deleted_toolbar_visibility():
 
 }());
 '''
-    result=subprocess.run([node,'-e',script],capture_output=True,text=True)
+    result=subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode==0,result.stderr
 
 
@@ -362,7 +362,7 @@ def test_term_display_modes_and_hover_bridge():
     assert.equal(tooltip.hidden,true);
 }());
 '''
-    result=subprocess.run([node,'-e',script],capture_output=True,text=True)
+    result=subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode==0,result.stderr
 
 
@@ -417,7 +417,7 @@ def test_deleted_source_has_no_actions_or_edit_listeners():
 
 }());
 '''
-    result=subprocess.run([node,'-e',script],capture_output=True,text=True)
+    result=subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode==0,result.stderr
 
 
@@ -445,7 +445,7 @@ def test_figure_natural_size_handles_loaded_and_loading_copies():
     assert.equal(sized.style.maxWidth,'400px');
 }());
 '''
-    result=subprocess.run([node,'-e',script],capture_output=True,text=True)
+    result=subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode==0,result.stderr
 
 
@@ -487,7 +487,7 @@ def test_contents_titles_follow_saved_source_and_visible_translation():
     assert.equal(updates,1);
 }());
 '''
-    result = subprocess.run([node, '-e', script], capture_output=True, text=True)
+    result = subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 
@@ -526,7 +526,7 @@ def test_parallel_additions_bind_by_id_not_position_and_survive_deletion():
     assert.equal(draftFromFragment(a).parallelPairId,'pair-a');
 }());
 '''
-    result=subprocess.run([node,'-e',script],capture_output=True,text=True)
+    result=subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode==0,result.stderr
 
 
@@ -559,7 +559,7 @@ def test_source_addition_speech_starts_at_clicked_fragment_and_highlights_it():
     assert.deepEqual(buildSpeechQueue(new Set(['source'])).map(speechSegmentText),['Original','新增一段原文']);
 }());
 '''
-    result=subprocess.run([node,'-e',script],capture_output=True,text=True)
+    result=subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode==0,result.stderr
 
 
@@ -589,7 +589,7 @@ def test_deleted_content_order_is_newest_then_document_position():
     assert.equal(deletedContentEntries()[0].fragment_id,'older');
 }());
 '''
-    result=subprocess.run([node,'-e',script],capture_output=True,text=True)
+    result=subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode==0,result.stderr
 
 
@@ -617,7 +617,7 @@ def test_restoring_deleted_content_closes_without_reopening_dialog():
     })().catch(error=>{console.error(error);process.exitCode=1;});
 }());
 '''
-    result=subprocess.run([node,'-e',script],capture_output=True,text=True)
+    result=subprocess.run([node, '-'], input=script, capture_output=True, text=True)
     assert result.returncode==0,result.stderr
 
 
@@ -641,7 +641,7 @@ def test_dismissed_and_corrected_translation_clear_quality_stripe():
     dismissedQualityFragments.clear();fragment.provenance.translation_quality_resolved={by:'user_edit'};
     markDeliveryState(row,'b');assert(!classes.has('alc-source-text-fallback'));
     }());'''
-    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+    subprocess.run(['node', '-'], input=script, check=True, capture_output=True, text=True)
 
 
 def test_selection_drag_does_not_close_inline_editor():
@@ -670,4 +670,4 @@ def test_selection_drag_does_not_close_inline_editor():
     dirty=true;attemptInlineDraftExit(event('pointerdown',outside));assert.equal(prompted,1);
     attemptInlineDraftExit(event('click',outside,0));assert.equal(prompted,2);
     }());'''
-    subprocess.run(['node','-e',script],check=True,capture_output=True,text=True)
+    subprocess.run(['node', '-'], input=script, check=True, capture_output=True, text=True)
