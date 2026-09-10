@@ -23,13 +23,13 @@
     {
       "id": "product",
       "repository": "https://github.com/tririver/alc.git",
-      "commit": "b408217e7adfeffd4b41b4fe1bf79bc9314f2b27",
+      "commit": "a2da2b6c9d8017975027a6a316cdea46e33c6d3e",
       "packages": [
         "alc-catalog",
-        "alc-render",
+        "alc-companion",
         "alc-ocr-proofread",
-        "alc-translate",
-        "alc-companion"
+        "alc-render",
+        "alc-translate"
       ],
       "tools": [
         "alc-render",
