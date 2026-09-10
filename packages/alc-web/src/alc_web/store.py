@@ -163,6 +163,37 @@ class Store:
                        (json.dumps(spec), time.time(), job_id))
         return True
 
+    def resume_ocr_review(self, job_id: str, runtime: dict) -> dict:
+        """Continue a verified completed OCR candidate under the caller's worker lease."""
+        root = self.job_directory(job_id)
+        if (root / "project").exists() or (root / "source-export").exists():
+            raise ValueError("Cannot migrate a review after downstream work has started.")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if (row is None or row["state"] != "needs_input" or row["phase"] != "ocr_proofread"
+                    or (json.loads(row["error"] or "{}") or {}).get("code") != "ocr_review_required"
+                    or json.loads(row["result"] or "null")):
+                raise ValueError("This task is not awaiting its first OCR review.")
+            display = db.execute("SELECT deleted FROM job_presentation WHERE job_id=?", (job_id,)).fetchone()
+            if display and display[0]:
+                raise ValueError("任务已从列表删除，不能继续运行。")
+            spec = json.loads(row["spec"])
+            old = spec.get("runtime", {})
+            if any(old.get(k) != runtime.get(k) for k in ("schema_version", "python", "libraries")):
+                raise ValueError("Runtime libraries changed; restore the saved runtime before continuing.")
+            allowed = {"ac-document", "alc-ocr-proofread", "alc-web"}
+            if set(old.get("packages", {})) != set(runtime.get("packages", {})) or any(
+                old["packages"][name].get("version") != value.get("version")
+                or (name not in allowed and old["packages"][name] != value)
+                for name, value in runtime.get("packages", {}).items()
+            ):
+                raise ValueError("Downstream runtime changed; restore it before continuing.")
+            spec["runtime"] = runtime
+            db.execute("UPDATE jobs SET spec=?,state='queued',control=NULL,resume_input=NULL,error=NULL,updated=? WHERE id=?", (json.dumps(spec), time.time(), job_id))
+            self._event(db, job_id, "ocr.review_continued", {"previous_runtime": old, "runtime": runtime})
+        return self.get(job_id)
+
     def update(self, job_id: str, **fields: Any) -> None:
         if set(fields) - {
             "state",

@@ -296,6 +296,31 @@ class FragmentRevision:
         provenance = freeze_json(self.provenance, "provenance")
         if not isinstance(provenance, Mapping):
             raise ValueError("provenance must be an object")
+        source_edit = provenance.get("source_edit")
+        if source_edit is not None:
+            if (
+                not isinstance(source_edit, Mapping)
+                or set(source_edit) != {"schema_version", "operation"}
+                or source_edit["schema_version"] != "alc.render.source_edit.v1"
+                or source_edit["operation"] not in {"replace", "insert"}
+                or self.role != "source"
+                or self.anchor.kind != "block"
+            ):
+                raise ValueError("invalid source edit provenance")
+        pairing = provenance.get("parallel_edit")
+        if pairing is not None:
+            if (
+                not isinstance(pairing, Mapping)
+                or set(pairing) != {"schema_version", "pair_id"}
+                or pairing["schema_version"] != "alc.render.parallel_edit.v1"
+                or not isinstance(pairing["pair_id"], str)
+                or not pairing["pair_id"].strip()
+                or self.role not in {"source", "translation"}
+                or self.anchor.kind != "block"
+                or self.priority < 101
+                or (self.role == "source" and (source_edit or {}).get("operation") != "insert")
+            ):
+                raise ValueError("invalid parallel edit provenance")
         _require_integer_json_numbers(provenance, "provenance")
         if not isinstance(self.markdown_body, str):
             raise ValueError("markdown_body must be a string")

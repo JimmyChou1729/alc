@@ -233,15 +233,16 @@ unchanged.
 
 A retry contains only invalid or missing blocks, includes the exact bounded
 validation diagnostics, and retains valid neighbors from the first response.
-A second invalid result preserves only the still-invalid smallest source
-translation units and records the fallback. Translation fragments assembled
+When the protected-atom repair still omits an atom, one final strict text-slot
+request targets only the failed blocks; the caller restores the original atoms.
+After bounded repair, only still-invalid smallest source translation units
+preserve source text and record a fallback. Translation fragments assembled
 this way carry
 `protected_atoms = {schema_version,assembled_by}` provenance. Existing
 pre-v13 `{block_id,text}` accepted artifacts are read only through the explicit
 legacy compatibility path and are never reclassified as protected-atom output.
 An agent may correct a candidate and resume without another provider call.
-Deleting an exhausted retry candidate does not grant a third automatic
-generation attempt.
+Deleting an exhausted retry candidate does not reset this bounded repair budget.
 Captionless tables and figures without caption or alt text have no language
 surface and are preserved programmatically instead of entering a zero-slot
 model request; source notes anchored to their cells or headers remain normal
@@ -335,3 +336,23 @@ The default `standard` keeps normal host execution behavior; `local-app` selects
 the isolated local application profile explicitly. Injected execution options
 from the Web application retain precedence. This execution choice does not
 modify the frozen review recipe.
+
+## Verified PDF sources
+
+After `ac-document parse-pdf-mineru` (or `parse-pdf-configured-mineru`), pass its
+normalized source HTML with `--pdf-source-manifest <manifest.json>`. This binds
+all content to the original PDF pages and preserves extraction warnings, images
+and structure. The manifest is verified before learning work; OCR is not marked
+as proofread. Do not combine this route with an HTML acquisition manifest or
+a PDF text-layer validator.
+Use the same manifest on detect-language, build-glossary and translate-blocks.
+
+Simple plain-text math labels such as `$x$` in preferred glossary translations
+are normalized to `x`; compound TeX remains subject to validation. Failed
+formula-bearing text-slot coverage uses a bounded, failed-block-only protected
+atom retry, with protected-atom review when target-language ordering differs.
+Successful neighboring blocks and immutable formula/link identities are retained.
+
+Glossary recovery removes ANSI styling and a NUL immediately before a TeX command.
+Other unknown control characters remain validation failures; recovery never removes
+formula commands or bypasses the normal glossary validator.

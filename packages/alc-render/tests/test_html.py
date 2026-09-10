@@ -3295,6 +3295,22 @@ assert(
     .panels[2].row_index === 1,
   "source Figure layout"
 );
+var unnamedFigurePresentation = JSON.parse(JSON.stringify(presentationDocument));
+unnamedFigurePresentation.metadata.source_target_manifest.targets[0].panels[0].source_id = "";
+unnamedFigurePresentation.metadata.source_presentation.figures[0].panels[0].source_id = "";
+assert(
+  helpers.sourceFigurePresentation(unnamedFigurePresentation, "figure-1").panels[0].source_id === "",
+  "an image without an authored ID must retain its indexed panel binding"
+);
+var mismatchedFigurePresentation = JSON.parse(JSON.stringify(unnamedFigurePresentation));
+mismatchedFigurePresentation.metadata.source_presentation.figures[0].panels[0].source_id = "wrong";
+var mismatchedFigureRejected = false;
+try {
+  helpers.sourceFigurePresentation(mismatchedFigurePresentation, "figure-1");
+} catch (_error) {
+  mismatchedFigureRejected = true;
+}
+assert(mismatchedFigureRejected, "a mismatched Figure source ID was accepted");
 var invalidFigurePresentation = JSON.parse(JSON.stringify(presentationDocument));
 invalidFigurePresentation.metadata.source_presentation.figures[0]
   .layout.rows = [[1, 0]];

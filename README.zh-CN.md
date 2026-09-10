@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-ALC 将源文档处理为译文、交互式 HTML 阅读器，以及与原文对应的伴读内容。
+ALC 将源文档（DOI、arxiv ID、HTML、PDF、Markdown等）处理为译文、交互式 HTML 阅读器，以及与原文对应的伴读内容。
 
 ## 安装
 
@@ -14,8 +14,8 @@ ALC 将源文档处理为译文、交互式 HTML 阅读器，以及与原文对�
 **智能体插件**让 Codex、Claude Code 或 DeepSeek Harness 根据自然语言指令
 执行 ALC 工作流。
 
-两个入口使用同一套 Python 工作流包。模型配置与任务状态不会自动互通；
-安装插件也不会启动 Local Web。
+两个入口使用同一套 Python 工作流包。Local Web 可以发现同一台电脑上的 Agent
+项目历史，但不会接管这些任务。模型配置仍各自独立，安装插件也不会启动 Local Web。
 
 ### Local Web
 
@@ -96,6 +96,36 @@ python3 scripts/alc-web.py --project-dir local/reading-workspace
 插件按需准备运行环境并使用锁定的 Git revision，无需手动克隆仓库。
 详细工作流见 [Skill 指南](plugins/alc/skills/alc/SKILL.md)。
 
+### PDF 识别与 OCR 校对
+
+ALC 使用 **MinerU** 识别 PDF 文档，保留公式、图片、表格及页码映射，同时保存原始 PDF 和识别证据。
+
+处理流程：
+
+```mermaid
+flowchart TD
+    A["DOI、arXiv ID、HTML、PDF、Markdown 等"] --> B["获取文档并解析来源"]
+    B --> C{"是否为 PDF？"}
+    C -->|是| D["MinerU 识别：文字、公式、图片、表格"]
+    D --> E["可选：对照原 PDF 逐页校对"]
+    E --> F["构建文档结构、内容块与来源锚点"]
+    C -->|否| F
+    F --> H{"按已选任务类型执行"}
+    H -->|原文阅读| O["组合当前任务的原文及生成内容"]
+    H -->|翻译| T1["识别原文语言，判断是否需要翻译"]
+    T1 --> T2["需要翻译时：建立术语表、分块翻译及可选校对"]
+    T2 --> O
+    H -->|伴读| C1["识别原文语言，判断是否需要翻译"]
+    C1 --> C2["需要翻译时：建立术语表，按章节完成翻译及可选校对"]
+    C2 --> C3["按章节生成伴读及可选校对；超长章节分批处理"]
+    C3 --> O
+    O --> P["生成交互式 HTML Reader"]
+    P --> Q["阅读、编辑与历史恢复"]
+    Q --> R["导出 HTML 或 Markdown 源码包"]
+```
+
+详细说明见 [Local Web PDF 配置](packages/alc-web/README.zh-CN.md#pdf-识别)、 [OCR 校对接口](packages/alc-ocr-proofread/README.md#native-pdf-source-bundles)和 [本地 MinerU 安装](packages/alc-ocr-proofread/README.md#opt-in-local-mineru-setup)。
+
 ## 包与架构
 
 | 包 | 职责 |
@@ -104,6 +134,7 @@ python3 scripts/alc-web.py --project-dir local/reading-workspace
 | [`alc-translate`](packages/alc-translate/README.md) | 语言识别、术语表、翻译和校对 |
 | [`alc-render`](packages/alc-render/README.md) | 文档组合与交互式 HTML |
 | [`alc-companion`](packages/alc-companion/README.md) | 与原文对应的伴读构建和修订 |
+| [`alc-catalog`](packages/alc-catalog/README.md) | Agent 与 Web 共享的本地项目历史发现 |
 | [`alc-web`](packages/alc-web/README.zh-CN.md) | 本地 HTTP 应用、任务队列与 Reader 交付 |
 
 [AC Foundation](https://github.com/tririver/ac-foundation) 负责持久化任务、模型执行、
@@ -133,8 +164,10 @@ scripts/build-packages.sh
 scripts/release-alc.sh VERSION
 ```
 
-`VERSION` 使用 `MAJOR.MINOR.PATCH` 格式。发布脚本统一更新包和插件版本。
-本项目不假设包已在 PyPI 发布。
+`VERSION` 使用 `MAJOR.MINOR.PATCH` 格式。发布脚本统一更新包和插件版本，并同时更新
+产品源码 SHA 与包清单；插件运行环境不包含可选的 Web 应用。新的源码提交形成前，应保持
+现有 runtime lock 与其固定提交一致。新增 Foundation API 必须先包含在固定的 Foundation
+提交中，才能进行干净环境的 CI 或发布验证；工作区覆盖只用于本地开发。本项目不假设包已在 PyPI 发布。
 
 ## 许可证
 

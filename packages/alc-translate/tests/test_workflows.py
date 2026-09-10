@@ -3475,7 +3475,7 @@ def test_missing_link_atom_is_restored_without_source_fallback(tmp_path):
     assert tasks.calls.count(TRANSLATION_PROMPT_VERSION) == 1
 
 
-@pytest.mark.parametrize("always_invalid", [False, True])
+@pytest.mark.parametrize("always_invalid", [False, True, "repair"])
 def test_translation_retry_is_scoped_and_preserves_valid_neighbors(
     tmp_path: Path, always_invalid: bool
 ) -> None:
@@ -3490,7 +3490,18 @@ def test_translation_retry_is_scoped_and_preserves_valid_neighbors(
             paper.import_source(markdown)
         )
     )
-    tasks = ScopedAtomRetryTasks(always_invalid=always_invalid)
+    class RecoveringTasks(ScopedAtomRetryTasks):
+        def execute_or_resume(self, context, request, *, input=None, options=None):
+            contract, _ = _prompt(request.prompt)
+            if (always_invalid == "repair" and contract == TRANSLATION_PROMPT_VERSION
+                    and len(self.translation_blocks) == 2):
+                self.output_schemas = []
+                return TextSlotOnlyTasks.execute_or_resume(
+                    self, context, request, input=input, options=options
+                )
+            return super().execute_or_resume(context, request, input=input, options=options)
+
+    tasks = RecoveringTasks(always_invalid=always_invalid)
     context = _context(tmp_path, f"scoped-retry-{always_invalid}")
 
     result = TranslationWorkflowService(tasks).translate_blocks(
@@ -3517,7 +3528,7 @@ def test_translation_retry_is_scoped_and_preserves_valid_neighbors(
     )
 
     assert isinstance(result, TranslationResult)
-    assert [len(window) for window in tasks.translation_blocks] == [3, 1]
+    assert [len(window) for window in tasks.translation_blocks] == ([3, 1, 1] if always_invalid else [3, 1])
     revisions = [
         decode_fragment_revision(
             context.artifacts.read_bytes(item.artifact).decode("utf-8"),
@@ -3532,7 +3543,7 @@ def test_translation_retry_is_scoped_and_preserves_valid_neighbors(
         if "Neighbor remains translated" in item.markdown_body
     )
     assert "translation_fallback" not in neighbor.provenance
-    if always_invalid:
+    if always_invalid is True:
         assert formula.provenance["translation_fallback"]["kind"] == "source_text"
     else:
         assert "translation_fallback" not in formula.provenance
@@ -4833,3 +4844,53 @@ def test_glossary_salvage_keeps_only_unique_valid_source_bound_entries():
     assert len(retained) == 1
     assert retained[0]['term_id'] == 'a'
     assert retained[0]['matched_sentences'] == terms[0]['matched_sentences']
+
+
+def test_simple_math_delimiters_in_glossary_label_preserve_translation():
+    term = {'term_id':'t', 'term':'explicit x-dependence'}
+    value = {'entries':[{'term_id':'t', 'preferred_translation':'显式的 $x$ 依赖性', 'target_definition':'定义'}]}
+    result = _validate_glossary_window(value, [term])
+    assert result[0]['preferred_translation'] == '显式的 x 依赖性'
+    assert value['entries'][0]['preferred_translation'] == '显式的 $x$ 依赖性'
+    for label in ['复杂 $x^2$', '复杂 $$x$$', r'复杂 $\alpha$']:
+        value['entries'][0]['preferred_translation'] = label
+        with pytest.raises(TranslationWorkflowError):
+            _validate_glossary_window(value,[term])
+
+
+def test_paragraph_repair_keeps_atoms_and_supports_followup_review():
+    from alc_translate.workflow import (_protected_translation_retry_request,
+        _validate_model_protected_atom_window, _review_text_slot_projection,
+        _apply_text_slot_review)
+    from alc_translate.atoms import source_protected_parts
+    block={'block_id':'repair-b','kind':'paragraph','ordinal':0,'section_path':[],
+           'payload':{'text':'Before $x$ after.', 'inline_spans':[{'kind':'text','text':'Before $x$ after.'}]}}
+    from ac_llm import LLMRequest, JsonOutput
+    request=LLMRequest('parent','prompt',JsonOutput(TRANSLATION_SCHEMA))
+    language=LanguageResult('a'*64,'b'*64,'en','known',1,'zh-CN','enabled')
+    bad={'schema_version':TEXT_SLOT_RESULT_SCHEMA,'translations':{'repair-b':{'text_slots':{'repair-b.text-000000':'之前','repair-b.text-000001':''}}}}
+    retry=_protected_translation_retry_request(request,TranslationWorkflowError('translation_coverage_invalid','missing slot'),bad,[block],glossary=[],target_language='zh-CN',language=language,window_ordinal=0)
+    assert 'alc.translate.paragraph_repair.v1' in retry.prompt
+    parts=source_protected_parts(block)
+    # Move the atom while retaining every meaningful text part.
+    parts=[parts[1], {'kind':'text','text':'之后'}, {'kind':'text','text':'之前'}]
+    doc={'schema_version':PROTECTED_ATOM_RESULT_SCHEMA,'translations':[{'block_id':'repair-b','parts':parts}]}
+    draft=_validate_model_protected_atom_window(doc,[block])
+    projection=_review_text_slot_projection(block,draft[0])
+    assert projection['content']['schema_version']==PROTECTED_ATOM_RESULT_SCHEMA
+    review={'schema_version':PROTECTED_ATOM_REVIEW_RESULT_SCHEMA,'translation_patches':[],'summary':'完整'}
+    assert _apply_text_slot_review(review,draft,[block])[0]['text']==draft[0]['text']
+    doc['translations'][0]['parts']=[parts[0], parts[0], *parts[1:]]
+    with pytest.raises(TranslationWorkflowError):
+        _validate_model_protected_atom_window(doc,[block])
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("数学 $\x00\\mathbb{R}^n$", r"数学 $\mathbb{R}^n$"),
+    ("数学 $\x1b[0m\\sqrt{|g|}$", r"数学 $\sqrt{|g|}$"),
+    ("未知\x00字符", "未知\x00字符"),
+    ("未知\x03\\alpha", "未知\x03\\alpha"),
+])
+def test_glossary_control_repair_preserves_unknown_corruption(value, expected):
+    from alc_translate.workflow import _recover_glossary_control_text
+    assert _recover_glossary_control_text(value) == expected

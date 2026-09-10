@@ -12,7 +12,8 @@ agent host or checked-out Skill.
 - `alc-companion` may depend on all AC packages plus `alc-render` and
   `alc-translate`.
 - `alc-web` is an optional local application package. It may depend on AC jobs,
-  model and document APIs plus ALC render, translation and Companion packages.
+  model and document APIs plus ALC OCR proofreading, render, translation and
+  Companion packages.
   Its HTTP server, queue, settings and frontend remain outside the learning
   packages. The agent plugin does not install the Web application implicitly.
 - Schemas, imports, distributions, CLIs, and product environment variables use

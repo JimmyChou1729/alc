@@ -30,7 +30,7 @@ def test_progress_never_reuses_glossary_completion_in_translation(tmp_path):
     a=summarize(store,store.get(id))['progress']['percent']
     store.update(id,phase='translation')
     b=summarize(store,store.get(id))['progress']['percent']
-    assert a<=b<=30
+    assert a <= b < 60  # Entering translation must not reuse the 90% glossary fraction.
     store.update(id,detail={'progress':{'phase':'translation','completed_units':8,'total_units':10}})
     c=summarize(store,store.get(id))['progress']['percent']
     store.update(id,detail={'progress':{'phase':'translation','completed_units':3,'total_units':10}})
@@ -54,3 +54,66 @@ def test_eta_exists_before_samples_and_companion_setup_is_not_80_percent(tmp_pat
     store=Store(tmp_path);id=store.create({'title':'x','output':'companion'})['id'];store.claim(id)
     assert summarize(store,store.get(id))['progress']['eta_seconds'][1]>0
     assert percentage('companion',{'glossary_ready':False,'total_chapters':1,'completed_units':3,'total_units':8},'companion')<25
+
+
+def test_companion_phase_label_follows_actual_progress():
+    import pathlib
+    import shutil
+    import subprocess
+    root = pathlib.Path(__file__).resolve().parents[3]
+    node = shutil.which('node')
+    if not node or not (root / 'apps/web/node_modules/typescript').exists():
+        pytest.skip('Node and frontend TypeScript dependency required')
+    script = r'''
+const fs = require('fs'), vm = require('vm');
+const ts = require('./apps/web/node_modules/typescript');
+const source = fs.readFileSync('apps/web/src/main.tsx', 'utf8');
+const helper = source.slice(source.indexOf('function taskPhaseLabel('), source.indexOf('const speeds ='));
+const js = ts.transpile(helper, {target: ts.ScriptTarget.ES2022});
+const context = {phases: {ocr:'PDF识别', completed:'已交付'}};
+vm.createContext(context); vm.runInContext(js, context);
+for (const [phase, expected] of [['glossary','整理术语'], ['translation','翻译与审查'], ['guides','编写伴读指南']]) {
+ if(context.taskPhaseLabel({phase:'companion',detail:{progress:{phase}}}) !== expected) throw Error(phase);
+}
+if(context.taskPhaseLabel({phase:'companion', detail:{}}) !== '准备翻译与伴读') throw Error('fallback');
+if(context.taskPhaseLabel({phase:'completed',detail:{progress:{phase:'guides'}}}) !== '已交付') throw Error('stale');
+'''
+    subprocess.run([node, '-e', script], cwd=root, check=True, capture_output=True, text=True)
+
+
+def test_url_suffix_never_hides_remote_pdf_consent():
+    import pathlib
+    import shutil
+    import subprocess
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    node = shutil.which("node")
+    if not node or not (root / "apps/web/node_modules/typescript").exists():
+        pytest.skip("Node and frontend TypeScript dependency required")
+    script = r'''
+const fs = require('fs'), vm = require('vm');
+const {createRequire} = require('module');
+const localRequire = createRequire(process.cwd() + '/apps/web/package.json');
+const ts = localRequire('typescript');
+const React = localRequire('react');
+const {renderToStaticMarkup} = localRequire('react-dom/server');
+let source = fs.readFileSync('apps/web/src/main.tsx', 'utf8')
+  .replace('import "./style.css";', '')
+  .replaceAll('import.meta.url', JSON.stringify('file:///web/main.tsx'))
+  .replace(/createRoot\(document.getElementById\("root"\)!\).render\(<App \/>\);/, '')
+  + '\nexport {NewJob};';
+const js = ts.transpile(source, {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS,
+ jsx: ts.JsxEmit.React, esModuleInterop: true});
+for (const suffix of ['html', 'htm', 'md', 'markdown', 'tex', 'pdf']) {
+ const context = {exports: {}, require: localRequire, URLSearchParams,
+   location: {search: '?url=' + encodeURIComponent('https://example.test/paper.' + suffix)}};
+ vm.createContext(context); vm.runInContext(js, context);
+ const html = renderToStaticMarkup(React.createElement(context.exports.NewJob, {
+   settings: {providers: [], ocr: {api_url:'https://mineru.example.test', executable:null}},
+   onCreated:()=>{}, onError:()=>{}, onOpenSettings:()=>{}
+ }));
+ if (!html.includes('我同意将 PDF 上传到此服务进行识别')) throw Error('Hidden consent: ' + suffix);
+ if (!html.includes('https://mineru.example.test')) throw Error('Hidden endpoint: ' + suffix);
+}
+'''
+    subprocess.run([node, "-e", script], cwd=root, check=True, capture_output=True, text=True)

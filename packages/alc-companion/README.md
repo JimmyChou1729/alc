@@ -333,10 +333,17 @@ input path. Local application jobs require complete verifiable evidence. If a co
 truncated or unavailable, registered smaller part ranges are read to establish
 complete original and translation coverage. Evidence includes source bindings,
 content digests and compact location descriptors, with a 256,000-byte serialized
-limit per chapter; command descriptors remain in the surrounding context. Failed
-reads and oversized chapters stop with a specific preparation error before guide
-model calls, rather than silently switching to model-directed reading. Failed
-preparation can be retried; only successful evidence is cached. Existing jobs
+budget per guide batch; command descriptors remain in the surrounding context.
+Oversized chapters are automatically partitioned at balanced section or block
+boundaries until each batch fits. This changes only guide processing: source
+chapter IDs, the outline, and completed translations remain intact. Each batch
+is independently reviewed and cached, and its anchored learning units are merged
+back in source order. Batch overviews appear inline at their own source location.
+There is no aggregate chapter-size rejection when its blocks can be partitioned.
+An individual indivisible block that still exceeds the read/evidence budget, or
+an unavailable cached source, continues to return a preparation error; evidence
+is never truncated. Failed preparation can be retried; only successful evidence
+is cached. Existing jobs
 keep their saved policy and already frozen guide requests, including legacy
 on-demand reading.
 
@@ -390,3 +397,21 @@ With a positive limit, cross-chapter editorial review also runs, with at most
 that many reviewed proposals. Only explicitly approved, digest-bound edits are
 applied; an unapproved final proposal never changes the guide. These rounds
 are limits per stage, not a total model-call budget or a quality guarantee.
+
+## Verified PDF sources
+
+After `ac-document parse-pdf-mineru` (or `parse-pdf-configured-mineru`), pass its
+normalized source HTML with `--pdf-source-manifest <manifest.json>`. This binds
+all content to the original PDF pages and preserves extraction warnings, images
+and structure. The manifest is verified before learning work; OCR is not marked
+as proofread. Do not combine this route with an HTML acquisition manifest or
+a PDF text-layer validator.
+Use this flag on build; subsequent resume uses the frozen source identity.
+
+Heading-only source chapters remain covered by source and translation but do not
+request a guide or count as missing guides in the delivery ledger.
+
+Provider failures during chapter or editorial work remain resumable failures.
+They refresh the bilingual partial Reader from durable translations and accepted
+guides instead of publishing a successful source-only replacement. Source-only
+terminal delivery is limited to earlier preparation stages without chapter work.

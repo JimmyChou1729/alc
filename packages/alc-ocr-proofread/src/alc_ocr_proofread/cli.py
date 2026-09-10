@@ -31,6 +31,12 @@ def _parser() -> argparse.ArgumentParser:
         description="Proofread page-mapped OCR against complete PDF page images.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    from .pdf_bundle_cli import add_commands
+    add_commands(commands)
+    setup = commands.add_parser("setup-mineru")
+    setup.add_argument("--project-dir", required=True)
+    setup.add_argument("--install", action="store_true")
+    setup.add_argument("--accept-downloads", action="store_true")
     proofread = commands.add_parser("proofread")
     proofread.add_argument("markdown")
     proofread.add_argument("--pdf", required=True)
@@ -77,6 +83,9 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
+        from alc_catalog import register_cli_project
+        if args.command != "setup-mineru":
+            register_cli_project(getattr(args, "project_dir", None))
         result = _dispatch(args)
     except (ProofreadProjectError, ProofreadServiceError, ProofreadSourceError, ValueError) as exc:
         result = CommandResult(
@@ -93,6 +102,13 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dispatch(args: argparse.Namespace) -> CommandResult:
+    if args.command == "setup-mineru":
+        from .mineru_install import plan, install
+        data = install(Path(args.project_dir), accept_downloads=args.accept_downloads) if args.install else plan(Path(args.project_dir))
+        return CommandResult(CommandStatus.COMPLETED, data=data)
+    if args.command.endswith("-bundle"):
+        from .pdf_bundle_cli import dispatch
+        return dispatch(args)
     if args.command == "proofread":
         source = load_mineru_source(args.markdown, args.pdf, args.content_list)
         project = ProofreadProject.open(args.project_dir)
