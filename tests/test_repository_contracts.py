@@ -230,3 +230,15 @@ def test_release_updates_product_package_list_with_source_pin(tmp_path: Path) ->
     assert sources[0]["commit"] == "b" * 40
     assert sources[0]["packages"] == ["alc-catalog", "alc-render"]
     assert sources[1]["commit"] == "c" * 40
+
+
+def test_package_runtime_versions_match_release() -> None:
+    import ast
+
+    for package in EXPECTED:
+        path = PACKAGES / package / "src" / package.replace("-", "_") / "__init__.py"
+        versions = [ast.literal_eval(node.value) for node in ast.parse(path.read_text()).body
+                    if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == "__version__"
+                            for target in node.targets)]
+        assert versions == [VERSION], package
