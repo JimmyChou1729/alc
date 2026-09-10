@@ -134,31 +134,43 @@ def acquire(store, job: dict, checkpoint) -> tuple[Path, Path | None, list[str]]
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             },
         )
-        if (job.get("resume_input") or {}).get("pdf_text_only") is not True:
-            raise PDFTextConfirmation(
-                "This Web version can extract PDF text but does not preserve PDF images or verify formulas, tables or reading order. Choose text-only extraction explicitly, or create a task from HTML/OCR Markdown."
-            )
-        from ac_document.parse.parser import PdftotextExtractor
+        text_only = job["spec"].get("pdf_mode") == "text_only" or (job.get("resume_input") or {}).get("pdf_text_only") is True
+        ocr = job["spec"].get("ocr")
+        if not text_only and ocr:
+            from ac_document import parse_pdf_mineru
+            if ocr.get("api_url") and job["spec"].get("ocr_remote_consent") is not True:
+                raise NeedsSourceInput("Confirm remote OCR upload when creating a new task.")
+            store.update(job["id"], phase="ocr")
+            result = parse_pdf_mineru(path, job_dir=root / "ocr-job", checkpoint=checkpoint, **ocr)
+            checkpoint()
+            path, manifest = Path(result["source"]), Path(result["manifest"])
+            warnings.extend(result["warnings"])
+        else:
+            if not text_only:
+                raise PDFTextConfirmation(
+                    "Configure MinerU and create a new task to preserve PDF images, or explicitly continue with text-only extraction."
+                )
+            from ac_document.parse.parser import PdftotextExtractor
 
-        layer = PdftotextExtractor().extract(path.read_bytes())
-        if not layer.pages or any(not page.strip() for page in layer.pages):
-            raise NeedsSourceInput(
-                "This PDF has pages without a text layer. Automatic OCR is not available in this Web version. Create a task from externally prepared OCR Markdown or HTML."
+            layer = PdftotextExtractor().extract(path.read_bytes())
+            if not layer.pages or any(not page.strip() for page in layer.pages):
+                raise NeedsSourceInput(
+                    "This PDF has pages without a text layer. Text-only mode cannot read these pages. Configure MinerU and create a new OCR task."
+                )
+            text_path = root / "pdf-text.md"
+            notice = "> PDF text-only derivative: original images are not included. Reading order, formulas and tables have not been verified.\n\n"
+            text_path.write_text(
+                notice
+                + "\n\n".join(
+                    f"<!-- Source PDF page {i} -->\n\n{page}"
+                    for i, page in enumerate(layer.pages, 1)
+                ),
+                encoding="utf-8",
             )
-        text_path = root / "pdf-text.md"
-        notice = "> PDF text-only derivative: original images are not included. Reading order, formulas and tables have not been verified.\n\n"
-        text_path.write_text(
-            notice
-            + "\n\n".join(
-                f"<!-- Source PDF page {i} -->\n\n{page}"
-                for i, page in enumerate(layer.pages, 1)
-            ),
-            encoding="utf-8",
-        )
-        warnings.append(
-            "PDF text-only derivative: images are not included; reading order, formulas and tables are unverified. This is not OCR proofreading."
-        )
-        path = text_path
+            warnings.append(
+                "PDF text-only derivative: images are not included; reading order, formulas and tables are unverified. This is not OCR proofreading."
+            )
+            path = text_path
     _validate_resource_paths(path)
     info = {
         "path": path.relative_to(root).as_posix(),

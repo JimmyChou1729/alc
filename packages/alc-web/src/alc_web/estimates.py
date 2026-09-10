@@ -6,6 +6,9 @@ import math
 
 
 def estimate_document(text: str, spec: dict) -> dict:
+    if spec.get("ocr_proofread"):
+        return {"input_tokens": None, "output_tokens": None, "confidence": "unknown",
+                "basis": "PDF image proofreading usage depends on page images and provider reporting", "cost": None}
     if spec["output"] == "source":
         return {
             "input_tokens": [0, 0],
