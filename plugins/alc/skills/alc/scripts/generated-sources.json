@@ -1,6 +1,6 @@
 {
   "schema_version": "ac.generated_sources.v1",
-  "foundation_commit": "dd5175915a31dddca085190c22c4597c73058faf",
+  "foundation_commit": "bbfe2ddbbec43ee8aebee173dd2848f6e4943d19",
   "files": {
     "ac_runtime.py": {
       "source": "runtime/ac_runtime.py",
