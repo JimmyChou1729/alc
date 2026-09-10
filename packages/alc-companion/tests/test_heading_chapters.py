@@ -42,3 +42,12 @@ def test_invalid_heading_level_rejected(tmp_path,level):
 def test_missing_heading_level_does_not_silently_use_single_chapter(tmp_path):
     with pytest.raises(ValueError,match='absent'):
         plan_source_chapters(source(tmp_path),chapter_heading_level=6)
+
+
+def test_heading_only_chapter_retains_coverage_without_guide(tmp_path):
+    from alc_companion.source_planning import _chapter
+    from ac_document.rich_document.models import RichBlockKind
+    doc = source(tmp_path)
+    headings = tuple(b for b in doc.blocks if b.kind is RichBlockKind.HEADING)
+    assert not _chapter(doc, title='Title', blocks=headings).generate_guide
+    assert _chapter(doc, title='Body', blocks=doc.blocks).generate_guide

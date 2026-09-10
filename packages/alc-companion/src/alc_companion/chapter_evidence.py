@@ -116,9 +116,9 @@ def preload_chapter(context: RunContext, broker: CompanionSourceHostBroker,
         if body is None:
             covered: set[int] = set()
             chunks = []
-            # Smaller registered ranges avoid the broker's per-command output cap.
+            # Try sections before individual parts to avoid hundreds of subprocess reads.
             candidates = sorted((d for d in descriptors if d is not complete and d.get("part_numbers")),
-                                key=lambda d: (len(d["part_numbers"]), min(d["part_numbers"])))
+                                key=lambda d: (-len(d["part_numbers"]), min(d["part_numbers"])))
             for descriptor in candidates:
                 parts = set(descriptor["part_numbers"])
                 if parts.issubset(covered):
