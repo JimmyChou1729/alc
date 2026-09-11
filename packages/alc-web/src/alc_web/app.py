@@ -66,7 +66,9 @@ def create_app(
     cookie_name = "alc_session_" + hashlib.sha256(origin.encode()).hexdigest()[:12]
     profiles = cli_profiles() if discovered is None else discovered
     scheduler = Scheduler(store, vault)
-    reader_hosts = ReaderHosts(store.root / "reader-ports.json")
+    from alc_render.tts_engine import TTSManager
+    tts_manager = TTSManager()
+    reader_hosts = ReaderHosts(store.root / "reader-ports.json", tts_manager=tts_manager)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -76,6 +78,7 @@ def create_app(
             yield
         finally:
             reader_hosts.close()
+            tts_manager.close()
             if run_scheduler:
                 scheduler.close()
 
@@ -87,6 +90,8 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.store, app.state.vault = store, vault
+    from .tts import register_tts_routes
+    register_tts_routes(app, tts_manager)
 
     @app.middleware("http")
     async def boundary(request: Request, call_next):
@@ -119,7 +124,7 @@ def create_app(
         )
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'",
         )
         return response
 

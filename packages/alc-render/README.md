@@ -471,3 +471,10 @@ inside prose are preserved. The manifest still records both selected revisions.
 
 The deleted-content dialog keeps its heading and close action outside the scrolling
 list. The list uses the same thin, hover/focus scrollbar treatment as other panels.
+
+## Optional local speech
+
+`alc-render tts` installs and manages optional local Kokoro speech and opens
+standalone Readers with a local audio connection. System speech remains the
+default. See [Local TTS](LOCAL_TTS.md) for consent, installation, playback and
+portability details.

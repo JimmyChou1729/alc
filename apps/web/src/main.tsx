@@ -36,6 +36,8 @@ import {
   X,
 } from "lucide-react";
 import "./style.css";
+import { TtsLab } from "./TtsLab";
+import { TtsSettings } from "./TtsSettings";
 
 type Provider = {
   base_url?: string;
@@ -344,27 +346,40 @@ function StyledSelect({
   onChange,
   "aria-label": label,
   compact = false,
+  disabled = false,
 }: {
   value: string | number;
   children: React.ReactNode;
   "aria-label": string;
   compact?: boolean;
+  disabled?: boolean;
   onChange: (event: { target: { value: string } }) => void;
 }) {
-  const items = React.Children.toArray(children)
-    .filter(React.isValidElement)
-    .map((node) => {
-      const props = (
-        node as React.ReactElement<{
-          value?: string | number;
-          children?: React.ReactNode;
-        }>
-      ).props;
-      return [
-        String(props.value ?? optionText(props.children)),
-        optionText(props.children),
-      ];
-    });
+  const items: [string, string, string][] = [];
+  function addOptions(nodes: React.ReactNode, group = "") {
+    React.Children.toArray(nodes)
+      .filter(React.isValidElement)
+      .forEach((node) => {
+        const props = (
+          node as React.ReactElement<{
+            value?: string | number;
+            children?: React.ReactNode;
+            label?: string;
+          }>
+        ).props;
+        if (node.type === "optgroup")
+          addOptions(props.children, props.label || "");
+        else
+          items.push([
+            String(props.value ?? optionText(props.children)),
+            optionText(props.children),
+            group,
+          ]);
+      });
+  }
+  addOptions(children);
+  const selectedLabel = (item?: [string, string, string]) =>
+    item ? (item[2] ? `${item[2]} · ${item[1]}` : item[1]) : "";
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -443,8 +458,9 @@ function StyledSelect({
       <button
         type="button"
         ref={trigger}
+        disabled={disabled}
         className={"currency-trigger" + (compact ? "" : " select-trigger-wide")}
-        aria-label={`${label}：${items[selected]?.[1] || ""}`}
+        aria-label={`${label}：${selectedLabel(items[selected])}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? id : undefined}
@@ -456,7 +472,7 @@ function StyledSelect({
           }
         }}
       >
-        <span>{items[selected]?.[1] || ""}</span>
+        <span>{selectedLabel(items[selected])}</span>
         <ChevronDown size={15} />
       </button>
       {open &&
@@ -500,22 +516,30 @@ function StyledSelect({
               }
             }}
           >
-            {items.map(([code, name], i) => (
-              <button
-                type="button"
-                role="option"
-                aria-selected={String(value) === code}
-                tabIndex={-1}
-                data-option={i}
-                key={code}
-                onClick={() => {
-                  onChange({ target: { value: code } });
-                  close(true);
-                }}
-              >
-                <span>{name}</span>
-                {String(value) === code && <Check size={16} />}
-              </button>
+            {items.map(([code, name, group], i) => (
+              <React.Fragment key={code}>
+                {group && group !== items[i - 1]?.[2] && (
+                  <div className="select-group-label" role="presentation">
+                    {group}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  role="option"
+                  aria-label={group ? `${group} · ${name}` : undefined}
+                  aria-selected={String(value) === code}
+                  tabIndex={-1}
+                  data-option={i}
+                  key={code}
+                  onClick={() => {
+                    onChange({ target: { value: code } });
+                    close(true);
+                  }}
+                >
+                  <span>{name}</span>
+                  {String(value) === code && <Check size={16} />}
+                </button>
+              </React.Fragment>
             ))}
           </div>,
           document.body,
@@ -683,7 +707,9 @@ function App() {
   const query = new URLSearchParams(location.search);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
-  const [view, setView] = useState(query.get("job") || "new");
+  const [view, setView] = useState(
+    query.get("view") === "tts-lab" ? "tts-lab" : query.get("job") || "new",
+  );
   const [error, setError] = useState("");
   const [connected, setConnected] = useState(false);
   const [sessionReady, setSessionReady] = useState(false);
@@ -738,7 +764,7 @@ function App() {
   }, []);
   useEffect(() => {
     if (!sessionReady) return;
-    if (view === "new" || view === "settings") {
+    if (view === "new" || view === "settings" || view === "tts-lab") {
       setJob(null);
       return;
     }
@@ -774,7 +800,11 @@ function App() {
   }, [view, sessionReady]);
   useEffect(() => {
     const pop = () =>
-      setView(new URLSearchParams(location.search).get("job") || "new");
+      setView(
+        new URLSearchParams(location.search).get("view") === "tts-lab"
+          ? "tts-lab"
+          : new URLSearchParams(location.search).get("job") || "new",
+      );
     addEventListener("popstate", pop);
     return () => removeEventListener("popstate", pop);
   }, []);
@@ -782,8 +812,11 @@ function App() {
     setView(next);
     setError("");
     const params = new URLSearchParams(location.search);
-    if (next === "new" || next === "settings") params.delete("job");
+    params.delete("view");
+    if (next === "new" || next === "settings" || next === "tts-lab")
+      params.delete("job");
     else params.set("job", next);
+    if (next === "tts-lab") params.set("view", "tts-lab");
     history.pushState(null, "", "/?" + params);
   }
   async function control(
@@ -942,6 +975,9 @@ function App() {
               navigate(result.id);
             }}
           />
+        )}
+        {view === "tts-lab" && sessionReady && (
+          <TtsLab Select={StyledSelect} onBack={() => navigate("settings")} />
         )}
         {view === "settings" && (
           <SettingsPage
@@ -2822,6 +2858,7 @@ function SettingsPage({
           </p>
         </section>
       )}
+      <TtsSettings Select={StyledSelect} />
       <section className="card">
         <h2>插件项目</h2>
         <HistoryImport onImported={onSaved} />

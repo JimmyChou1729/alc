@@ -6436,7 +6436,15 @@ def test_reader_uses_low_distraction_controls_and_inline_editor() -> None:
     assert 'wrapper.dataset.compact = "true";' in javascript
     assert '".alc-settings-panel, .alc-speech-dock"' in javascript
     persistent_quality = javascript[javascript.index("  function deliverySummaryStorageKey()"):javascript.index("  function renderDeliverySummary()") ]
-    assert "localStorage" not in javascript.replace(persistent_quality, "")
+    ephemeral_controls = javascript.replace(persistent_quality, "")
+    for engine_preference in (
+        'window.localStorage.getItem("alc.reader.speech-engine")',
+        'window.localStorage.getItem("alc.reader.speech-voices")',
+        'window.localStorage.setItem("alc.reader.speech-voices", JSON.stringify(state.speechVoiceChoices))',
+    ):
+        assert engine_preference in ephemeral_controls
+        ephemeral_controls = ephemeral_controls.replace(engine_preference, "")
+    assert "localStorage" not in ephemeral_controls
     assert "contain: inline-size;" in stylesheet
     assert ".alc-speech-player-title {\n  display: block;" in stylesheet
     assert (
@@ -6691,7 +6699,15 @@ def test_reader_visibility_is_dynamic_ephemeral_and_book_focused() -> None:
     assert "Array.from(state.selected.values())" in javascript
     assert "state.hiddenRoles =" not in javascript
     persistent_quality = javascript[javascript.index("  function deliverySummaryStorageKey()"):javascript.index("  function renderDeliverySummary()") ]
-    assert "localStorage" not in javascript.replace(persistent_quality, "")
+    ephemeral_controls = javascript.replace(persistent_quality, "")
+    for engine_preference in (
+        'window.localStorage.getItem("alc.reader.speech-engine")',
+        'window.localStorage.getItem("alc.reader.speech-voices")',
+        'window.localStorage.setItem("alc.reader.speech-voices", JSON.stringify(state.speechVoiceChoices))',
+    ):
+        assert engine_preference in ephemeral_controls
+        ephemeral_controls = ephemeral_controls.replace(engine_preference, "")
+    assert "localStorage" not in ephemeral_controls
     assert 'visibilityOption("source", labels().original' in javascript
     assert "roleLabel(role)" in javascript
     assert "function updateVisibilityStyles(channels)" in javascript

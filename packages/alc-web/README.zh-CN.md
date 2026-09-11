@@ -158,3 +158,7 @@ OCR 校对另显示已校对页数。链接解析成 PDF 时重新计算路线�
 （`ALC_CATALOG_DIR` 可覆盖目录）。项目 `.ac/mineru.json` 始终优先。
 Agent 检查两处配置后才判断是否缺少识别工具；不会仅因 PATH 中没有 `mineru`
 就要求重新安装。共享默认值只支持本地可执行文件，不继承远程上传目的地或凭据。
+
+### 可选本地朗读
+
+设置中的“TTS 朗读引擎”支持按需安装 Kokoro、Piper 和 KittenTTS，并分别试听、保存中文和英文的默认声音。Reader 的声音列表按模型分组显示已安装音色，再列出系统声音，选择声音即可使用对应引擎，无需单独切换。默认仍使用系统朗读，打开文档不会自动下载模型。导出的 HTML 不携带连接凭据；可通过 `alc-render tts open document.html` 接入本地模型，无需完整 LocalWeb。详见 [本地 TTS](../alc-render/LOCAL_TTS.md)。

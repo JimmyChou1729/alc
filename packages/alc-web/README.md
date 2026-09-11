@@ -138,3 +138,12 @@ remain unchanged. Reader viewing and verified result downloads are supported,
 but Web never claims or resumes an Agent run. The default catalog is `~/.alc/catalog`;
 set `ALC_CATALOG_DIR` consistently in both entry points to override it. Missing
 project files cannot be restored from the path index.
+
+## Optional local speech
+
+Settings supports optional Kokoro, Piper and KittenTTS installation, independent
+Chinese/English previews and saved default voices. The Reader lists installed
+model voices first and system voices afterward; selecting a voice selects its
+engine automatically. Preview uses unsaved selections. No model is downloaded
+by opening a document, and exported HTML contains no local connection credential.
+See [Local TTS](../alc-render/LOCAL_TTS.md) for setup and standalone HTML usage.
