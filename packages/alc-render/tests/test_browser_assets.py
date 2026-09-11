@@ -84,6 +84,7 @@ def test_reader_glossary_uses_latest_entry_and_only_exact_target_ranges() -> Non
     parseGlossaryRevisionFile: parseGlossaryRevisionFile,
     prepareGlossary: prepareGlossary,
     resolveGlossaryAll: resolveGlossaryAll,
+    orderGlossaryEntries: orderGlossaryEntries,
     projectGlossaryMarkdown: projectGlossaryMarkdown,
     buildMarkdownPackage: buildMarkdownPackage,
     validGlossarySurfaceAnchors: validGlossarySurfaceAnchors,
@@ -317,11 +318,11 @@ var base = {
     savedRow.children.length === 4 &&
       savedRow.children[1].className === "alc-glossary-translation" &&
       cardActions.className.includes("alc-glossary-card-actions") &&
-      cardActions.children.length === 2 &&
+      cardActions.children.length === 4 &&
       cardActions.children.every(function (button) {
         return button.className === "alc-card-action";
       }),
-    "saved glossary row did not use speaker/edit hover actions"
+    "saved glossary row did not use speaker/edit/delete/add hover actions"
   );
   var activationCalls = [];
   helpers.installGlossaryActivationSpy(activationCalls);
@@ -427,6 +428,50 @@ var base = {
         "新解释：$H_0$ 与 **宇宙学**。",
     "latest glossary revision was not projected into the effective entry"
   );
+  var createdEntry = {entry_id: "term-created", term: "Manifold", translated_term: "流形", definition: "A smooth space."};
+  var created = {
+    schema_version: "alc.render.glossary_revision.v1", entry_id: createdEntry.entry_id,
+    revision: 2, parent_semantic_digest: await helpers.canonicalDigest(helpers.glossaryBaseMaterial(createdEntry)),
+    entry: createdEntry, provenance: {created_base: createdEntry, deleted: false, insert_after: "term-reader"}
+  };
+  created.semantic_digest = await helpers.canonicalDigest(helpers.glossaryRevisionMaterial(created));
+  var parsedCreation = await helpers.parseGlossaryRevisionFile(
+    helpers.encodeGlossaryRevision(created), helpers.glossaryRevisionFileName(2, created.semantic_digest));
+  var tailEntry = {entry_id: "term-tail", term: "Tail", translated_term: "末尾", definition: ""};
+  var insertionOrder = helpers.orderGlossaryEntries([base, tailEntry, createdEntry], new Map([[createdEntry.entry_id, [parsedCreation]]]));
+  assert(insertionOrder.map(e => e.entry_id).join(",") === "term-reader,term-created,term-tail", "created term was not inserted after clicked term");
+  assert(helpers.orderGlossaryEntries(insertionOrder, new Map([[createdEntry.entry_id, [parsedCreation]]])).map(e => e.entry_id).join(",") === "term-reader,term-created,term-tail", "export/reload changed glossary ordering");
+  helpers.state.glossaryRevisions.set(createdEntry.entry_id, [parsedCreation]);
+  helpers.resolveGlossaryAll();
+  assert(helpers.state.selectedGlossary.has(createdEntry.entry_id), "new glossary term missing from projection");
+  var deletion = Object.assign({}, created, {
+    revision: 3, parent_semantic_digest: created.semantic_digest, provenance: {deleted: true}
+  });
+  deletion.semantic_digest = await helpers.canonicalDigest(helpers.glossaryRevisionMaterial(deletion));
+  var parsedDeletion = await helpers.parseGlossaryRevisionFile(
+    helpers.encodeGlossaryRevision(deletion), helpers.glossaryRevisionFileName(3, deletion.semantic_digest));
+  helpers.state.glossaryRevisions.set(createdEntry.entry_id, [parsedCreation, parsedDeletion]);
+  helpers.resolveGlossaryAll();
+  assert(!helpers.state.selectedGlossary.has(createdEntry.entry_id), "deleted glossary term still visible");
+  assert(!helpers.state.payload.publication.glossary.some(e => e.entry_id === createdEntry.entry_id), "deleted term leaked into Markdown projection");
+  // Export embeds immutable baselines and history; reload must retain the tombstone.
+  helpers.state.payload.publication.glossary = JSON.parse(JSON.stringify(helpers.state.glossaryBase));
+  helpers.state.payload.glossary_revisions = [revision, parsedCreation, parsedDeletion];
+  await helpers.prepareGlossary();
+  assert(!helpers.state.selectedGlossary.has(createdEntry.entry_id), "HTML reload resurrected deleted term");
+  assert(helpers.state.selectedGlossaryRevisions.get(createdEntry.entry_id).revision === 3, "HTML reload lost glossary history");
+  // Directory-only import reconstructs newly created baselines without an exported HTML.
+  helpers.state.payload.publication.glossary = [base];
+  helpers.state.payload.glossary_revisions = [revision, parsedCreation, parsedDeletion];
+  await helpers.prepareGlossary();
+  assert(helpers.state.glossaryBase.some(e => e.entry_id === createdEntry.entry_id) &&
+    !helpers.state.selectedGlossary.has(createdEntry.entry_id), "directory history failed to reconstruct created/deleted term");
+  helpers.state.glossaryRevisions = new Map([["term-reader", [revision]]]);
+  helpers.resolveGlossaryAll();
+  assert(!helpers.state.glossaryBase.some(e => e.entry_id === createdEntry.entry_id), "switching directories leaked a created baseline");
+  helpers.state.payload.publication.glossary = [base];
+  helpers.state.payload.glossary_revisions = [revision];
+  await helpers.prepareGlossary();
   var numericBase = Object.assign({}, base, {
     entry_id: "term-numeric", term: "Numeric", translated_term: "数值",
     confidence: 0.9

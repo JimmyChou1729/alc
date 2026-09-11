@@ -22,7 +22,13 @@ def refresh_reader_runtime(content: bytes) -> bytes:
         return content
     runtime = files("alc_render").joinpath("web_assets/reader.js").read_text(encoding="utf-8")
     match = matches[0]
-    return (html[:match.start(2)] + runtime + html[match.end(2):]).encode("utf-8")
+    html = html[:match.start(2)] + runtime + html[match.end(2):]
+    css = files("alc_render").joinpath("web_assets/glossary-editor.css").read_text(encoding="utf-8")
+    html = re.sub(r'<style id="alc-glossary-editor-runtime">[\s\S]*?</style>', '', html)
+    style = '<style id="alc-glossary-editor-runtime">' + css + '</style>'
+    position = html.lower().find('</head>')
+    html = html[:position] + style + html[position:] if position >= 0 else style + html
+    return html.encode("utf-8")
 
 
 class ReaderHosts:

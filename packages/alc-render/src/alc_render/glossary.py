@@ -341,6 +341,17 @@ class GlossaryRevision:
             raise ValueError("glossary revision entry must be an object")
         if not isinstance(provenance, Mapping):
             raise ValueError("glossary revision provenance must be an object")
+        if "deleted" in provenance and not isinstance(provenance["deleted"], bool):
+            raise ValueError("glossary deleted flag must be a boolean")
+        if "created_base" in provenance:
+            if (self.revision != 2 or provenance.get("deleted") or provenance.get("propagation")
+                or provenance["created_base"] != entry or not glossary_entry_is_editable(entry)
+                or glossary_base_semantic_digest(entry) != parent):
+                raise ValueError("glossary creation base is invalid")
+        if "insert_after" in provenance:
+            anchor = _require_identifier(provenance["insert_after"], "glossary insertion anchor")
+            if "created_base" not in provenance or anchor == entry_id:
+                raise ValueError("glossary insertion anchor is invalid")
         _fragment_references, dependent_references = (
             _glossary_propagation_members(provenance)
         )
@@ -512,7 +523,9 @@ def resolve_glossary_revisions(
         if not children:
             break
         if len(children) > 1:
-            if all(item.entry == children[0].entry for item in children[1:]):
+            if all(item.entry == children[0].entry and
+                   bool(item.provenance.get("deleted")) == bool(children[0].provenance.get("deleted"))
+                   for item in children[1:]):
                 continued = [
                     item for item in children
                     if eligible.get(item.semantic_digest)
@@ -815,3 +828,50 @@ __all__ = [
     "validate_glossary_revision",
     "write_glossary_revision",
 ]
+
+
+def glossary_with_created_entries(entries, revisions):
+    """Derive revision-owned baselines without modifying the Publication."""
+    result = list(entries)
+    known = {entry.get("entry_id") for entry in result}
+    roots = defaultdict(dict)
+    for revision in revisions:
+        if revision.provenance.get("created_base") is not None:
+            roots[revision.entry_id][revision.semantic_digest] = revision
+    for entry_id, candidates in roots.items():
+        if entry_id not in known and len(candidates) == 1:
+            result.append(next(iter(candidates.values())).entry)
+    by_id = {entry.get("entry_id"): entry for entry in result}
+    if len(by_id) != len(result):
+        return tuple(result)
+    children = defaultdict(list)
+    anchored = set()
+    for entry_id, candidates in roots.items():
+        if len(candidates) != 1 or entry_id not in by_id:
+            continue
+        root = next(iter(candidates.values()))
+        parent = root.provenance.get("insert_after")
+        if parent not in by_id or parent == entry_id:
+            continue
+        children[parent].append((str(root.provenance.get("edited_at", "")), entry_id))
+        anchored.add(entry_id)
+    for values in children.values():
+        values.sort(key=lambda value: value[1])
+        values.sort(key=lambda value: value[0], reverse=True)
+    ordered, seen = [], set()
+    def append(entry):
+        stack = [entry]
+        while stack:
+            current = stack.pop()
+            entry_id = current.get("entry_id")
+            if entry_id in seen:
+                continue
+            seen.add(entry_id)
+            ordered.append(current)
+            stack.extend(by_id[child] for _, child in reversed(children[entry_id]))
+    for entry in result:
+        if entry.get("entry_id") not in anchored:
+            append(entry)
+    for entry in result:
+        append(entry)
+    return tuple(ordered)

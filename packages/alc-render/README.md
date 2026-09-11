@@ -321,6 +321,13 @@ Single HTML mirrors the same panel grid, and Markdown packages include each
 available panel as its own digest-addressed resource.
 
 Translation, guide, companion, note, and glossary content can be edited inline.
+Glossary rows expose speech, edit, delete, and add controls. New entries and
+deletion tombstones use immutable glossary revisions, preserved in HTML exports
+and saved directories. Deleting a term removes its glossary row and term
+highlights without changing source or translation text. An empty glossary keeps
+an add control available. Existing entries keep their stored order; the plus control
+inserts a new term directly after that row. Its versioned insertion anchor keeps
+the position across directory loading and HTML export.
 Original source blocks use the same inline editor through their edit control or
 configured click gesture; the inline Advanced button opens detailed editing.
 Source corrections and additions use versioned `source` fragments; the frozen
@@ -333,9 +340,12 @@ and leaves the translated figure unchanged. In side-by-side layout, deleting eit
 language preserves the other language’s column. Deleted content leaves no visible
 placeholder and can be restored from Deleted content.
 The Deleted content toolbar button, before More settings, appears when deleted
-fragments exist and lists deleted source and supplemental fragments;
+fragments or glossary terms exist and lists deleted source, supplemental content,
+and glossary terms;
 Restore appends a new revision using the last visible content and leaves the panel
-closed. Deleted content is ordered by newest deletion first, then by source position
+closed. Restoring a glossary term retains its saved position. Restored source
+content identical to the original uses the original block layout instead of
+reinterpreting its text as Markdown. Deleted content is ordered by newest deletion first, then by source position
 for older records without a deletion timestamp; ties put source before translation.
 Contents titles follow saved source heading replacements while the source is visible,
 and visible translated headings when the source is hidden. Saving or restoring a

@@ -618,6 +618,9 @@
       restore: "恢复为新版本",
       imageOmitted: "图片未加载",
       closeDeletedContents: "关闭",
+      deleteGlossaryConfirm: "确认要删除术语 {term} 吗？",
+      addGlossary: "新增术语",
+      sourceTerm: "原文术语",
       deletedContents: "已删除内容",
       noDeletedContents: "没有已删除的内容",
       restoreContent: "恢复",
@@ -789,6 +792,9 @@
       restore: "Restore as new revision",
       imageOmitted: "Image not loaded",
       closeDeletedContents: "Close",
+      deleteGlossaryConfirm: "Delete glossary term {term}?",
+      addGlossary: "Add glossary term",
+      sourceTerm: "Source term",
       deletedContents: "Deleted content",
       noDeletedContents: "No deleted content",
       restoreContent: "Restore",
@@ -1034,6 +1040,7 @@
   function deletionTimestamp(revision) {
     var provenance = revision.provenance || {};
     var value = provenance.deleted_at;
+    if (!value && revision.role === "glossary") value = provenance.edited_at;
     if (!value && provenance.last_editor === "alc-render-browser") {
       var parent = (state.revisions.get(revision.fragment_id) || []).find(function (item) {
         return item.semantic_digest === revision.parent_semantic_digest;
@@ -1055,7 +1062,13 @@
 
   function deletedContentEntries() {
     var roles = ["source", "translation", "companion", "guide", "note"];
-    return Array.from(state.selected.values()).filter(function (revision) { return revision.deleted; }).sort(function (a, b) {
+    var entries = Array.from(state.selected.values()).filter(function (revision) { return revision.deleted; });
+    state.selectedGlossaryRevisions.forEach(function (revision) {
+      if (revision && revision.provenance.deleted === true) {
+        entries.push(Object.assign({}, revision, {role: "glossary", deleted: true, fragment_id: revision.entry_id}));
+      }
+    });
+    return entries.sort(function (a, b) {
       var at = deletionTimestamp(a), bt = deletionTimestamp(b);
       if (at !== bt) {
         if (at === null) return 1;
@@ -1073,6 +1086,15 @@
   }
 
   async function restoreDeletedContent(revision) {
+    if (revision.role === "glossary") {
+      var selected = state.selectedGlossaryRevisions.get(revision.entry_id);
+      if (!selected || selected.semantic_digest !== revision.semantic_digest) {
+        setStatus(labels().glossaryHistoryChanged, "error");
+        return false;
+      }
+      try { return await saveGlossaryMembership(revision.entry, false, false); }
+      catch (error) { setStatus(String(error.message || error), "error"); return false; }
+    }
     if (state.saveInProgress || state.exportInProgress || state.directorySelectionInProgress || !prepareForDraftSwitch()) return false;
     if (!state.directory && !await connectDirectory()) return false;
     if (!prepareForDraftSwitch()) return false;
@@ -1131,13 +1153,15 @@
     if (!entries.length) content.appendChild(element("p", "", labels().noDeletedContents));
     entries.forEach(function (revision) {
       var row = element("div", "alc-deleted-row");
-      var prior = earlierVisibleSourceRevision(revision);
-      var block = ensureSourceIndexes().blocksById.get(fragmentTargetId(revision));
-      var text = prior ? prior.markdown_body : block ? sourceEditorMarkdown(block) : "";
+      var glossary = revision.role === "glossary";
+      var prior = glossary ? null : earlierVisibleSourceRevision(revision);
+      var block = glossary ? null : ensureSourceIndexes().blocksById.get(fragmentTargetId(revision));
+      var text = glossary ? glossarySourceTerm(revision.entry) + " · " + String(revision.entry[glossaryTranslatedKey(revision.entry)] || "") :
+        prior ? prior.markdown_body : block ? sourceEditorMarkdown(block) : "";
       row.appendChild(element("div", "alc-deleted-preview", roleLabel(revision.role) + " · " + text.slice(0, 180)));
       var restore = element("button", "", labels().restoreContent);
       restore.type = "button";
-      restore.disabled = !prior && !(sourceEditOperation(revision) === "replace" && block);
+      restore.disabled = glossary ? !glossaryEntryIsEditable(revision.entry) : !prior && !(sourceEditOperation(revision) === "replace" && block);
       restore.addEventListener("click", async function () {
         dialog.close();
         await restoreDeletedContent(revision);
@@ -1995,6 +2019,19 @@
     ) {
       throw new Error("glossary revision metadata is invalid");
     }
+    if (metadata.provenance.deleted !== undefined && typeof metadata.provenance.deleted !== "boolean") {
+      throw new Error("glossary deleted flag must be a boolean");
+    }
+    if (metadata.provenance.created_base !== undefined &&
+      (metadata.revision !== 2 || metadata.provenance.propagation || metadata.provenance.deleted ||
+        !glossaryEntryIsEditable(metadata.entry) ||
+        !jsonValuesEqual(metadata.entry, metadata.provenance.created_base))) {
+      throw new Error("glossary creation base is invalid");
+    }
+    if (metadata.provenance.insert_after !== undefined &&
+      (!metadata.provenance.created_base || !portableIdentifier(metadata.provenance.insert_after) || metadata.provenance.insert_after === metadata.entry_id)) {
+      throw new Error("glossary insertion anchor is invalid");
+    }
     validateGlossaryPropagation(metadata.provenance.propagation);
     if (metadata.provenance.propagation &&
       (metadata.provenance.propagation.glossary_revisions || []).some(
@@ -2536,6 +2573,7 @@
     var publication = state.payload.publication;
     state.embeddedGlossaryRevisions = (state.payload.glossary_revisions || []).slice();
     state.glossaryBase = JSON.parse(JSON.stringify(publication.glossary || []));
+    state.createdGlossaryBaseIds = new Set();
     publication.glossary = JSON.parse(JSON.stringify(state.glossaryBase));
     var entryCounts = new Map();
     state.glossaryBase.forEach(function (entry) {
@@ -2625,6 +2663,7 @@
     state.selectedGlossary = new Map();
     state.selectedGlossaryRevisions = new Map();
     var diagnostics = state.glossaryFileDiagnostics.slice();
+    registerCreatedGlossaryBases(state.glossaryRevisions);
     state.glossaryBase.forEach(function (base) {
       var entryId = glossaryEntryId(base);
       if (!entryId) return;
@@ -2697,17 +2736,25 @@
       state.selectedGlossaryRevisions.set(entryId, selected);
     });
     state.glossaryDiagnostics = diagnostics;
-    state.payload.publication.glossary = state.glossaryBase.map(function (base) {
+    state.selectedGlossaryRevisions.forEach(function (revision, entryId) {
+      if (revision && revision.provenance.deleted === true) state.selectedGlossary.delete(entryId);
+    });
+    state.payload.publication.glossary = state.glossaryBase.filter(function (base) {
+      var revision = state.selectedGlossaryRevisions.get(glossaryEntryId(base));
+      return !revision || revision.provenance.deleted !== true;
+    }).map(function (base) {
       var entryId = glossaryEntryId(base);
       return state.glossaryDuplicateIds.has(entryId) ? base :
         state.selectedGlossary.get(entryId) || base;
     });
+    syncDeletedContentControl();
   }
 
   function equivalentGlossaryChild(children, descendants) {
     if (!children.length) return null;
     if (!children.every(function (revision) {
-      return jsonValuesEqual(revision.entry, children[0].entry);
+      return jsonValuesEqual(revision.entry, children[0].entry) &&
+        Boolean(revision.provenance.deleted) === Boolean(children[0].provenance.deleted);
     })) return null;
     var continued = descendants ? children.filter(function (revision) {
       return (descendants.get(revision.semantic_digest) || []).length > 0;
@@ -4939,6 +4986,15 @@
     return root;
   }
 
+  function sourceReplacementUsesOriginalLayout(block, replacement) {
+    if (!replacement) return true;
+    if (replacement.deleted || sourceEditOperation(replacement) !== "replace") return false;
+    var appearance = replacement.appearance || {};
+    if ((appearance.foreground && appearance.foreground !== "inherit") ||
+      (appearance.background && appearance.background !== "transparent")) return false;
+    return replacement.markdown_body === sourceEditorMarkdown(block);
+  }
+
   function renderSourceRow(block, fragments) {
     fragments = fragments.filter(function (item) { return !sourceEditOperation(item); });
     var row = element("article", "alc-source-row");
@@ -4987,9 +5043,10 @@
       document.documentElement.lang;
     var replacement = sourceReplacement(block.block_id);
     var inlineDraft = sourceInlineDraft(block);
-    var sourceBlock = inlineDraft ? renderFragment(inlineDraft) : replacement ? (replacement.deleted ?
-      element("div", "alc-source-deleted") : renderFragment(replacement)) : renderSourceBlock(block);
-    if (!replacement) {
+    var originalLayout = sourceReplacementUsesOriginalLayout(block, replacement);
+    var sourceBlock = inlineDraft ? renderFragment(inlineDraft) : originalLayout ? renderSourceBlock(block) :
+      replacement.deleted ? element("div", "alc-source-deleted") : renderFragment(replacement);
+    if (originalLayout) {
       ["click", "dblclick"].forEach(function (type) {
         source.addEventListener(type, function (event) {
           if ((state.readerPreferences.editActivation === "single") !== (type === "click")) return;
@@ -7246,6 +7303,141 @@
     return root;
   }
 
+  function orderGlossaryEntries(entries, revisions) {
+    if (new Set(entries.map(glossaryEntryId)).size !== entries.length) return entries;
+    var byId = new Map(entries.map(function (entry) { return [glossaryEntryId(entry), entry]; }));
+    var children = new Map(), anchored = new Set();
+    revisions.forEach(function (values, id) {
+      var roots = values.filter(function (revision) { return revision.revision === 2 && revision.provenance.created_base; });
+      if (roots.length !== 1 || !byId.has(id)) return;
+      var root = roots[0], parent = root.provenance.insert_after;
+      if (!parent || parent === id || !byId.has(parent)) return;
+      var list = children.get(parent) || [];
+      list.push({id: id, time: String(root.provenance.edited_at || "")});
+      children.set(parent, list); anchored.add(id);
+    });
+    children.forEach(function (list) {
+      list.sort(function (a, b) { return b.time.localeCompare(a.time) || a.id.localeCompare(b.id); });
+    });
+    var result = [], seen = new Set();
+    function append(entry) {
+      var stack = [entry];
+      while (stack.length) {
+        var next = stack.pop(), id = glossaryEntryId(next);
+        if (seen.has(id)) continue;
+        seen.add(id); result.push(next);
+        (children.get(id) || []).slice().reverse().forEach(function (child) { stack.push(byId.get(child.id)); });
+      }
+    }
+    entries.forEach(function (entry) { if (!anchored.has(glossaryEntryId(entry))) append(entry); });
+    entries.forEach(append);
+    return result;
+  }
+
+  function glossaryBaselinesFor(revisions) {
+    var previous = state.createdGlossaryBaseIds || new Set();
+    var entries = state.glossaryBase.filter(function (entry) { return !previous.has(glossaryEntryId(entry)); });
+    var digests = new Map(state.glossaryBaseDigests);
+    previous.forEach(function (id) { digests.delete(id); });
+    var created = new Set();
+    revisions.forEach(function (values, entryId) {
+      if (entries.some(function (entry) { return glossaryEntryId(entry) === entryId; })) return;
+      var roots = values.filter(function (revision) {
+        return revision.revision === 2 && revision.provenance.created_base &&
+          glossaryEntryIsEditable(revision.entry) &&
+          jsonValuesEqual(revision.entry, revision.provenance.created_base);
+      });
+      if (roots.length !== 1) return;
+      created.add(entryId);
+      entries.push(JSON.parse(JSON.stringify(roots[0].entry)));
+      digests.set(entryId, roots[0].parent_semantic_digest);
+    });
+    return {entries: orderGlossaryEntries(entries, revisions), digests: digests, created: created};
+  }
+
+  function registerCreatedGlossaryBases(revisions) {
+    var baseline = glossaryBaselinesFor(revisions);
+    state.glossaryBase = baseline.entries;
+    state.glossaryBaseDigests = baseline.digests;
+    state.createdGlossaryBaseIds = baseline.created;
+  }
+
+  async function saveGlossaryMembership(entry, deleted, create, afterEntryId) {
+    if (state.saveInProgress || state.exportInProgress || state.directorySelectionInProgress || !prepareForDraftSwitch()) return false;
+    var id = glossaryEntryId(entry), prior = selectedGlossaryDigest(id);
+    if (!state.directory && !await connectDirectory()) return false;
+    if (!state.directory) return false;
+    if (!create && selectedGlossaryDigest(id) !== prior) throw new Error(labels().glossaryHistoryChanged);
+    state.saveInProgress = true;
+    try {
+      var current = state.selectedGlossaryRevisions.get(id);
+      var base = create ? await canonicalDigest(glossaryBaseMaterial(entry)) : selectedGlossaryDigest(id);
+      var metadata = {schema_version: GLOSSARY_REVISION_SCHEMA, entry_id: id,
+        revision: create ? 2 : current ? current.revision + 1 : 2,
+        parent_semantic_digest: base, entry: JSON.parse(JSON.stringify(entry)),
+        provenance: {producer: "alc-render-browser", edited_at: new Date().toISOString(), deleted: deleted}};
+      if (deleted) metadata.provenance.deleted_at = metadata.provenance.edited_at;
+      if (create) {
+        metadata.provenance.created_base = JSON.parse(JSON.stringify(entry));
+        if (afterEntryId) {
+          if (!state.selectedGlossary.has(afterEntryId)) throw new Error(labels().glossaryHistoryChanged);
+          metadata.provenance.insert_after = afterEntryId;
+        }
+      }
+      validateGlossaryRevisionMetadata(metadata);
+      var digest = await canonicalDigest(glossaryRevisionMaterial(metadata));
+      var folder = await glossaryDirectory(true);
+      await writeImmutableRevision(folder, glossaryRevisionFileName(metadata.revision, digest), encodeGlossaryRevision(metadata));
+      var previous = new Map(state.selectedGlossary);
+      addGlossaryRevision(Object.assign({}, metadata, {semantic_digest: digest, _origin: "directory"}));
+      resolveGlossaryAll();
+      state.payload.glossary_revisions = glossaryRevisionState().revisions;
+      refreshGlossarySurfaces(previous);
+      setStatus(labels().glossarySaveSuccess);
+      return true;
+    } finally { state.saveInProgress = false; }
+  }
+
+  async function deleteGlossaryEntry(entry) {
+    if (!await confirmReaderAction(labels().deleteGlossaryConfirm.replace("{term}", glossarySourceTerm(entry)))) return;
+    try { await saveGlossaryMembership(entry, true, false); }
+    catch (error) { setStatus(String(error.message || error), "error"); }
+  }
+
+  function showAddGlossary(afterEntryId) {
+    if (!prepareForDraftSwitch()) return;
+    var strings = labels(), dialog = element("dialog", "alc-confirm-dialog alc-glossary-create");
+    var entryId = "term-" + crypto.randomUUID();
+    var header = element("header", "alc-glossary-create-header");
+    var heading = element("h2", "", strings.addGlossary);
+    heading.id = "alc-glossary-create-heading";
+    dialog.setAttribute("aria-labelledby", heading.id);
+    var close = iconButton("alc-glossary-create-close", "×", strings.close);
+    close.onclick = function () { dialog.close(); };
+    header.appendChild(heading); header.appendChild(close); dialog.appendChild(header);
+    var body = element("div", "alc-glossary-create-fields");
+    var fields = [];
+    [strings.sourceTerm, strings.translatedTerm, strings.definition].forEach(function (label, index) {
+      var field = element("label", "", label), input = element(index === 2 ? "textarea" : "input");
+      input.setAttribute("aria-label", label); field.appendChild(input); body.appendChild(field); fields.push(input);
+    });
+    dialog.appendChild(body);
+    var error = element("p", "alc-glossary-create-error"); error.setAttribute("role", "alert"); body.appendChild(error);
+    var actions = element("div", "alc-confirm-actions"), cancel = element("button", "", strings.cancel), save = element("button", "", strings.save);
+    cancel.onclick = function () { dialog.close(); };
+    save.onclick = async function () {
+      var entry = {entry_id: entryId, term: fields[0].value.trim(), translated_term: fields[1].value.trim(), definition: fields[2].value.trim()};
+      if (!entry.term || !entry.translated_term || !glossaryEntryIsEditable(entry)) { error.textContent = strings.glossaryTranslatedRequired; return; }
+      save.disabled = cancel.disabled = close.disabled = true;
+      try { if (await saveGlossaryMembership(entry, false, true, afterEntryId)) dialog.close(); }
+      catch (e) { error.textContent = String(e.message || e); }
+      finally { save.disabled = cancel.disabled = close.disabled = false; }
+    };
+    dialog.addEventListener("cancel", function (event) { if (save.disabled) event.preventDefault(); });
+    dialog.addEventListener("close", function () { dialog.remove(); });
+    actions.appendChild(cancel); actions.appendChild(save); dialog.appendChild(actions); document.body.appendChild(dialog); dialog.showModal(); fields[0].focus();
+  }
+
   function renderGlossaryCardActions(entry) {
     var strings = labels();
     var source = glossarySourceTerm(entry);
@@ -7277,6 +7469,11 @@
       beginGlossaryEdit(entry);
     });
     root.appendChild(edit);
+    var remove = iconButton("alc-card-action", "−", strings.deleteElement);
+    remove.onclick = function (event) { event.stopPropagation(); deleteGlossaryEntry(entry); };
+    var add = iconButton("alc-card-action", "+", strings.addGlossary);
+    add.onclick = function (event) { event.stopPropagation(); showAddGlossary(glossaryEntryId(entry)); };
+    root.appendChild(remove); root.appendChild(add);
     return root;
   }
 
@@ -8986,7 +9183,6 @@
   }
 
   function renderGlossary(main, glossary, strings) {
-    if (!glossary.length) return;
     var section = element("section", "alc-appendix");
     section.id = "alc-glossary";
     section.appendChild(element("h2", "", strings.glossary));
@@ -8995,6 +9191,10 @@
       dl.appendChild(renderGlossaryRow(entry, strings));
     });
     section.appendChild(dl);
+    if (!glossary.length) {
+      var add = iconButton("alc-card-action", "+", strings.addGlossary);
+      add.onclick = function () { showAddGlossary(null); }; section.appendChild(add);
+    }
     main.appendChild(section);
   }
 
@@ -13002,6 +13202,13 @@
     var outcomes = await loadDirectoryGlossaryRevisionFiles(
       files, previousCache, nextCache
     );
+    var candidateGroups = new Map();
+    candidates.concat(outcomes.filter(function (outcome) { return outcome && outcome.revision; }).map(function (outcome) { return outcome.revision; })).forEach(function (revision) {
+      var values = candidateGroups.get(revision.entry_id) || [];
+      if (!values.some(function (value) { return value.semantic_digest === revision.semantic_digest; })) values.push(revision);
+      candidateGroups.set(revision.entry_id, values);
+    });
+    var candidateBases = glossaryBaselinesFor(candidateGroups).entries;
     var batchRevisionsByGlossaryDigest = new Map();
     for (var outcomeIndex = 0; outcomeIndex < outcomes.length; outcomeIndex += 1) {
       var outcome = outcomes[outcomeIndex];
@@ -13009,7 +13216,7 @@
       if (outcome.revision) {
         try {
           var batch = await loadGlossaryPropagationBatch(
-            directory, outcome.revision
+            directory, outcome.revision, candidateBases
           );
           candidates.push(outcome.revision);
           batch.glossaryRevisions.forEach(function (revision) {
@@ -13050,7 +13257,8 @@
     return handle.getFileHandle(segments[segments.length - 1]);
   }
 
-  async function loadGlossaryPropagationBatch(directory, glossaryRevision) {
+  async function loadGlossaryPropagationBatch(directory, glossaryRevision, candidateBases) {
+    candidateBases = candidateBases || state.glossaryBase;
     var propagation = glossaryRevision.provenance &&
       glossaryRevision.provenance.propagation;
     if (propagation === undefined) {
@@ -13076,7 +13284,7 @@
         throw new Error("propagation fragment does not match its commit marker");
       }
       validateStoredGlossaryMentions(
-        revision, revision.markdown_body, state.glossaryBase
+        revision, revision.markdown_body, candidateBases
       );
       revision._origin = "directory";
       revisions.push(revision);
@@ -13093,7 +13301,7 @@
         await (await dependentHandle.getFile()).text(),
         dependentReference.path.split("/").pop()
       );
-      var base = glossaryBaseEntry(dependentReference.entry_id);
+      var base = candidateBases.find(function (entry) { return glossaryEntryId(entry) === dependentReference.entry_id; });
       if (!base || state.glossaryDuplicateIds.has(dependent.entry_id) ||
         dependent.entry_id === glossaryRevision.entry_id ||
         dependent.entry_id !== dependentReference.entry_id ||
@@ -13118,10 +13326,11 @@
   }
 
   function structurallySelectedGlossaryChains(revisions) {
+    var baseline = glossaryBaselinesFor(revisions);
     var chains = [];
-    state.glossaryBase.forEach(function (base) {
+    baseline.entries.forEach(function (base) {
       var entryId = glossaryEntryId(base);
-      var baseDigest = state.glossaryBaseDigests.get(entryId);
+      var baseDigest = baseline.digests.get(entryId);
       if (!entryId || !baseDigest) return;
       var values = (revisions.get(entryId) || []).filter(function (revision) {
         return validGlossaryRevisionChange(base, revision.entry);
@@ -15014,6 +15223,12 @@
       }
     }
     validateGlossaryRevisionMetadata(metadata);
+    if (metadata.provenance.created_base) {
+      if (metadata.revision !== 2 || !jsonValuesEqual(metadata.entry, metadata.provenance.created_base) ||
+          await canonicalDigest(glossaryBaseMaterial(metadata.provenance.created_base)) !== metadata.parent_semantic_digest) {
+        throw new Error("Invalid new glossary entry base");
+      }
+    }
     var digest = await canonicalDigest(glossaryRevisionMaterial(metadata));
     var expected = /^revision-([0-9]{6,})-([0-9a-f]{64})[.](?:md|json)$/.exec(
       filename

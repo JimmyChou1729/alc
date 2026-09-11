@@ -32,6 +32,8 @@ def test_runtime_refresh_preserves_payload_and_unknown_html():
     result=refresh_reader_runtime(source)
     assert b'"unchanged":true' in result and b'<p>Source</p>' in result
     assert b'dismissTranslationQuality' in result
+    assert b'alc-glossary-create-fields' in result
+    assert refresh_reader_runtime(result) == result
     assert refresh_reader_runtime(b'<html>unknown</html>')==b'<html>unknown</html>'
 
 

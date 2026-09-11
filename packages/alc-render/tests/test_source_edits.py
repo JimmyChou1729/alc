@@ -671,3 +671,41 @@ def test_selection_drag_does_not_close_inline_editor():
     attemptInlineDraftExit(event('click',outside,0));assert.equal(prompted,2);
     }());'''
     subprocess.run(['node', '-'], input=script, check=True, capture_output=True, text=True)
+
+
+def test_glossary_recycle_bin_visibility_restore_and_source_layout():
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node unavailable')
+    js = (Path(__file__).parents[1] / 'src/alc_render/web_assets/reader.js').read_text()
+    script = js[:js.rfind('\n  if (document.readyState')] + r'''
+    const assert=require('node:assert/strict');
+    const button={hidden:true};
+    globalThis.document={getElementById:()=>button};
+    state.readerSettingsReady=true;
+    state.selected=new Map();
+    const entry={entry_id:'term-one',term:'Force',translated_term:'力',definition:'Interaction'};
+    const removed={entry_id:entry.entry_id,entry,revision:3,semantic_digest:'a'.repeat(64),provenance:{deleted:true,deleted_at:'2026-09-11T01:00:00Z'}};
+    state.selectedGlossaryRevisions=new Map([[entry.entry_id,removed]]);
+    syncDeletedContentControl();assert.equal(button.hidden,false);
+    const items=deletedContentEntries();assert.equal(items.length,1);assert.equal(items[0].role,'glossary');
+    saveGlossaryMembership=async function(value,deleted,create){
+      assert.equal(value,entry);assert.equal(deleted,false);assert.equal(create,false);
+      state.selectedGlossaryRevisions.set(entry.entry_id,{...removed,provenance:{deleted:false}});
+      syncDeletedContentControl();return true;
+    };
+    (async()=>{
+      assert.equal(await restoreDeletedContent(items[0]),true);
+      assert.equal(deletedContentEntries().length,0);assert.equal(button.hidden,true);
+      const source={block_id:'b',kind:'paragraph',payload:{text:'5. The formalism has subtleties.'}};
+      sourceEditorMarkdown=block=>block.payload.text;
+      const restored={role:'source',deleted:false,markdown_body:source.payload.text,provenance:{source_edit:{schema_version:'alc.render.source_edit.v1',operation:'replace'}}};
+      assert.equal(sourceReplacementUsesOriginalLayout(source,restored),true);
+      assert.equal(sourceReplacementUsesOriginalLayout(source,{...restored,markdown_body:'5. Edited text'}),false);
+      assert.equal(sourceReplacementUsesOriginalLayout(source,{...restored,deleted:true}),false);
+      assert.equal(sourceReplacementUsesOriginalLayout(source,{...restored,appearance:{foreground:'#123456'}}),false);
+    })().catch(error=>{console.error(error);process.exitCode=1;});
+}());
+'''
+    result=subprocess.run([node, '-'], input=script, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
