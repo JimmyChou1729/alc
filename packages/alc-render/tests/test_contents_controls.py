@@ -65,7 +65,8 @@ const state={sourceVisible:true,glossaryVisible:true,referencesVisible:true,page
  payload:{selected_heading_fragments:[],publication:{glossary:[{term:'word'}],bibliography:[{id:'ref-1',title:'Companion source'}]}},md:{render:text=>text}};
 renderVisibilityOptions();renderSpeechRoleOptions();
 const values=root=>root.children.map(label=>label.children[0].value);
-assert.deepEqual(values(view),['source','page-markers','translation','glossary-section','references-section']);
+assert.deepEqual(values(view),['source','translation','glossary-section','references-section','page-markers']);
+assert.equal(view.children[view.children.length-1].children[0].checked,false);
 assert.deepEqual(values(speech),['source','translation']);assert.equal(visibleRoleCount(),1);
 renderContents(list,[{anchor_block_id:'heading',level:1,title:'Original title'}],labels());
 const link=list.children[0].children[0];assert.equal(link.textContent,'Source edited');

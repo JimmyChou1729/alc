@@ -7825,9 +7825,6 @@
     if (!root) return;
     root.replaceChildren();
     root.appendChild(visibilityOption("source", labels().original, state.sourceVisible));
-    root.appendChild(visibilityOption(
-      "page-markers", labels().documentData, state.pageMarkersVisible
-    ));
     state.roleOrder.forEach(function (role) {
       if (role === "source") return;
       root.appendChild(visibilityOption(
@@ -7836,6 +7833,9 @@
     });
     root.appendChild(visibilityOption("glossary-section", labels().glossary, state.glossaryVisible));
     root.appendChild(visibilityOption("references-section", labels().companionReferences, state.referencesVisible));
+    root.appendChild(visibilityOption(
+      "page-markers", labels().documentData, state.pageMarkersVisible
+    ));
   }
 
   function visibilityOption(value, text, checked) {
@@ -9903,15 +9903,24 @@
       var title = entry.title || entry.source || id;
       var source = entry.source || entry.url || "";
       if (/^https?:\/\//i.test(source)) {
-        var link = element("a", "", title);
+        var link = element("a");
+        appendTocTitle(link, title);
         link.href = source;
         link.rel = "noopener noreferrer";
         item.appendChild(link);
       } else {
-        item.appendChild(element("strong", "", title));
+        var titleNode = element("strong");
+        appendTocTitle(titleNode, title);
+        item.appendChild(titleNode);
       }
       if (source && source !== title) {
-        item.appendChild(document.createTextNode(" — " + source));
+        var sourceNode = element("span");
+        if (/^https?:\/\//i.test(source)) {
+          sourceNode.textContent = " — " + source;
+        } else {
+          appendTocTitle(sourceNode, " — " + source);
+        }
+        item.appendChild(sourceNode);
       }
       (entry.dois || []).forEach(function (doi) {
         item.appendChild(document.createTextNode(" DOI: " + doi));
