@@ -14,6 +14,8 @@ def publication_translation_quality(publication_path) -> dict:
     issues = []
     blocks = {b.block_id: b for b in state.publication.source_document.blocks}
     for revision in state.selected_revisions:
+        if revision.provenance.get("translation_quality_resolved"):
+            continue
         warning = revision.provenance.get("translation_quality")
         if warning is not None:
             if not isinstance(warning, Mapping) or warning.get("schema_version") != "alc.translate.quality_diagnostic.v1":

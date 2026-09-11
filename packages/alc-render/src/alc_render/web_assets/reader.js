@@ -3172,21 +3172,45 @@
     }
   }
 
+  function activeDeliveryIssues(ledger) {
+    return ledger.issues.filter(function (issue) {
+      if (!issue || ["translation_source_text", "translation_review_skipped"].indexOf(issue.category) < 0) return true;
+      // The header renders before distant translation chunks are hydrated.
+      var publication = state.payload && state.payload.publication;
+      var blocks = publication && publication.source_document && publication.source_document.blocks || [];
+      var index = blocks.findIndex(function (block) { return block.block_id === issue.scope; });
+      if (index >= 0) {
+        loadPayloadForBlockRange(index, index + 1);
+        if (state.payloadVersion === "v2") state.fragmentGroups = groupedFragments(publication.source_document);
+      }
+      var revisions = state.selected ? Array.from(state.selected.values()) : [];
+      return !revisions.some(function (fragment) {
+        if (fragment.role !== "translation" || fragment.priority > 100 || !translationQualityResolved(fragment)) return false;
+        var anchor = fragment.anchor || {};
+        return anchor.target_id === issue.scope || (anchor.related_blocks || []).some(function (block) {
+          return block.block_id === issue.scope;
+        });
+      });
+    });
+  }
+
   function renderDeliverySummary() {
     var ledger = deliveryLedger();
     if (
       deliverySummaryIsDismissed() || !ledger || ledger.delivery_grade === "complete" ||
       document.body.dataset.alcExportSnapshot === "true"
     ) return null;
+    var issues = activeDeliveryIssues(ledger);
+    if (!issues.length) return null;
     var chinese = targetLanguage().toLowerCase().indexOf("zh") === 0;
     var counts = new Map();
-    ledger.issues.forEach(function (issue) {
+    issues.forEach(function (issue) {
       var category = String(issue && issue.category || "other");
       counts.set(category, (counts.get(category) || 0) + 1);
     });
     var panel = element("aside", "alc-delivery-summary");
     panel.dataset.deliveryGrade = ledger.delivery_grade;
-    panel.dataset.deliveryIssueCount = String(ledger.issues.length);
+    panel.dataset.deliveryIssueCount = String(issues.length);
     panel.setAttribute("aria-labelledby", "alc-delivery-summary-title");
     var header = element("header", "alc-delivery-summary-header");
     var title = element(
@@ -3226,7 +3250,7 @@
       known += count;
       list.appendChild(element("li", "", String(count) + " " + label));
     });
-    var other = ledger.issues.length - known;
+    var other = issues.length - known;
     if (other > 0) {
       list.appendChild(element(
         "li", "", String(other) + " " +

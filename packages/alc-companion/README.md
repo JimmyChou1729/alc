@@ -448,3 +448,9 @@ Local generated-output failures can therefore complete with a degraded Reader.
 User pauses, authorization requests, source identity mismatches, and storage or
 delivery integrity failures retain their existing handling. Translation retains
 its existing per-block repair and source-text fallback.
+
+Audited publication replacements may explicitly set
+`resolve_translation_quality: true` when replacing a translation body. This
+marks its previous quality warning resolved while retaining the original
+fallback declaration in revision history. The flag is omitted by default and
+cannot be used for other roles or title-only changes.

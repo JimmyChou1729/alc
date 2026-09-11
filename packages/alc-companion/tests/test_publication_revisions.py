@@ -402,3 +402,83 @@ def test_revision_cleans_staging_when_rename_does_not_commit(
     run_root = paths.operator_revisions_run_path("run")
     assert not tuple(run_root.glob("review-*"))
     assert not tuple(run_root.glob(".staging-*"))
+
+
+def test_quality_resolution_request_preserves_legacy_encoding(tmp_path):
+    import hashlib
+    from dataclasses import replace
+    from ac_jobs import canonical_json_bytes
+
+    paths, _store, _published, publication_path = _fixture(tmp_path)
+    request = _request(paths, publication_path)
+    encoded = revision_module.encode_publication_revision_request(request)
+    assert "resolve_translation_quality" not in encoded["replacements"][0]
+    legacy_digest = hashlib.sha256(canonical_json_bytes(encoded)).hexdigest()
+    assert request.request_digest == legacy_digest
+    assert revision_module.decode_publication_revision_request(encoded) == request
+    resolved = replace(request, replacements=(replace(
+        request.replacements[0], resolve_translation_quality=True,
+    ),))
+    payload = revision_module.encode_publication_revision_request(resolved)
+    assert payload["replacements"][0]["resolve_translation_quality"] is True
+    assert revision_module.decode_publication_revision_request(payload) == resolved
+    assert resolved.request_digest != legacy_digest
+
+
+def test_quality_resolution_preserves_history_and_replays(tmp_path):
+    from dataclasses import replace
+    from alc_render import publication_translation_quality
+
+    paths, store, published, publication_path = _fixture(tmp_path)
+    state = read_publication_workspace_state(publication_path)
+    base = replace(
+        state.selected_revisions[0], fragment_id="translation-repair", role="translation",
+        title=None, citation_ids=(), markdown_body="Original source body.\n",
+        provenance={"producer": "alc-render-browser", "translation_fallback": {
+            "schema_version": "alc.translate.fallback.v1", "kind": "source_text",
+            "source_preserved": True,
+        }},
+    )
+    write_fragment_revision(publication_path.parent, base)
+    assert publication_translation_quality(publication_path)["source_fallback_count"] == 1
+    request = CompanionPublicationRevisionRequest(
+        run_id="run", publication_digest=state.publication_digest, review_id="retranslate",
+        reason="Repair translation", replacements=(CompanionFragmentReplacement(
+            base.fragment_id, base.semantic_digest, base.title, "已重新翻译。\n",
+            resolve_translation_quality=True,
+        ),),
+    )
+    result = commit_publication_revision(paths, request, publication_path)
+    selected = read_publication_workspace_state(publication_path)
+    child = next(r for r in selected.selected_revisions if r.fragment_id == base.fragment_id)
+    assert child.provenance["translation_fallback"] == base.provenance["translation_fallback"]
+    assert child.provenance["translation_quality_resolved"] == {
+        "by": "publication_review", "review_id": "retranslate",
+    }
+    assert any(r.semantic_digest == base.semantic_digest for r in selected.revisions)
+    assert publication_translation_quality(publication_path)["source_fallback_count"] == 0
+    assert commit_publication_revision(paths, request, publication_path).idempotent_replay
+    materialize_operator_revisions(paths, "run", publication_path.parent)
+    assert read_publication_workspace_state(publication_path).edition_digest == result.edition_digest
+
+
+@pytest.mark.parametrize("role,body", [("companion", "Changed"), ("translation", "Original\n")])
+def test_quality_resolution_rejects_nontranslation_or_unchanged_body(tmp_path, role, body):
+    from dataclasses import replace
+
+    paths, _store, _published, publication_path = _fixture(tmp_path)
+    state = read_publication_workspace_state(publication_path)
+    base = replace(state.selected_revisions[0], fragment_id="quality-target", role=role,
+                   markdown_body="Original\n", citation_ids=(),
+                   provenance={"producer": "alc-render-browser"})
+    write_fragment_revision(publication_path.parent, base)
+    request = CompanionPublicationRevisionRequest(
+        run_id="run", publication_digest=state.publication_digest, review_id="invalid-quality",
+        reason="Repair", replacements=(CompanionFragmentReplacement(
+            base.fragment_id, base.semantic_digest, "Changed title", body,
+            resolve_translation_quality=True,
+        ),),
+    )
+    with pytest.raises(CompanionPublicationRevisionError) as error:
+        commit_publication_revision(paths, request, publication_path)
+    assert error.value.code == "publication_revision_quality_resolution_invalid"

@@ -3800,7 +3800,9 @@ def test_delivery_quality_uses_selected_revisions_and_rejects_tampering(tmp_path
         initial,
         revision=2,
         parent_semantic_digest=initial.semantic_digest,
-        provenance={"producer": "alc-translate"},
+        provenance={**initial.provenance, "translation_quality_resolved": {
+            "by": "publication_review", "review_id": "retranslate",
+        }},
         markdown_body="已修复的翻译",
     )
     updated_path = write_fragment_revision(tmp_path, updated)
