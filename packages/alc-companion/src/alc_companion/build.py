@@ -62,6 +62,7 @@ from ac_llm import (
     LLMRequest,
     LLMTaskService,
 )
+from ac_proposer_reviewer.artifacts import proposal_artifact_id, read_json_artifact
 from ac_proposer_reviewer import (
     BATCH_SCHEMA_VERSION,
     BatchFailurePolicy,
@@ -98,6 +99,8 @@ from .editorial_review import (
     resolve_editorial_review,
     unavailable_editorial_review,
 )
+from .content_recovery import recover_chapter_guide
+from .guide_repair import repair_guide_candidate
 from .generation_validation import (
     CompanionContentError,
     validate_author_identity,
@@ -1698,7 +1701,31 @@ class CompanionBuildHandler:
             }
             for chapter_id, guide_context in guide_contexts.items():
                 if guide_interruption is not None and chapter_id not in loop_results:
+                    if isinstance(guide_interruption, Paused) and is_local_content_pause(guide_interruption):
+                        chapter = guide_by_id[chapter_id]
+                        loop = next(item for item in guide_loops if item.loop_id == chapter_id)
+                        proposal = _latest_paused_guide_proposal(
+                            context, loop, execution_scope=execution_scope
+                        )
+                        if proposal is not None:
+                            proposal = normalize_batch_numbers(
+                                proposal, chapter, by_chapter[guide_owners[chapter_id]]
+                            )
+                        accepted = recover_chapter_guide(
+                            proposal, chapter_id=chapter_id, block_ids=chapter.block_ids,
+                            chapter_anchor_block_id=chapter.display_anchor_block_id,
+                            section_block_ids=chapter.section_block_ids,
+                        )
+                        issue = _content_recovery_issue(
+                            chapter_id, "model_output_unavailable" if proposal is None else "review_incomplete"
+                        )
+                        if proposal is None:
+                            issue.update(category="guide_evaluated_omitted", fallback="source_and_translation_only")
+                        context.artifacts.publish_json(f"chapters/{chapter_id}/guide-accepted", accepted)
+                        context.artifacts.publish_json(f"chapters/{chapter_id}/guide-delivery", issue)
+                        completed_results[f"guide-{chapter_id}"] = {**accepted, "delivery_issue": issue}
                     continue
+                source_review_issue = None
                 try:
                     # Preloaded evidence was delivered in each independent worker context.
                     if guide_context.get("verified_chapter_evidence") is not None:
@@ -1711,18 +1738,16 @@ class CompanionBuildHandler:
                     elif self.llm_options.profile is LLMExecutionProfile.LOCAL_APP:
                         raise ValueError("Local app requires verifiable source read receipts")
                 except ValueError:
-                    guide_errors.append(RunError(
-                        "chapter_source_read_incomplete",
-                        f"Chapter {chapter_id} lacks verified complete source/translation reads.",
-                    ))
-                    continue
+                    source_review_issue = _content_recovery_issue(
+                        chapter_id, "chapter_source_read_incomplete"
+                    )
                 try:
                     loop_result = loop_results.get(chapter_id)
                     if loop_result is None:
                         guide_errors.append(RunError("chapter_guide_batch_incomplete", f"missing guide result for {chapter_id}"))
                         continue
                     chapter = guide_by_id[chapter_id]
-                    delivery_issue: dict[str, Any] | None = None
+                    delivery_issue: dict[str, Any] | None = source_review_issue
                     proposal_value = loop_result.final_proposals.get("guide-proposer")
                     if loop_result.error is not None:
                         delivery_issue = _recoverable_guide_delivery_issue(
@@ -1813,6 +1838,8 @@ class CompanionBuildHandler:
                                 program_companions=program_companions,
                                 program_section_guides=program_sections,
                             )
+                        if source_review_issue is not None:
+                            raise CompanionContentError("chapter_guide_review_audit_invalid", "Source review could not be verified")
                         accepted_guide = validate_chapter_guide(
                             candidate,
                             chapter_id=chapter_id,
@@ -1823,42 +1850,31 @@ class CompanionBuildHandler:
                             section_block_ids=chapter.section_block_ids,
                         )
                     except CompanionContentError as exc:
-                        if delivery_issue is not None:
-                            delivery_issue["category"] = "guide_evaluated_omitted"
-                            delivery_issue["fallback"] = "source_and_translation_only"
-                            delivery_issue["source_preserved"] = True
-                            delivery_issue["evidence"] = (
-                                "reviewer infrastructure failure left no admissible "
-                                "guide proposal"
+                        def accept_repair(raw):
+                            return validate_chapter_guide(
+                                normalize_batch_numbers(raw, chapter, parent),
+                                chapter_id=chapter_id, block_ids=chapter.block_ids,
+                                chapter_anchor_block_id=chapter.display_anchor_block_id,
+                                section_block_ids=chapter.section_block_ids,
                             )
-                            candidate = self._augment_chapter_candidate(
-                                chapter,
-                                {
-                                    "chapter_guide": None,
-                                    "section_guides": [],
-                                    "companions": [],
-                                    "references": [],
-                                },
+
+                        repaired = None
+                        if exc.code != "chapter_guide_review_audit_invalid":
+                            repaired = repair_guide_candidate(
+                                self.task_service, context, candidate=candidate,
+                                chapter_id=chapter_id, model=self.recipe.model,
+                                options=self.llm_options, error=exc,
+                                validate=accept_repair, resume_input=resume_input,
                             )
-                            candidate_path = context.working.write_candidate_json(
-                                candidate_id, candidate
-                            )
-                            try:
-                                accepted_guide = validate_chapter_guide(
-                                    candidate,
-                                    chapter_id=chapter_id,
-                                    block_ids=chapter.block_ids,
-                                    chapter_anchor_block_id=(
-                                        chapter.display_anchor_block_id
-                                    ),
-                                    section_block_ids=chapter.section_block_ids,
-                                )
-                            except CompanionContentError:
-                                guide_errors.append(RunError("chapter_guide_fallback_invalid", "program-owned empty guide is invalid", {"chapter_id": chapter_id}))
-                                continue
-                        else:
-                            guide_errors.append(RunError(exc.code, str(exc), {"candidate_path": str(candidate_path), "chapter_id": chapter_id}))
-                            continue
+                        if isinstance(repaired, Paused):
+                            return repaired
+                        accepted_guide = accept_repair(repaired) if repaired is not None else recover_chapter_guide(
+                            candidate, chapter_id=chapter_id,
+                            block_ids=chapter.block_ids,
+                            chapter_anchor_block_id=chapter.display_anchor_block_id,
+                            section_block_ids=chapter.section_block_ids,
+                        )
+                        delivery_issue = _content_recovery_issue(chapter_id, exc.code)
                     artifact_id = f"chapters/{chapter_id}/guide-accepted"
                     if delivery_issue is not None and not accepted_guide["learning_units"]:
                         delivery_issue["category"] = "guide_evaluated_omitted"
@@ -1878,7 +1894,18 @@ class CompanionBuildHandler:
                         completed_results[f"guide-{chapter_id}"] = accepted_guide
 
                 except ValueError as exc:
-                    guide_errors.append(RunError("chapter_guide_invalid", str(exc), {"chapter_id": chapter_id}))
+                    # Malformed model collections may fail before strict acceptance.
+                    chapter = guide_by_id[chapter_id]
+                    candidate = loop_results[chapter_id].final_proposals.get("guide-proposer")
+                    accepted_guide = recover_chapter_guide(
+                        candidate, chapter_id=chapter_id, block_ids=chapter.block_ids,
+                        chapter_anchor_block_id=chapter.display_anchor_block_id,
+                        section_block_ids=chapter.section_block_ids,
+                    )
+                    issue = _content_recovery_issue(chapter_id, str(exc))
+                    context.artifacts.publish_json(f"chapters/{chapter_id}/guide-accepted", accepted_guide)
+                    context.artifacts.publish_json(f"chapters/{chapter_id}/guide-delivery", issue)
+                    completed_results[f"guide-{chapter_id}"] = {**accepted_guide, "delivery_issue": issue}
 
         for parent in chapters:
             if parent.chapter_id not in split_parents:
@@ -1907,7 +1934,7 @@ class CompanionBuildHandler:
             context.working.write_candidate_json("chapter-guide-postprocessing-errors", {"errors": [
                 {"code": error.code, "message": error.message} for error in guide_errors
             ]})
-        if guide_interruption is not None:
+        if guide_interruption is not None and not (isinstance(guide_interruption, Paused) and is_local_content_pause(guide_interruption)):
             return guide_interruption
         if isinstance(joined, Failed):
             return joined
@@ -2033,7 +2060,10 @@ class CompanionBuildHandler:
             ),
             execution_scope=_EDITORIAL_SCOPE,
         )
-        if isinstance(outcome, Paused) and is_local_content_pause(outcome):
+        if (isinstance(outcome, Paused) and is_local_content_pause(outcome)) or (
+            isinstance(outcome, Failed)
+            and outcome.error.code in {"output_invalid", "output_formatting_failed", "reviewer_output_invalid"}
+        ):
             resolution = unavailable_editorial_review(
                 accepted_chapters, inventory, reason="Model editorial output unavailable",
                 proposer_artifact_digest=None, reviewer_artifact_digest=None,
@@ -2667,6 +2697,35 @@ def _publish_editorial_resolution(context: RunContext, resolution: Any) -> None:
             )
 
 
+def _latest_paused_guide_proposal(
+    context: RunContext, loop: LoopSpec, *, execution_scope: str | None
+) -> Mapping[str, Any] | None:
+    # execute() has checked the persisted request identity. Read only that
+    # scope/epoch; a paused reviewer has no completed loop result yet.
+    if context.recovery_epoch:
+        execution_scope = context.execution_id(execution_scope or "proposer-reviewer")
+    artifacts = context.artifacts.scoped("proposer-reviewer")
+    if execution_scope is not None:
+        artifacts = artifacts.scoped(f"scopes/{execution_scope}")
+    for round_number in range(loop.max_rounds, 0, -1):
+        ref = artifacts.find(proposal_artifact_id(loop.loop_id, round_number, "guide-proposer"))
+        if ref is not None:
+            value = read_json_artifact(artifacts, ref)
+            if isinstance(value, Mapping):
+                return value
+    return None
+
+
+def _content_recovery_issue(chapter_id: str, reason: str) -> dict[str, Any]:
+    return {
+        "issue_id": f"guide-content-{chapter_id}",
+        "category": "guide_content_recovered", "scope": chapter_id,
+        "fallback": "retained_candidate", "affected_count": 1,
+        "source_preserved": True, "retry": "bounded_content_recovery",
+        "evidence": reason,
+    }
+
+
 def _recoverable_guide_delivery_issue(
     error: RunError, *, chapter_id: str
 ) -> dict[str, Any] | None:
@@ -2696,6 +2755,8 @@ def _recoverable_guide_delivery_issue(
             for cause in causes
         )
     )
+    if error.code in {"output_invalid", "output_formatting_failed", "chapter_guide_invalid", "chapter_guide_review_audit_invalid", "learning_markdown_invalid"}:
+        return _content_recovery_issue(chapter_id, error.code)
     if not typed_reviewer_failure:
         return None
     return {

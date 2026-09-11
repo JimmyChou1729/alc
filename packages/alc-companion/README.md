@@ -428,3 +428,23 @@ source citations accompanying such anchors become source links; bibliography
 positions remain references. Reviewer coverage is mapped, never expanded.
 When no bibliography is supplied, numeric citations resolving to a batch source
 part become source links as well; unresolved numbers remain validation errors.
+
+### Recoverable generated content
+
+Guide acceptance repairs unambiguous display-math layout before validation. A
+rejected guide candidate can receive one durable model repair; resuming the same
+candidate does not repeat that attempt. A repair may append a missing terminal
+`$$` delimiter while preserving existing text, formulas and locations. If
+acceptance still fails, usable units
+remain readable and editable, with a review notice. Unrenderable Markdown is
+preserved as literal text, unresolved citations are not linked, and uncertain
+locations are attached to the enclosing chapter rather than an invented source
+position. The original candidate and recovery diagnostics remain in the run.
+If a reviewer or a later proposal round pauses on invalid model output, the
+latest saved proposal from that execution scope is retained as unreviewed
+content. A different recovery epoch cannot supply a stale proposal.
+
+Local generated-output failures can therefore complete with a degraded Reader.
+User pauses, authorization requests, source identity mismatches, and storage or
+delivery integrity failures retain their existing handling. Translation retains
+its existing per-block repair and source-text fallback.

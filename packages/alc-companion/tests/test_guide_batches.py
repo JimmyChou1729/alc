@@ -68,3 +68,12 @@ def test_source_only_local_citations_use_batch_blocks():
     value = {'references': [], 'companions': [{'after_part': 1, 'content_markdown': 'See [@1] and [@99].'}]}
     result = normalize_batch_numbers(value, batch, parent)
     assert result['companions'][0]['content_markdown'] == 'See [↗](#block-c) and [@99].'
+
+
+def test_invalid_batch_collections_survive_until_content_recovery():
+    from alc_companion.guide_batches import normalize_batch_numbers
+    parent = SourceChapter('parent', 'Chapter', ('a', 'b'), 'a')
+    batch = SourceChapter('batch', 'Chapter', ('b',), 'b')
+    for value in (None, 42, 'raw text', {'raw': 'content'}):
+        candidate = {'companions': value}
+        assert normalize_batch_numbers(candidate, batch, parent) == candidate

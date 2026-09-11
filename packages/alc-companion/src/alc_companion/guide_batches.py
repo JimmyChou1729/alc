@@ -90,7 +90,7 @@ def normalize_batch_numbers(value: Mapping[str, Any], chapter: SourceChapter,
         uses_parent_anchors = any(isinstance(item, dict) and
             isinstance(item.get('after_part'), int) and
             item['after_part'] > len(chapter.block_ids) and item['after_part'] in parts
-            for item in result.get('companions', []))
+            for item in (result.get('companions') if isinstance(result.get('companions'), list) else []))
         if uses_parent_anchors or reference_count == 0:
             def source_link(match):
                 number = int(match.group(1))

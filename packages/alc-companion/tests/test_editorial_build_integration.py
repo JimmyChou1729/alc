@@ -276,3 +276,20 @@ def test_editorial_not_applicable_never_calls_model(tmp_path, monkeypatch) -> No
 
     assert resolved == accepted[:1]
     assert report["status"] == "not_applicable"
+
+
+@pytest.mark.parametrize('code', ['output_invalid', 'output_formatting_failed', 'reviewer_output_invalid'])
+def test_editorial_generated_output_failure_preserves_accepted_guides(tmp_path, monkeypatch, code):
+    from ac_jobs import Failed
+    context = _context(tmp_path)
+    chapters, accepted = _fixture(context)
+    class Service:
+        def __init__(self, tasks):
+            pass
+        def execute(self, *args, **kwargs):
+            return Failed(RunError(code, 'bad model output'))
+    monkeypatch.setattr(build_module, 'ProposerReviewerService', Service)
+    result, report = build_module.CompanionBuildHandler._cross_chapter_editorial_review(
+        _handler(), context, chapters, accepted, source_inputs=_source_inputs(context))
+    assert result == accepted
+    assert report is not None
