@@ -257,7 +257,7 @@ def create_app(
             await file.close()
         return {k: v for k, v in source.items() if k != "path"}
 
-    from .history import history_jobs, history_job, import_project
+    from .history import history_jobs, history_job, import_project, rename_history, delete_history
 
     @app.post("/api/history/projects")
     def add_history_project(value: HistoryProjectInput):
@@ -341,13 +341,13 @@ def create_app(
     @app.patch("/api/jobs/{job_id}")
     def rename_job(job_id: str, value: RenameInput):
         if job_id.startswith("agent-"):
-            raise HTTPException(409, "Agent history is read-only; use the original plugin to manage this task.")
+            return rename_history(store, job_id, value.title)
         return public_job(store.rename(job_id, value.title))
 
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: str):
         if job_id.startswith("agent-"):
-            raise HTTPException(409, "Agent history is read-only; use the original plugin to manage this task.")
+            return delete_history(store, job_id)
         store.delete(job_id)
         return {"deleted": True}
 

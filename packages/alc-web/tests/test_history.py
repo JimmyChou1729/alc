@@ -4,7 +4,7 @@ from alc_catalog import register_project
 from alc_web.app import create_app
 
 
-def test_agent_history_import_authentication_and_read_only_controls(tmp_path):
+def test_agent_history_import_authentication_and_local_controls(tmp_path, monkeypatch):
     project = tmp_path / 'plugin-project'
     run = project / '.alc/companion/jobs/runs/run-one'
     run.mkdir(parents=True)
@@ -23,12 +23,36 @@ def test_agent_history_import_authentication_and_read_only_controls(tmp_path):
         rows = client.get('/api/jobs').json()
         assert len(rows) == 1 and rows[0]['external']
         job_id = rows[0]['id']
-        assert client.get('/api/jobs/'+job_id).json()['state'] == 'completed'
+        detail = client.get('/api/jobs/'+job_id).json()
+        assert detail['state'] == 'completed'
+        assert detail['detail']['progress_unavailable'] is True
+        from alc_companion.service import CompanionService
+        progress = {'phase': 'guides', 'completed_units': 2, 'total_units': 4}
+        monkeypatch.setattr(CompanionService, 'progress', lambda self, run_id: dict(progress))
+        assert client.get('/api/jobs/'+job_id).json()['detail']['progress']['completed_units'] == 2
+        progress['completed_units'] = 3
+        assert client.get('/api/jobs/'+job_id).json()['detail']['progress']['completed_units'] == 3
         download = client.get(f'/api/jobs/{job_id}/reader?download=true')
         assert download.status_code == 200 and 'Saved Reader' in download.text
         assert 'sandbox' in download.headers['content-security-policy']
         assert client.post(f'/api/jobs/{job_id}/control', json={'action':'resume'}).status_code == 409
-        assert client.delete('/api/jobs/'+job_id).status_code == 409
+        assert client.patch('/api/jobs/'+job_id, json={'title':'My Agent task'}).status_code == 200
+        snapshot = run / 'snapshot.json'
+        original = snapshot.read_text()
+        updated = json.loads(original)
+        updated['status'] = 'running'
+        snapshot.write_text(json.dumps(updated))
+        detail = client.get('/api/jobs/'+job_id).json()
+        assert detail['state'] == 'running'
+        assert detail['display_title'] == 'My Agent task'
+        assert client.patch('/api/jobs/'+job_id, json={'title':' '}).status_code == 400
+        assert client.delete('/api/jobs/'+job_id).status_code == 200
+        assert snapshot.read_text() == json.dumps(updated)
+        assert (project / 'companion.html').exists()
+        assert client.get('/api/jobs').json() == []
+        register_project(project)
+        assert client.get('/api/jobs').json() == []
+        assert client.get('/api/jobs/'+job_id).status_code == 404
         assert app.state.store.list() == []
         (project / 'companion.html').unlink()
         assert client.get(f'/api/jobs/{job_id}/reader?download=true').status_code == 404

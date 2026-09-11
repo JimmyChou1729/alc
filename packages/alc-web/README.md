@@ -130,9 +130,11 @@ the run and failed applications have a separate warning. Legacy results are
 normalized for display without resubmission or rewriting their output.
 
 Agent history is discovered through the independent `alc-catalog` project index,
-including projects registered before Web was installed. The sidebar supports
-explicit import of older `--project-dir` directories. These records are read-only:
-Reader viewing and verified result downloads are supported, but Web never claims,
-resumes, renames, or deletes an Agent run. The default catalog is `~/.alc/catalog`;
+including projects registered before Web was installed. Settings supports
+explicit import of older `--project-dir` directories. Records refresh from the
+Agent project, including subsequent run status and available workflow progress.
+Web can rename or hide its local list entries; project files and Agent execution
+remain unchanged. Reader viewing and verified result downloads are supported,
+but Web never claims or resumes an Agent run. The default catalog is `~/.alc/catalog`;
 set `ALC_CATALOG_DIR` consistently in both entry points to override it. Missing
 project files cannot be restored from the path index.

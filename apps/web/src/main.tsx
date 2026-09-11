@@ -848,7 +848,6 @@ function App() {
           <Plus size={18} />
           新建任务
         </button>
-        <HistoryImport onImported={refresh} />
         <div className="nav-label">
           最近任务 <span>{jobs.length}</span>
         </div>
@@ -947,7 +946,10 @@ function App() {
         {view === "settings" && (
           <SettingsPage
             settings={settings}
-            onSaved={refreshSettings}
+            onSaved={async () => {
+              await refreshSettings();
+              await refresh();
+            }}
             onError={setError}
           />
         )}
@@ -955,8 +957,48 @@ function App() {
           <div className="page detail-page">
             <div className="eyebrow">来自 Agent 插件</div>
             <h1>{job.display_title}</h1>
+            <div className="actions task-management">
+              <button
+                className="text-button"
+                disabled={busy}
+                onClick={() =>
+                  setTaskDialog({
+                    kind: "rename",
+                    id: job.id,
+                    title: job.display_title || job.spec.title,
+                  })
+                }
+              >
+                <Pencil size={15} /> 重命名
+              </button>
+              <button
+                className="text-button"
+                disabled={busy}
+                onClick={() =>
+                  setTaskDialog({
+                    kind: "delete",
+                    id: job.id,
+                    title: job.display_title || job.spec.title,
+                  })
+                }
+              >
+                <Trash2 size={15} color="#c64d4d" /> 删除任务
+              </button>
+            </div>
             <section className="card">
               <p>任务状态：{states[job.state]}</p>
+              {job.detail.progress && (
+                <p>
+                  当前阶段：{taskPhaseLabel(job)}
+                  {job.detail.progress.total_units != null && (
+                    <>
+                      {" "}
+                      · 已完成 {job.detail.progress.completed_units ?? 0} /{" "}
+                      {job.detail.progress.total_units}
+                    </>
+                  )}
+                </p>
+              )}
               <p>
                 项目位置：
                 <code style={{ overflowWrap: "anywhere" }}>
@@ -980,12 +1022,14 @@ function App() {
                     target="_blank"
                     rel="noreferrer"
                   >
-                    打开结果
+                    <BookOpen size={17} />
+                    打开 Reader
                   </a>
                   <a
-                    className="button"
+                    className="button secondary"
                     href={`/api/jobs/${job.id}/reader?download=true`}
                   >
+                    <Download size={16} />
                     下载 HTML
                   </a>
                 </div>
@@ -2778,6 +2822,10 @@ function SettingsPage({
           </p>
         </section>
       )}
+      <section className="card">
+        <h2>插件项目</h2>
+        <HistoryImport onImported={onSaved} />
+      </section>
     </div>
   );
 }
