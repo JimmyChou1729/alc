@@ -381,6 +381,12 @@ a manifest, and only the validated resources referenced by the selected
 content. Local resource links are rewritten to digest-addressed `resources/`
 paths. Formulas, code, tables, footnotes, and external links remain Markdown.
 
+Both Markdown modes normalize portable inline-math boundaries. An adjacent
+ASCII acronym or recognized unit is folded into upright TeX, and recognized operators receive
+visible spacing. Code, display math, link destinations, currency, and escaped
+dollars are left unchanged. Ambiguous boundaries remain verbatim and do not
+prevent the rest of the document from being exported.
+
 Because portable CommonMark has no standard paired-anchor contract for these
 legacy source identities, both Markdown modes export exact `#bib.bibN` and
 structural `#S...` links as readable labels while preserving code, external,

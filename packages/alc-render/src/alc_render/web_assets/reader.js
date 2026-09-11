@@ -11218,8 +11218,8 @@
       buildChangedMarkdown(resourcePaths, categories) :
       buildCompleteMarkdown(resourcePaths, categories);
     if (!complete.markdown) return null;
-    complete.markdown = degradeLegacyInternalMarkdownLinks(
-      complete.markdown
+    complete.markdown = normalizePortableInlineMathMarkdown(
+      degradeLegacyInternalMarkdownLinks(complete.markdown)
     );
     var includedResourcePaths = markdownReferencedResourcePaths(
       complete.markdown, resourcePaths
@@ -11267,7 +11267,9 @@
       buildCompleteMarkdown(resourcePaths, categories);
     if (!complete.markdown) return "";
     return stripPortableMarkdownResources(
-      degradeLegacyInternalMarkdownLinks(complete.markdown), resourcePaths
+      normalizePortableInlineMathMarkdown(
+        degradeLegacyInternalMarkdownLinks(complete.markdown)
+      ), resourcePaths
     );
   }
 
@@ -11790,7 +11792,7 @@
         normalizeMarkdown(String(fallback || "")), resourcePaths
       );
     }
-    return spans.map(function (span) {
+    var values = spans.map(function (span) {
       if (span.kind === "math") {
         var tex = String(span.tex || span.source || "");
         return containsUnescapedDollar(tex) ? "\\(" + tex + "\\)" :
@@ -11805,7 +11807,32 @@
         ) + "](" + markdownLinkDestination(target) + ")";
       }
       return escapeMarkdownInlineText(String(span.text || ""));
-    }).join("");
+    });
+    normalizeSourceInlineMathSpanBoundaries(spans, values);
+    return values.join("");
+  }
+
+  function normalizeSourceInlineMathSpanBoundaries(spans, values) {
+    spans.forEach(function (span, index) {
+      if (span.kind !== "math" || values[index].slice(0, 1) !== "$") return;
+      var tex = String(span.tex || span.source || "");
+      var previous = spans[index - 1];
+      var next = spans[index + 1];
+      var previousTouches = previous && previous.kind === "text" &&
+        /[A-Za-z0-9]$/.test(String(previous.text || ""));
+      var nextText = next && next.kind === "text" ?
+        String(next.text || "") : "";
+      var nextIdentifier = portableInlineMathIdentifier(nextText);
+      if (portableInlineMathOperator(tex)) {
+        if (previousTouches) values[index - 1] += " ";
+        if (/^[A-Za-z0-9]/.test(nextText)) values[index + 1] = " " + values[index + 1];
+        return;
+      }
+      if (!previousTouches && nextIdentifier) {
+        values[index] = "$" + tex + "\\mathrm{" + nextIdentifier[1] + "}$";
+        values[index + 1] = values[index + 1].slice(nextIdentifier[1].length);
+      }
+    });
   }
 
   function exportPresentationFieldMarkdown(view, resourcePaths) {
@@ -12465,6 +12492,242 @@
 
   function degradeLegacyInternalMarkdownLinks(markdown) {
     return degradeLegacyMarkdownLinks(markdown, legacyInternalMarkdownTarget);
+  }
+
+  function normalizePortableInlineMathMarkdown(markdown) {
+    var normalized = normalizeMarkdown(String(markdown || ""));
+    var tokens = state.md.parse(normalized, {});
+    var protectedLines = portableMathProtectedLineIndexes(tokens);
+    var codeRanges = portableMathCodeSpanRanges(normalized, tokens).concat(
+      portableMathLinkRanges(normalized)
+    );
+    var lineOffset = 0;
+    return normalized.split("\n").map(function (line, lineNumber) {
+      var currentOffset = lineOffset;
+      lineOffset += line.length + 1;
+      if (protectedLines.has(lineNumber)) return line;
+      var ranges = codeRanges.filter(function (range) {
+        return currentOffset < range[1] &&
+          range[0] < currentOffset + line.length;
+      }).map(function (range) {
+        return [
+          Math.max(0, range[0] - currentOffset),
+          Math.min(line.length, range[1] - currentOffset)
+        ];
+      });
+      var result = normalizePortableInlineMathLine(
+        line, ranges
+      );
+      return result;
+    }).join("\n");
+  }
+
+  function portableMathProtectedLineIndexes(tokens) {
+    var lines = new Set();
+    (tokens || []).forEach(function (token) {
+      if (
+        ["fence", "code_block", "alc_math_block"].indexOf(token.type) < 0 ||
+        !Array.isArray(token.map)
+      ) return;
+      for (var index = token.map[0]; index < token.map[1]; index += 1) {
+        lines.add(index);
+      }
+    });
+    return lines;
+  }
+
+  function portableMathCodeSpanRanges(markdown, tokens) {
+    var lines = markdown.split("\n");
+    var lineOffsets = [];
+    var offset = 0;
+    lines.forEach(function (line) {
+      lineOffsets.push(offset);
+      offset += line.length + 1;
+    });
+    var ranges = [];
+    markdownInlineLineRanges(tokens).forEach(function (lineRange) {
+      var start = lineOffsets[lineRange.start];
+      var end = lineRange.end < lineOffsets.length ?
+        lineOffsets[lineRange.end] : markdown.length;
+      var value = markdown.slice(start, end);
+      var position = 0;
+      while (position < value.length) {
+        if (value.charAt(position) !== "`") {
+          position += 1;
+          continue;
+        }
+        var run = 1;
+        while (value.charAt(position + run) === "`") run += 1;
+        var codeEnd = markdownCodeSpanEnd(value, position + run, run);
+        if (codeEnd < 0) {
+          position += run;
+          continue;
+        }
+        ranges.push([start + position, start + codeEnd + run]);
+        position = codeEnd + run;
+      }
+    });
+    return ranges;
+  }
+
+  function normalizePortableInlineMathLine(
+    line, initialProtectedRanges
+  ) {
+    var protectedRanges = portableMathProtectedInlineRanges(
+      line, initialProtectedRanges
+    );
+    var output = "";
+    var position = 0;
+    while (position < line.length) {
+      var protectedRange = protectedRanges.find(function (range) {
+        return range[0] <= position && position < range[1];
+      });
+      if (protectedRange) {
+        output += line.slice(position, protectedRange[1]);
+        position = protectedRange[1];
+        continue;
+      }
+      if (
+        line.charAt(position) !== "$" ||
+        markdownCharacterEscaped(line, position) ||
+        line.charAt(position - 1) === "$" ||
+        line.charAt(position + 1) === "$"
+      ) {
+        output += line.charAt(position);
+        position += 1;
+        continue;
+      }
+      if (portableCurrencyOpening(line, position)) {
+        output += line.charAt(position);
+        position += 1;
+        continue;
+      }
+      var end = inlineMathEnd(line, position + 1, "$");
+      if (
+        end <= position + 1 || protectedRanges.some(function (range) {
+          return position < range[1] && range[0] < end + 1;
+        })
+      ) {
+        output += line.charAt(position);
+        position += 1;
+        continue;
+      }
+      var body = line.slice(position + 1, end);
+      var before = line.charAt(position - 1);
+      var after = line.charAt(end + 1);
+      var beforeTouches = /[A-Za-z0-9]/.test(before);
+      var afterTouches = /[A-Za-z0-9]/.test(after);
+      if (!beforeTouches && !afterTouches) {
+        output += line.slice(position, end + 1);
+        position = end + 1;
+        continue;
+      }
+      if (portableInlineMathOperator(body)) {
+        if (beforeTouches && !/[ \t]$/.test(output)) output += " ";
+        output += line.slice(position, end + 1);
+        if (afterTouches) output += " ";
+        position = end + 1;
+        continue;
+      }
+      var identifier = portableInlineMathIdentifier(line.slice(end + 1));
+      if (!beforeTouches && identifier) {
+        output += "$" + body + "\\mathrm{" + identifier[1] + "}$";
+        position = end + 1 + identifier[1].length;
+        continue;
+      }
+      // Ambiguous adjacency must not block an otherwise usable export.
+      output += line.slice(position, end + 1);
+      position = end + 1;
+    }
+    return output;
+  }
+
+  function portableInlineMathIdentifier(value) {
+    var match = /^([A-Za-z][A-Za-z0-9]*)/.exec(value);
+    if (!match) return null;
+    return /^[A-Z][A-Z0-9]+$/.test(match[1]) ||
+      ["Gyr", "Gyrs", "Myr", "Myrs", "GeV", "MeV", "keV", "eV", "Mpc", "kpc", "pc"].indexOf(match[1]) >= 0 ? match : null;
+  }
+
+  function portableMathLinkRanges(markdown) {
+    var ranges = [];
+    for (var position = 0; position < markdown.length; position += 1) {
+      if (markdown.charAt(position) !== "[" || markdownCharacterEscaped(markdown, position)) continue;
+      var labelEnd = markdownLabelEnd(markdown, position);
+      if (labelEnd < 0 || markdown.charAt(labelEnd + 1) !== "(") continue;
+      var cursor = labelEnd + 2;
+      while (/\s/.test(markdown.charAt(cursor)) && cursor < markdown.length) cursor += 1;
+      var destination = state.md.helpers.parseLinkDestination(markdown, cursor, markdown.length);
+      if (!destination.ok) continue;
+      cursor = destination.pos;
+      var afterDestination = cursor;
+      while (/\s/.test(markdown.charAt(cursor)) && cursor < markdown.length) cursor += 1;
+      if (cursor > afterDestination && markdown.charAt(cursor) !== ")") {
+        var title = state.md.helpers.parseLinkTitle(markdown, cursor, markdown.length);
+        if (!title.ok) continue;
+        cursor = title.pos;
+        while (/\s/.test(markdown.charAt(cursor)) && cursor < markdown.length) cursor += 1;
+      }
+      if (markdown.charAt(cursor) === ")") ranges.push([labelEnd + 1, cursor + 1]);
+    }
+    return ranges;
+  }
+
+  function portableInlineMathOperator(value) {
+    return [
+      "=", "<", ">", "\\approx", "\\equiv", "\\ge", "\\geq",
+      "\\leftarrow", "\\le", "\\leq", "\\leftrightarrow", "\\mapsto",
+      "\\ne", "\\neq", "\\pm", "\\propto", "\\rightarrow", "\\sim",
+      "\\times", "\\to"
+    ].indexOf(String(value || "").trim()) >= 0;
+  }
+
+  function portableCurrencyOpening(line, start) {
+    var value = line.slice(start);
+    var amount = /^[$][0-9]+(?:[.,][0-9]+)?/.exec(value);
+    if (!amount) return false;
+    var after = value.charAt(amount[0].length);
+    return !after || /[ \t.,;:!?)\]]/.test(after);
+  }
+
+  function portableMathProtectedInlineRanges(line, initialRanges) {
+    if (markdownReferenceDefinition(line)) return [[0, line.length]];
+    var ranges = (initialRanges || []).map(function (range) {
+      return range.slice();
+    });
+    var position = 0;
+    while (position < line.length) {
+      var bracket = line.charAt(position) === "[" ? position :
+        line.slice(position, position + 2) === "![" ? position + 1 : -1;
+      if (bracket >= 0 && !markdownCharacterEscaped(line, bracket)) {
+        var labelEnd = markdownLabelEnd(line, bracket);
+        if (labelEnd >= 0 && line.charAt(labelEnd + 1) === "(") {
+          var destination = markdownDestinationRange(line, labelEnd + 2);
+          if (destination) ranges.push([destination.start, destination.end]);
+        }
+      }
+      if (line.charAt(position) === "<" &&
+          !markdownCharacterEscaped(line, position)) {
+        var angleEnd = line.indexOf(">", position + 1);
+        if (angleEnd >= 0 && portableMarkdownAngleConstruct(
+          line.slice(position, angleEnd + 1)
+        )) {
+          ranges.push([position, angleEnd + 1]);
+        }
+      }
+      position += 1;
+    }
+    ranges.sort(function (left, right) {
+      return left[0] - right[0] || left[1] - right[1];
+    });
+    return ranges;
+  }
+
+  function portableMarkdownAngleConstruct(value) {
+    return /^<!--[\s\S]*-->$/.test(value) ||
+      /^<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?\/?>$/.test(value) ||
+      /^<[A-Za-z][A-Za-z0-9+.-]*:[^ <>]+>$/.test(value) ||
+      /^<[^ <>@]+@[^ <>@]+>$/.test(value);
   }
 
   function degradeLegacyBibliographyMarkdownLinks(markdown) {
