@@ -139,6 +139,8 @@
     exportHtmlTemplate: null,
     exportStandaloneSupported: false,
     sourceVisible: true,
+    glossaryVisible: true,
+    referencesVisible: true,
     pageMarkersVisible: false,
     hiddenRoles: new Set(),
     roleOrder: [],
@@ -146,7 +148,7 @@
     appearanceGroups: new Map(),
     appearanceStyle: null,
     visibilityStyle: null,
-    visibilityContentsSignature: null,
+    contentsLanguage: "source",
     visibilityReady: false,
     visibilityEmptyRoot: null,
     primaryTitleBlockId: "",
@@ -473,6 +475,9 @@
     );
     var defaults = chinese ? {
       contents: "目录",
+      contentsLanguage: traditional ? "目錄語言" : "目录语言",
+      contentsSource: "原文",
+      contentsTranslation: traditional ? "譯文" : "译文",
       collapse: "收起目录",
       expand: "展开目录",
       newSaveLocation: "新建保存位置",
@@ -517,6 +522,7 @@
       glossary: "术语表",
       glossaryTerm: traditional ? "術語" : "术语",
       references: "参考文献",
+      companionReferences: traditional ? "伴讀參考文獻" : "伴读参考文献",
       originalTerm: "原文术语",
       translatedTerm: traditional ? "譯文" : "译文",
       definition: "释义",
@@ -659,6 +665,9 @@
       restoreRecommended: "恢复推荐值"
     } : {
       contents: "Contents",
+      contentsLanguage: "Contents language",
+      contentsSource: "Source",
+      contentsTranslation: "Translation",
       collapse: "Collapse contents",
       expand: "Expand contents",
       newSaveLocation: "New save location",
@@ -703,6 +712,7 @@
       glossary: "Glossary",
       glossaryTerm: "Glossary",
       references: "References",
+      companionReferences: "Companion references",
       originalTerm: "Original term",
       translatedTerm: "Translation",
       definition: "Definition",
@@ -3933,6 +3943,22 @@
     var known = Array.from(state.sourceBibliographyIndex.aliases.values())
       .indexOf(targetId) >= 0;
     return known ? revealSourceNavigationTarget() : false;
+  }
+
+  function revealAppendixTarget(targetId) {
+    var property = targetId === "alc-glossary" ? "glossaryVisible" :
+      targetId === "alc-references" ? "referencesVisible" : "";
+    if (!property && targetId.indexOf("reference-") === 0 && bibliographyIndex().groups.some(function (group) {
+      return "reference-" + group.targetId === targetId;
+    })) property = "referencesVisible";
+    if (!property) return false;
+    if (state[property]) return true;
+    state[property] = true;
+    if (state.visibilityReady) {
+      renderVisibilityOptions();
+      applyVisibility();
+    }
+    return true;
   }
 
   function revealSourceNavigationTarget() {
@@ -7779,10 +7805,13 @@
       "page-markers", labels().documentData, state.pageMarkersVisible
     ));
     state.roleOrder.forEach(function (role) {
+      if (role === "source") return;
       root.appendChild(visibilityOption(
         role, roleLabel(role), !state.hiddenRoles.has(role)
       ));
     });
+    root.appendChild(visibilityOption("glossary-section", labels().glossary, state.glossaryVisible));
+    root.appendChild(visibilityOption("references-section", labels().companionReferences, state.referencesVisible));
   }
 
   function visibilityOption(value, text, checked) {
@@ -7796,6 +7825,10 @@
         state.sourceVisible = input.checked;
       } else if (value === "page-markers") {
         state.pageMarkersVisible = input.checked;
+      } else if (value === "glossary-section") {
+        state.glossaryVisible = input.checked;
+      } else if (value === "references-section") {
+        state.referencesVisible = input.checked;
       } else if (input.checked) {
         state.hiddenRoles.delete(value);
       } else {
@@ -7810,7 +7843,7 @@
 
   function visibleRoleCount() {
     return state.roleOrder.filter(function (role) {
-      return !state.hiddenRoles.has(role);
+      return role !== "source" && !state.hiddenRoles.has(role);
     }).length;
   }
 
@@ -7828,15 +7861,6 @@
     );
     if (state.visibilityEmptyRoot) state.visibilityEmptyRoot.hidden = channels !== 0;
     updateVisibilityStyles(channels);
-    if (!scope) {
-      var signature = state.sourceVisible ? "source" : Array.from(
-        state.hiddenRoles
-      ).sort().join("\u0000");
-      if (signature !== state.visibilityContentsSignature) {
-        state.visibilityContentsSignature = signature;
-        updateContentsTitles();
-      }
-    }
     scheduleScrollableTableSync();
   }
 
@@ -7847,13 +7871,17 @@
       document.head.appendChild(state.visibilityStyle);
     }
     var rules = [];
+    if (!state.glossaryVisible) rules.push('#alc-glossary,[data-contents-entry="glossary"]{display:none}');
+    if (!state.referencesVisible) rules.push('#alc-references,[data-contents-entry="references"]{display:none}');
     state.hiddenRoles.forEach(function (role) {
+      if (role === "source") return;
       rules.push(
         '.alc-fragment[data-role-slot="' + roleSlot(role) + '"]{display:none}'
       );
     });
     if (!state.sourceVisible) {
       rules.push(".alc-source-card{display:none}");
+      rules.push('.alc-fragment[data-role-slot="' + roleSlot("source") + '"]{display:none}');
       var translationSlot = state.roleSlots.get("translation");
       var translationVisible = translationSlot !== undefined &&
         !state.hiddenRoles.has("translation");
@@ -7863,7 +7891,7 @@
         );
       }
       var visibleSlots = state.roleOrder.filter(function (role) {
-        return !state.hiddenRoles.has(role);
+        return role !== "source" && !state.hiddenRoles.has(role);
       }).map(function (role) {
         return '.alc-fragment[data-role-slot="' + roleSlot(role) + '"]';
       });
@@ -8802,6 +8830,7 @@
     root.replaceChildren();
     root.appendChild(speechRoleOption("source", labels().original));
     state.roleOrder.forEach(function (role) {
+      if (role === "source") return;
       root.appendChild(speechRoleOption(role, roleLabel(role)));
     });
     updateSpeechControls();
@@ -9494,6 +9523,7 @@
   function renderContents(list, sections, strings) {
     var contentsHeading = document.getElementById("alc-contents-heading");
     contentsHeading.textContent = strings.contents;
+    setupContentsLanguage(contentsHeading);
     sections.forEach(function (section) {
       var item = element("li");
       item.dataset.level = String(section.level);
@@ -9509,13 +9539,50 @@
       list.appendChild(item);
     });
     if ((state.payload.publication.glossary || []).length) {
-      appendContentsLink(list, strings.glossary, "#alc-glossary");
+      appendContentsLink(list, strings.glossary, "#alc-glossary", "glossary");
     }
     if ((state.payload.publication.bibliography || []).length) {
-      appendContentsLink(list, strings.references, "#alc-references");
+      appendContentsLink(list, strings.companionReferences, "#alc-references", "references");
     }
     appendSupplementCoverage(list);
+    updateContentsTitles();
+  }
 
+  function setupContentsLanguage(heading) {
+    var group = document.getElementById("alc-contents-language");
+    if (!group) {
+      var row = element("div", "alc-contents-heading-row");
+      heading.parentElement.insertBefore(row, heading);
+      row.appendChild(heading);
+      group = element("div", "alc-contents-language");
+      group.id = "alc-contents-language";
+      group.setAttribute("role", "group");
+      ["source", "translation"].forEach(function (language) {
+        var button = element("button");
+        button.type = "button";
+        button.dataset.contentsLanguage = language;
+        button.addEventListener("click", function () {
+          state.contentsLanguage = language;
+          syncContentsLanguage();
+          updateContentsTitles();
+        });
+        group.appendChild(button);
+      });
+      row.appendChild(group);
+    }
+    syncContentsLanguage();
+  }
+
+  function syncContentsLanguage() {
+    var group = document.getElementById("alc-contents-language");
+    if (!group) return;
+    var strings = labels();
+    group.setAttribute("aria-label", strings.contentsLanguage);
+    group.querySelectorAll("button").forEach(function (button) {
+      var source = button.dataset.contentsLanguage === "source";
+      button.textContent = source ? strings.contentsSource : strings.contentsTranslation;
+      button.setAttribute("aria-pressed", String(button.dataset.contentsLanguage === state.contentsLanguage));
+    });
   }
 
   function appendSupplementCoverage(list) {
@@ -9600,7 +9667,7 @@
             link.appendChild(child.cloneNode(true));
           });
           removeVisibleHtmlTags(link);
-          decorateGlossary(link, state.sourceVisible ? "source" : "target");
+          decorateGlossary(link, heading.dataset.contentsRole === "translation" ? "target" : "source");
           typeset(link);
         } else {
           appendTocTitle(link, link.dataset.sourceTitle);
@@ -9619,7 +9686,7 @@
     });
     (state.payload.selected_heading_fragments || []).forEach(function (fragment) {
       if (fragment.target_id === blockId && !loadedIds.has(fragment.fragment_id) &&
-          !state.revisions.has(fragment.fragment_id)) {
+          !state.revisions.has(fragment.fragment_id) && fragmentIsVisible(fragment)) {
         candidates.push(fragment);
       }
     });
@@ -9627,25 +9694,26 @@
       return Number(left.priority) - Number(right.priority) ||
         left.fragment_id.localeCompare(right.fragment_id);
     });
-    for (var index = 0; index < candidates.length; index += 1) {
-      var candidate = candidates[index];
-      if (state.sourceVisible) {
-        if (candidate.role !== "source" || candidate.priority > 100) continue;
-      } else if (candidate.role === "source" || state.hiddenRoles.has(candidate.role)) {
-        continue;
+    var roles = state.contentsLanguage === "translation" ? ["translation", "source"] : ["source"];
+    for (var roleIndex = 0; roleIndex < roles.length; roleIndex += 1) {
+      for (var index = 0; index < candidates.length; index += 1) {
+        var candidate = candidates[index];
+        if (candidate.role !== roles[roleIndex] || (candidate.role === "source" && candidate.priority > 100)) continue;
+        var holder = element("div");
+        holder.innerHTML = state.md.render(projectGlossaryMarkdown(candidate.markdown_body, candidate));
+        var heading = holder.firstElementChild;
+        if (heading && /^H[1-6]$/.test(heading.tagName)) {
+          heading.dataset.contentsRole = candidate.role;
+          return heading;
+        }
       }
-      var holder = element("div");
-      holder.innerHTML = state.md.render(projectGlossaryMarkdown(
-        candidate.markdown_body, candidate
-      ));
-      var heading = holder.firstElementChild;
-      if (heading && /^H[1-6]$/.test(heading.tagName)) return heading;
     }
     return null;
   }
 
-  function appendContentsLink(list, text, href) {
+  function appendContentsLink(list, text, href, entry) {
     var item = element("li");
+    if (entry) item.dataset.contentsEntry = entry;
     var link = element("a", "", text);
     link.href = href;
     item.appendChild(link);
@@ -9801,7 +9869,7 @@
     if (!bibliography.length) return;
     var section = element("section", "alc-appendix");
     section.id = "alc-references";
-    section.appendChild(element("h2", "", strings.references));
+    section.appendChild(element("h2", "", strings.companionReferences));
     var list = element("ol", "alc-reference-list");
     bibliographyIndex().groups.forEach(function (group) {
       var entry = group.entry;
@@ -10404,6 +10472,7 @@
     var chunk = chunkForTargetId(targetId);
     if (!chunk) return false;
     revealSourceTarget(targetId);
+    revealAppendixTarget(targetId);
     renderChunk(chunk);
     armHashCalibration(canonicalHash, keyboardNavigation === true);
     if (updateHistory) {

@@ -28,6 +28,7 @@ def test_audio_capability_is_separate_from_task_and_install_apis(tmp_path):
             reader = client.get(url)
             assert reader.status_code == 200
             assert b'id="alc-tts-config"' in reader.content
+            assert b'id="alc-contents-controls-runtime"' in reader.content
             assert 'connect-src ' + url + '/tts/' in reader.headers['content-security-policy']
             assert "media-src data: blob:" in reader.headers['content-security-policy']
             assert path.read_bytes() == original

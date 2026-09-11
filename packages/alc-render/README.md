@@ -456,6 +456,16 @@ columns without a model-generated translation fragment. Source-only publications
 keep a single figure. Internal editorial review summaries are excluded from the
 table of contents; their underlying report resources remain in the publication.
 
+The contents heading has its own Source/Translation title selector. It does not
+change visible document layers; a missing translated heading uses the source title.
+The Show content and speech panels each expose only one Original option, including
+source-role overlays. Show content also has a Glossary toggle for the glossary
+section and its contents entry; it leaves inline term annotations and saved
+glossary entries intact. A separate Companion references toggle controls the
+Companion bibliography appendix and its contents entry. This appendix is distinct
+from any References section preserved inside the source document. An explicit
+internal link to a hidden appendix reveals it and synchronizes its toggle.
+
 The table of contents follows deletion and restoration of its original source
 heading anchor, independent of the translation's visibility. Closing the quality
 summary persists dismissal per source document in browser storage, including

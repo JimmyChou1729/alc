@@ -4161,6 +4161,10 @@ assert(
   globalThis.NodeFilter = {SHOW_TEXT: 4};
   document.createTreeWalker = function () { return {nextNode: function () {return null;}}; };
   nodes["alc-contents-heading"] = new FakeNode("h2");
+  nodes["alc-contents-language"] = new FakeNode("div");
+  nodes["alc-contents-language"].querySelectorAll = function () { return []; };
+  nodes["alc-contents-list"] = new FakeNode("ul");
+  nodes["alc-contents-list"].querySelectorAll = function () { return []; };
   document.body = new FakeNode("body");
   document.createTextNode = function (text) {
     var node = new FakeNode("text"); node.textContent = text; return node;

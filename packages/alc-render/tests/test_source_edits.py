@@ -449,14 +449,14 @@ def test_figure_natural_size_handles_loaded_and_loading_copies():
     assert result.returncode==0,result.stderr
 
 
-def test_contents_titles_follow_saved_source_and_visible_translation():
+def test_contents_titles_follow_saved_source_and_selected_language():
     node = shutil.which('node')
     if not node:
         pytest.skip('Node unavailable')
     js = (Path(__file__).parents[1] / 'src/alc_render/web_assets/reader.js').read_text()
     script = js[:js.rfind('\n  if (document.readyState')] + r'''
     const assert=require('node:assert/strict');
-    element=()=>({set innerHTML(value){this.firstElementChild={tagName:value.startsWith('#')?'H2':'P',textContent:value};}});
+    element=()=>({set innerHTML(value){this.firstElementChild={tagName:value.startsWith('#')?'H2':'P',textContent:value,dataset:{}};}});
     state.md={render:x=>x};projectGlossaryMarkdown=x=>x;
     fragmentTargetId=x=>x.anchor.target_id;
     const source={fragment_id:'s',role:'source',priority:50,anchor:{target_id:'b'},markdown_body:'## New source'};
@@ -470,10 +470,14 @@ def test_contents_titles_follow_saved_source_and_visible_translation():
     state.activeDraft={markdown_body:'## Unsaved title'};
     assert.equal(visibleHeadingForBlock('b').textContent,'## Restored source');
     state.sourceVisible=false;
+    assert.equal(visibleHeadingForBlock('b').textContent,'## Restored source');
+    state.contentsLanguage='translation';
     assert.equal(visibleHeadingForBlock('b').textContent,'## 新译文');
     state.hiddenRoles.add('translation');
-    assert.equal(visibleHeadingForBlock('b'),null);
-    state.sourceVisible=true;source.deleted=true;
+    assert.equal(visibleHeadingForBlock('b').textContent,'## 新译文');
+    state.sourceVisible=true;
+    assert.equal(visibleHeadingForBlock('b').textContent,'## 新译文');
+    state.contentsLanguage='source';source.deleted=true;
     assert.equal(visibleHeadingForBlock('b'),null);
     state.selected.delete('s');state.revisions.set('s',[source]);
     assert.equal(visibleHeadingForBlock('b'),null);

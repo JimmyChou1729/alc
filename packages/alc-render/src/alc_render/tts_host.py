@@ -25,7 +25,7 @@ def refresh_reader_runtime(content: bytes) -> bytes:
     runtime = files('alc_render').joinpath('web_assets/reader.js').read_text(encoding='utf-8')
     match = matches[0]
     html = html[:match.start(2)] + runtime + html[match.end(2):]
-    for name in ('glossary-editor', 'tts-reader'):
+    for name in ('glossary-editor', 'tts-reader', 'contents-controls'):
         css = files('alc_render').joinpath('web_assets/' + name + '.css').read_text(encoding='utf-8')
         style_id = 'alc-' + name + '-runtime'
         html = re.sub(r'<style id="' + style_id + r'">[\s\S]*?</style>', '', html)

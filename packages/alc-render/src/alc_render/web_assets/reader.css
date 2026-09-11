@@ -1,5 +1,6 @@
 @import "glossary-editor.css";
 @import "tts-reader.css";
+@import "contents-controls.css";
 :root {
   color-scheme: light;
   --alc-ink: #20262e;

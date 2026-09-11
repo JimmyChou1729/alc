@@ -1,0 +1,33 @@
+.alc-contents-heading-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .25rem .5rem;
+  margin-bottom: .8rem;
+}
+.alc-contents .alc-contents-heading-row > h2 { margin: 0; }
+.alc-contents-language {
+  display: inline-flex;
+  align-items: center;
+  gap: .2rem;
+}
+.alc-contents-language button {
+  min-height: 2.75rem;
+  padding: .3rem .45rem;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--alc-muted, #68717c);
+  font: inherit;
+  font-size: .75rem;
+  cursor: pointer;
+}
+.alc-contents-language button[aria-pressed="true"] {
+  background: transparent;
+  color: var(--alc-link, #0369a1);
+  font-weight: 600;
+}
+.alc-contents-language button:hover { color: #1d5576; }
+.alc-contents-language button:focus-visible { outline: 2px solid #4f7896; outline-offset: 2px; }
