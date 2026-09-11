@@ -2438,8 +2438,7 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
       type="button" aria-label="New save location" title="New save location">
       <svg class="alc-tool-icon" viewBox="0 0 24 24" aria-hidden="true"
         focusable="false">
-        <path d="M3 7h6l2 2h10l-2 10H3Z"></path>
-        <path d="M12 12v5M9.5 14.5h5"></path>
+        <path d="M3 17V6a2 2 0 0 1 2-2h4l2 3h7a2 2 0 0 1 2 2v2"></path><path d="M3 17l3-6h16l-3 8H5a2 2 0 0 1-2-2Z"></path>
       </svg>
     </button>
     <div class="alc-settings-control">

@@ -13296,6 +13296,8 @@
     var strings = labels();
     setupUnsavedDraftDialog();
     var connect = document.getElementById("alc-connect");
+    var folderIcon = connect.querySelector("svg");
+    if (folderIcon) folderIcon.innerHTML = '<path d="M3 17V6a2 2 0 0 1 2-2h4l2 3h7a2 2 0 0 1 2 2v2"></path><path d="M3 17l3-6h16l-3 8H5a2 2 0 0 1-2-2Z"></path>';
     updateDirectoryControl();
     if (!window.showDirectoryPicker) {
       connect.disabled = true;

@@ -1999,3 +1999,13 @@ select {
     grid-template-columns: 1fr;
   }
 }
+
+.ocr-form-grid input:not([type="checkbox"]),
+.ocr-form-grid .select-trigger-wide {
+  margin-top: 7px;
+  height: 44px;
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 22px;
+}
