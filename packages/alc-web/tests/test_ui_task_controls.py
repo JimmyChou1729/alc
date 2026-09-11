@@ -102,10 +102,22 @@ let source = fs.readFileSync('apps/web/src/main.tsx', 'utf8')
   .replaceAll('import.meta.url', JSON.stringify('file:///web/main.tsx'))
   .replace(/createRoot\(document.getElementById\("root"\)!\).render\(<App \/>\);/, '')
   + '\nexport {NewJob};';
-const js = ts.transpile(source, {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS,
- jsx: ts.JsxEmit.React, esModuleInterop: true});
+const options = {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS,
+ jsx: ts.JsxEmit.React, esModuleInterop: true};
+const js = ts.transpile(source, options);
+const modules = new Map();
+function requireModule(id) {
+ if (!id.startsWith('./')) return localRequire(id);
+ if (modules.has(id)) return modules.get(id).exports;
+ const filename = 'apps/web/src/' + id.slice(2) + '.tsx';
+ const context = {exports: {}, require: requireModule};
+ modules.set(id, context);
+ vm.createContext(context);
+ vm.runInContext(ts.transpile(fs.readFileSync(filename, 'utf8'), options), context);
+ return context.exports;
+}
 for (const suffix of ['html', 'htm', 'md', 'markdown', 'tex', 'pdf']) {
- const context = {exports: {}, require: localRequire, URLSearchParams,
+ const context = {exports: {}, require: requireModule, URLSearchParams,
    location: {search: '?url=' + encodeURIComponent('https://example.test/paper.' + suffix)}};
  vm.createContext(context); vm.runInContext(js, context);
  const html = renderToStaticMarkup(React.createElement(context.exports.NewJob, {

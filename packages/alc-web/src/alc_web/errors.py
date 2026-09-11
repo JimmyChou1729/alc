@@ -19,7 +19,7 @@ def explain_error(error: Mapping, provider: Mapping | None = None) -> str:
                     source_structure_error = True
                 if key == 'http_status' and isinstance(item, int):
                     statuses.add(item)
-                elif key in {'code', 'ac_error_code', 'category'} and isinstance(item, str):
+                elif key in {'code', 'ac_error_code', 'category', 'detail_code'} and isinstance(item, str):
                     codes.add(item)
                 elif isinstance(item, (Mapping, list)):
                     visit(item)
@@ -36,6 +36,14 @@ def explain_error(error: Mapping, provider: Mapping | None = None) -> str:
         return 'PDF 识别结果已保留，但跨页内容还原未通过检查。需要检查结果兼容性；这不一定是 MinerU 配置问题。'
     if code == 'mineru_timeout' or code == 'mineru_transport':
         return 'PDF 识别等待超时或连接中断。已有 OCR 任务和结果已保留；服务模式可恢复查询，本机模式请检查运行环境后新建任务。'
+    if code == 'mineru_local_failed':
+        message = str(error.get('message', ''))
+        if 'memory_exhausted' in message:
+            return '本机 PDF 识别报告内存不足。已有材料已保留；请释放内存或减少同时识别的文档后重试。'
+        if ', timeout)' in message:
+            return '本机 PDF 识别程序报告超时。已有材料和诊断日志已保留，请检查 MinerU 状态后重试。'
+        if 'provider_error_without_details' in message:
+            return '本机 PDF 识别程序退出，但未报告具体异常。已有材料和诊断日志已保留，暂不能确定是超时还是资源问题。'
     if code in {'mineru_submission_uncertain', 'mineru_task_lost', 'mineru_local_interrupted', 'mineru_remote_failed', 'mineru_local_failed'}:
         return 'PDF 识别未完成，系统没有重复提交。请检查 MinerU 服务或本机运行状态，再决定是否新建任务；已有内容已保留。'
     if code.startswith(('mineru_', 'pdf_source_')):
@@ -66,6 +74,8 @@ def explain_error(error: Mapping, provider: Mapping | None = None) -> str:
         return '模型服务暂时出现服务器错误。已完成的进度会保留，可稍后恢复任务。'
     if 'provider_transport' in codes or 'transport' in codes:
         return '与模型服务的连接未能完成。请检查网络和所选 CLI/API 服务是否可用，然后恢复任务；已完成的进度会保留。'
+    if 'input_too_large' in codes:
+        return '单次模型请求超过输入容量，已完成结果已保存。需要进一步拆分处理内容后继续；重复提交相同请求无法解决。'
     if 'provider_invalid_request' in codes:
         return '模型服务不接受当前请求。请检查所选协议、模型 ID 和参数是否受支持；修改模型参数后请重新新建任务。'
     if 'chapter_source_read_incomplete' in codes:

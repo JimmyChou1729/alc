@@ -84,6 +84,7 @@ def test_reader_glossary_uses_latest_entry_and_only_exact_target_ranges() -> Non
     parseGlossaryRevisionFile: parseGlossaryRevisionFile,
     prepareGlossary: prepareGlossary,
     resolveGlossaryAll: resolveGlossaryAll,
+    orderGlossaryEntries: orderGlossaryEntries,
     projectGlossaryMarkdown: projectGlossaryMarkdown,
     buildMarkdownPackage: buildMarkdownPackage,
     validGlossarySurfaceAnchors: validGlossarySurfaceAnchors,
@@ -317,11 +318,11 @@ var base = {
     savedRow.children.length === 4 &&
       savedRow.children[1].className === "alc-glossary-translation" &&
       cardActions.className.includes("alc-glossary-card-actions") &&
-      cardActions.children.length === 2 &&
+      cardActions.children.length === 4 &&
       cardActions.children.every(function (button) {
         return button.className === "alc-card-action";
       }),
-    "saved glossary row did not use speaker/edit hover actions"
+    "saved glossary row did not use speaker/edit/delete/add hover actions"
   );
   var activationCalls = [];
   helpers.installGlossaryActivationSpy(activationCalls);
@@ -427,6 +428,50 @@ var base = {
         "新解释：$H_0$ 与 **宇宙学**。",
     "latest glossary revision was not projected into the effective entry"
   );
+  var createdEntry = {entry_id: "term-created", term: "Manifold", translated_term: "流形", definition: "A smooth space."};
+  var created = {
+    schema_version: "alc.render.glossary_revision.v1", entry_id: createdEntry.entry_id,
+    revision: 2, parent_semantic_digest: await helpers.canonicalDigest(helpers.glossaryBaseMaterial(createdEntry)),
+    entry: createdEntry, provenance: {created_base: createdEntry, deleted: false, insert_after: "term-reader"}
+  };
+  created.semantic_digest = await helpers.canonicalDigest(helpers.glossaryRevisionMaterial(created));
+  var parsedCreation = await helpers.parseGlossaryRevisionFile(
+    helpers.encodeGlossaryRevision(created), helpers.glossaryRevisionFileName(2, created.semantic_digest));
+  var tailEntry = {entry_id: "term-tail", term: "Tail", translated_term: "末尾", definition: ""};
+  var insertionOrder = helpers.orderGlossaryEntries([base, tailEntry, createdEntry], new Map([[createdEntry.entry_id, [parsedCreation]]]));
+  assert(insertionOrder.map(e => e.entry_id).join(",") === "term-reader,term-created,term-tail", "created term was not inserted after clicked term");
+  assert(helpers.orderGlossaryEntries(insertionOrder, new Map([[createdEntry.entry_id, [parsedCreation]]])).map(e => e.entry_id).join(",") === "term-reader,term-created,term-tail", "export/reload changed glossary ordering");
+  helpers.state.glossaryRevisions.set(createdEntry.entry_id, [parsedCreation]);
+  helpers.resolveGlossaryAll();
+  assert(helpers.state.selectedGlossary.has(createdEntry.entry_id), "new glossary term missing from projection");
+  var deletion = Object.assign({}, created, {
+    revision: 3, parent_semantic_digest: created.semantic_digest, provenance: {deleted: true}
+  });
+  deletion.semantic_digest = await helpers.canonicalDigest(helpers.glossaryRevisionMaterial(deletion));
+  var parsedDeletion = await helpers.parseGlossaryRevisionFile(
+    helpers.encodeGlossaryRevision(deletion), helpers.glossaryRevisionFileName(3, deletion.semantic_digest));
+  helpers.state.glossaryRevisions.set(createdEntry.entry_id, [parsedCreation, parsedDeletion]);
+  helpers.resolveGlossaryAll();
+  assert(!helpers.state.selectedGlossary.has(createdEntry.entry_id), "deleted glossary term still visible");
+  assert(!helpers.state.payload.publication.glossary.some(e => e.entry_id === createdEntry.entry_id), "deleted term leaked into Markdown projection");
+  // Export embeds immutable baselines and history; reload must retain the tombstone.
+  helpers.state.payload.publication.glossary = JSON.parse(JSON.stringify(helpers.state.glossaryBase));
+  helpers.state.payload.glossary_revisions = [revision, parsedCreation, parsedDeletion];
+  await helpers.prepareGlossary();
+  assert(!helpers.state.selectedGlossary.has(createdEntry.entry_id), "HTML reload resurrected deleted term");
+  assert(helpers.state.selectedGlossaryRevisions.get(createdEntry.entry_id).revision === 3, "HTML reload lost glossary history");
+  // Directory-only import reconstructs newly created baselines without an exported HTML.
+  helpers.state.payload.publication.glossary = [base];
+  helpers.state.payload.glossary_revisions = [revision, parsedCreation, parsedDeletion];
+  await helpers.prepareGlossary();
+  assert(helpers.state.glossaryBase.some(e => e.entry_id === createdEntry.entry_id) &&
+    !helpers.state.selectedGlossary.has(createdEntry.entry_id), "directory history failed to reconstruct created/deleted term");
+  helpers.state.glossaryRevisions = new Map([["term-reader", [revision]]]);
+  helpers.resolveGlossaryAll();
+  assert(!helpers.state.glossaryBase.some(e => e.entry_id === createdEntry.entry_id), "switching directories leaked a created baseline");
+  helpers.state.payload.publication.glossary = [base];
+  helpers.state.payload.glossary_revisions = [revision];
+  await helpers.prepareGlossary();
   var numericBase = Object.assign({}, base, {
     entry_id: "term-numeric", term: "Numeric", translated_term: "数值",
     confidence: 0.9
@@ -4116,6 +4161,10 @@ assert(
   globalThis.NodeFilter = {SHOW_TEXT: 4};
   document.createTreeWalker = function () { return {nextNode: function () {return null;}}; };
   nodes["alc-contents-heading"] = new FakeNode("h2");
+  nodes["alc-contents-language"] = new FakeNode("div");
+  nodes["alc-contents-language"].querySelectorAll = function () { return []; };
+  nodes["alc-contents-list"] = new FakeNode("ul");
+  nodes["alc-contents-list"].querySelectorAll = function () { return []; };
   document.body = new FakeNode("body");
   document.createTextNode = function (text) {
     var node = new FakeNode("text"); node.textContent = text; return node;
@@ -5198,6 +5247,15 @@ assert(
     !plainChanges.includes(htmlPath),
   "plain changed Markdown did not strip a rewritten HTML image"
 );
+revised.markdown_body = "value$x$axis and $x$2";
+["all", "changed"].forEach(function (scope) {
+  var packaged = helpers.buildMarkdownPackage(scope, new Set(["translation"]));
+  var plain = helpers.buildPlainMarkdown(scope, new Set(["translation"]));
+  assert(packaged.archive.size > 0 &&
+    packaged.markdown.includes(revised.markdown_body) &&
+    plain.includes(revised.markdown_body),
+    "ambiguous math must survive both export modes and scopes");
+});
 var exported = helpers.exportRevisionState();
   assert(exported.revisions.length === 7, "full export omitted a revision history entry");
 assert(
@@ -6391,7 +6449,15 @@ def test_reader_uses_low_distraction_controls_and_inline_editor() -> None:
     assert 'wrapper.dataset.compact = "true";' in javascript
     assert '".alc-settings-panel, .alc-speech-dock"' in javascript
     persistent_quality = javascript[javascript.index("  function deliverySummaryStorageKey()"):javascript.index("  function renderDeliverySummary()") ]
-    assert "localStorage" not in javascript.replace(persistent_quality, "")
+    ephemeral_controls = javascript.replace(persistent_quality, "")
+    for engine_preference in (
+        'window.localStorage.getItem("alc.reader.speech-engine")',
+        'window.localStorage.getItem("alc.reader.speech-voices")',
+        'window.localStorage.setItem("alc.reader.speech-voices", JSON.stringify(state.speechVoiceChoices))',
+    ):
+        assert engine_preference in ephemeral_controls
+        ephemeral_controls = ephemeral_controls.replace(engine_preference, "")
+    assert "localStorage" not in ephemeral_controls
     assert "contain: inline-size;" in stylesheet
     assert ".alc-speech-player-title {\n  display: block;" in stylesheet
     assert (
@@ -6646,7 +6712,15 @@ def test_reader_visibility_is_dynamic_ephemeral_and_book_focused() -> None:
     assert "Array.from(state.selected.values())" in javascript
     assert "state.hiddenRoles =" not in javascript
     persistent_quality = javascript[javascript.index("  function deliverySummaryStorageKey()"):javascript.index("  function renderDeliverySummary()") ]
-    assert "localStorage" not in javascript.replace(persistent_quality, "")
+    ephemeral_controls = javascript.replace(persistent_quality, "")
+    for engine_preference in (
+        'window.localStorage.getItem("alc.reader.speech-engine")',
+        'window.localStorage.getItem("alc.reader.speech-voices")',
+        'window.localStorage.setItem("alc.reader.speech-voices", JSON.stringify(state.speechVoiceChoices))',
+    ):
+        assert engine_preference in ephemeral_controls
+        ephemeral_controls = ephemeral_controls.replace(engine_preference, "")
+    assert "localStorage" not in ephemeral_controls
     assert 'visibilityOption("source", labels().original' in javascript
     assert "roleLabel(role)" in javascript
     assert "function updateVisibilityStyles(channels)" in javascript
@@ -7576,3 +7650,151 @@ def test_deleted_dialog_keeps_header_outside_scrolling_list():
     assert '.alc-deleted-dialog[open] { display:flex; flex-direction:column; overflow:hidden; }' in css
     assert 'min-height:0;' in css[css.index('.alc-deleted-list {'):]
     assert '.alc-deleted-list::-webkit-scrollbar { width:6px; }' in css
+
+
+def test_markdown_export_normalizes_only_safe_inline_math_boundaries() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    startup = javascript.rfind("\n  if (document.readyState")
+    assert startup > 0
+    instrumented = (
+        _text("markdown-it/markdown-it.min.js")
+        + "\nglobalThis.window = globalThis;\n"
+        + "globalThis.markdownit = module.exports;\n"
+        + javascript[:startup]
+        + r'''
+  globalThis.__alcMathBoundaryTest = {
+    state: state,
+    setupMarkdown: setupMarkdown,
+    normalizePortableInlineMathMarkdown: normalizePortableInlineMathMarkdown,
+    exportInlineSpansMarkdown: exportInlineSpansMarkdown
+  };
+}());
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+var helpers = globalThis.__alcMathBoundaryTest;
+helpers.state.payload = {
+  publication: {
+    labels: {},
+    reader_profile: {source_language: "en", target_language: "zh-CN"}
+  },
+  resources: [],
+  source_identity: null
+};
+helpers.setupMarkdown();
+var markdown = [
+  "($\\Lambda$CDM) $\\Delta$AIC $4<\\Delta$AIC",
+  "De Sitter$\\to$ future and $\\sim 12.98$Gyrs.",
+  "Comparisons $x<0$, $x=0$, and $x>0$ remain unchanged.",
+  "Numeric math $9.603$ to $12.758$ remains math.",
+  "`$\\Lambda$CDM` and [link](https://example.test/$x$axis)",
+  "`$\\Lambda$CDM",
+  "continued` and $\\Delta$AIC",
+  "",
+  "```text",
+  "$\\Lambda$CDM",
+  "```",
+  "",
+  "    $\\Delta$BIC",
+  "",
+  "$$",
+  "\\Lambda$CDM",
+  "$$",
+  "",
+  "Prices $5 and $10 remain; escaped \\$5 and \\$10 remain.",
+  "Cost $5 and model $\\Lambda$CDM."
+].join("\n");
+var normalized = helpers.normalizePortableInlineMathMarkdown(markdown);
+assert(
+  normalized.includes("($\\Lambda\\mathrm{CDM}$) " +
+    "$\\Delta\\mathrm{AIC}$ $4<\\Delta\\mathrm{AIC}$"),
+  "ASCII identifiers were not merged into upright TeX"
+);
+assert(
+  normalized.includes("De Sitter $\\to$ future and " +
+    "$\\sim 12.98\\mathrm{Gyrs}$"),
+  "operator spacing or unit merging failed"
+);
+assert(normalized.includes("`$\\Lambda$CDM`"), "inline code changed");
+assert(
+  normalized.includes("`$\\Lambda$CDM\ncontinued` and " +
+    "$\\Delta\\mathrm{AIC}$"),
+  "multiline code span changed or blocked adjacent normalization"
+);
+assert(
+  normalized.includes("[link](https://example.test/$x$axis)"),
+  "link destination changed"
+);
+assert(normalized.includes("```text\n$\\Lambda$CDM\n```"), "fence changed");
+assert(normalized.includes("    $\\Delta$BIC"), "indented code changed");
+assert(normalized.includes("$$\n\\Lambda$CDM\n$$"), "display math changed");
+assert(normalized.includes("Prices $5 and $10 remain"), "currency changed");
+assert(
+  normalized.includes("Comparisons $x<0$, $x=0$, and $x>0$"),
+  "math comparisons were mistaken for angle-bracket Markdown"
+);
+assert(
+  normalized.includes("Numeric math $9.603$ to $12.758$"),
+  "closed numeric math was mistaken for currency"
+);
+assert(normalized.includes("escaped \\$5 and \\$10"), "escaped dollars changed");
+assert(
+  normalized.includes("Cost $5 and model $\\Lambda\\mathrm{CDM}$"),
+  "currency opener consumed a later math span"
+);
+
+[
+  '[link](\nhttps://example.test/$x$CDM\n)',
+  '[link](https://example.test/a "$x$CDM")',
+  '[link](https://example.test/a\n "$x$CDM\nmore")'
+].forEach(function (value) {
+  assert(helpers.normalizePortableInlineMathMarkdown(value) === value,
+    "link destinations and titles must remain verbatim, including across lines");
+});
+assert(
+  helpers.normalizePortableInlineMathMarkdown('[$\\Lambda$CDM](https://example.test)') ===
+    '[$\\Lambda\\mathrm{CDM}$](https://example.test)',
+  "link label math should still normalize"
+);
+
+var source = helpers.exportInlineSpansMarkdown([
+  {kind: "math", text: "Λ", tex: "\\Lambda", source: "\\Lambda"},
+  {kind: "text", text: "CDM model"}
+], "", new Map());
+assert(
+  source === "$\\Lambda\\mathrm{CDM}$ model",
+  "structured source adjacency was not normalized from exact spans"
+);
+var sourceOperator = helpers.exportInlineSpansMarkdown([
+  {kind: "text", text: "De Sitter"},
+  {kind: "math", text: "→", tex: "\\to", source: "\\to"},
+  {kind: "text", text: "future"}
+], "", new Map());
+assert(
+  sourceOperator === "De Sitter $\\to$ future",
+  "structured source operator adjacency was not visibly spaced"
+);
+
+[
+  "value$x$axis", "$x$2", "prefix$x$", "first value$x$axis and $x$2", "$x$is a variable.", "$x$axis"
+].forEach(function (value) {
+  assert(helpers.normalizePortableInlineMathMarkdown(value) === value,
+    "ambiguous adjacency must remain unchanged without stopping export");
+});
+assert(
+  helpers.normalizePortableInlineMathMarkdown("value$x$axis and $\\Delta$AIC") ===
+    "value$x$axis and $\\Delta\\mathrm{AIC}$",
+  "an ambiguous formula must not prevent later safe normalization"
+);
+'''
+    )
+    completed = subprocess.run(
+        [node, "-"],
+        input=instrumented,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr

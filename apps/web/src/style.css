@@ -1804,3 +1804,208 @@ select {
   text-align: right;
   color: var(--muted);
 }
+
+.tts-card > label {
+  display: grid;
+  gap: 8px;
+}
+.tts-card > p {
+  overflow-wrap: anywhere;
+}
+.tts-install {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+  justify-items: start;
+}
+.tts-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+.tts-card audio {
+  width: 100%;
+  margin-top: 16px;
+}
+.tts-card .button,
+.tts-card select {
+  min-height: 44px;
+}
+
+.tts-voice-field {
+  min-width: 0;
+}
+.tts-voice-field > .button {
+  margin-top: 12px;
+}
+.tts-settings-footer {
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+  align-items: center;
+  justify-content: space-between;
+}
+.tts-lab-back {
+  margin-bottom: 24px;
+}
+.tts-lab-page > .card {
+  margin-bottom: 20px;
+}
+.tts-lab-language {
+  display: flex;
+  gap: 16px;
+  align-items: end;
+  margin-bottom: 20px;
+}
+.tts-lab-language > div {
+  flex: 1;
+  max-width: 240px;
+  min-width: 0;
+}
+.tts-lab-language label,
+.tts-lab-model > label {
+  margin-bottom: 8px;
+}
+.tts-lab-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.tts-lab-model {
+  min-width: 0;
+}
+.tts-lab-letter {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  background: var(--soft);
+  border-radius: 8px;
+  font-weight: 700;
+}
+.tts-lab-result {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.tts-lab-result audio {
+  width: 100%;
+  margin-top: 12px;
+}
+.tts-lab-result summary {
+  cursor: pointer;
+  font-size: 13px;
+  padding: 12px 0;
+}
+.tts-lab-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tts-lab-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.tts-lab-metrics dt {
+  font-size: 12px;
+  color: var(--muted);
+}
+.tts-lab-metrics dd {
+  margin: 6px 0 0;
+  font-weight: 600;
+}
+.tts-lab-snapshot {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.tts-lab-model .field-note,
+.tts-lab-install-state {
+  overflow-wrap: anywhere;
+}
+.tts-lab-run > .field-note {
+  margin-bottom: 0;
+}
+.tts-lab-page .button,
+.tts-lab-page .currency-trigger,
+.tts-card .currency-trigger {
+  min-height: 44px;
+}
+@media (max-width: 800px) {
+  .tts-lab-grid {
+    grid-template-columns: 1fr;
+  }
+  .tts-lab-language {
+    flex-wrap: wrap;
+  }
+}
+.tts-lab-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+.tts-install-manager {
+  margin: 24px 0;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+.tts-install-manager > h3 {
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.tts-install-manager > label {
+  max-width: 540px;
+}
+.tts-model-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 12px;
+}
+.tts-language-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+.tts-language-card {
+  min-width: 0;
+}
+.tts-language-playback {
+  margin-top: 12px;
+}
+.tts-language-playback audio {
+  display: block;
+  width: 100%;
+  margin-top: 0;
+}
+.tts-settings-footer {
+  margin-top: 24px;
+}
+.select-group-label {
+  padding: 10px 12px 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .tts-language-settings {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ocr-form-grid input:not([type="checkbox"]),
+.ocr-form-grid .select-trigger-wide {
+  margin-top: 7px;
+  height: 44px;
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 22px;
+}

@@ -198,3 +198,18 @@ def test_glossary_revision_write_is_immutable(tmp_path: Path) -> None:
     path.write_bytes(b"different")
     with pytest.raises(ValueError, match="other bytes"):
         write_glossary_revision(tmp_path, revision)
+
+
+def test_created_glossary_insertion_order_is_stable():
+    from alc_render.glossary import glossary_with_created_entries
+    first = _entry()
+    last = dict(first, entry_id="term-last", term="Last")
+    inserted = dict(first, entry_id="term-new", term="New")
+    creation = GlossaryRevision(
+        entry_id="term-new", revision=2,
+        parent_semantic_digest=glossary_base_semantic_digest(inserted),
+        entry=inserted, provenance={"created_base": inserted, "insert_after": first["entry_id"]},
+    )
+    ordered = glossary_with_created_entries((first, last), (creation,))
+    assert [entry["entry_id"] for entry in ordered] == [first["entry_id"], "term-new", "term-last"]
+    assert glossary_with_created_entries(ordered, (creation,)) == ordered

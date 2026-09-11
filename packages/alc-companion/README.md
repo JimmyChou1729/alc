@@ -333,7 +333,9 @@ input path. Local application jobs require complete verifiable evidence. If a co
 truncated or unavailable, registered smaller part ranges are read to establish
 complete original and translation coverage. Evidence includes source bindings,
 content digests and compact location descriptors, with a 256,000-byte serialized
-budget per guide batch; command descriptors remain in the surrounding context.
+budget per guide batch. The complete serialized chapter context, including
+command descriptors, indexes and glossary, is also bounded to 400,000 bytes
+before creating guide workers, leaving room for instructions and review output.
 Oversized chapters are automatically partitioned at balanced section or block
 boundaries until each batch fits. This changes only guide processing: source
 chapter IDs, the outline, and completed translations remain intact. Each batch
@@ -415,3 +417,40 @@ Provider failures during chapter or editorial work remain resumable failures.
 They refresh the bilingual partial Reader from durable translations and accepted
 guides instead of publishing a successful source-only replacement. Source-only
 terminal delivery is limited to earlier preparation stages without chapter work.
+
+Reference sources may be natural-language descriptions or URLs. Prose titles are
+not parsed as URL authorities; explicit URLs retain host and syntax validation.
+
+Guide batches accept out-of-range parent chapter anchor numbers only when exact
+source block identity maps them into that batch. Already valid local numbers
+are unchanged and unknown numbers still fail validation. Confirmed parent
+source citations accompanying such anchors become source links; bibliography
+positions remain references. Reviewer coverage is mapped, never expanded.
+When no bibliography is supplied, numeric citations resolving to a batch source
+part become source links as well; unresolved numbers remain validation errors.
+
+### Recoverable generated content
+
+Guide acceptance repairs unambiguous display-math layout before validation. A
+rejected guide candidate can receive one durable model repair; resuming the same
+candidate does not repeat that attempt. A repair may append a missing terminal
+`$$` delimiter while preserving existing text, formulas and locations. If
+acceptance still fails, usable units
+remain readable and editable, with a review notice. Unrenderable Markdown is
+preserved as literal text, unresolved citations are not linked, and uncertain
+locations are attached to the enclosing chapter rather than an invented source
+position. The original candidate and recovery diagnostics remain in the run.
+If a reviewer or a later proposal round pauses on invalid model output, the
+latest saved proposal from that execution scope is retained as unreviewed
+content. A different recovery epoch cannot supply a stale proposal.
+
+Local generated-output failures can therefore complete with a degraded Reader.
+User pauses, authorization requests, source identity mismatches, and storage or
+delivery integrity failures retain their existing handling. Translation retains
+its existing per-block repair and source-text fallback.
+
+Audited publication replacements may explicitly set
+`resolve_translation_quality: true` when replacing a translation body. This
+marks its previous quality warning resolved while retaining the original
+fallback declaration in revision history. The flag is omitted by default and
+cannot be used for other roles or title-only changes.

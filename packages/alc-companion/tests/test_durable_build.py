@@ -709,7 +709,7 @@ def test_exhausted_provider_is_a_guide_local_delivery_issue() -> None:
     [
         ("valid", "guide_review_skipped"),
         ("missing", "guide_evaluated_omitted"),
-        ("invalid", "guide_evaluated_omitted"),
+        ("invalid", "guide_content_recovered"),
         ("provider", "guide_evaluated_omitted"),
     ],
 )
@@ -719,6 +719,8 @@ def test_reviewer_duplicate_id_recovers_only_admissible_proposals(
     proposal_state: str,
     expected_category: str,
 ) -> None:
+    monkeypatch.setattr(companion_build, "repair_guide_candidate", lambda *a, **kw: None)
+
     class DuplicateReviewerService:
         def __init__(self, _tasks) -> None:
             pass
@@ -860,8 +862,12 @@ def test_legacy_global_pause_survives_neighbor_postprocessing_error(tmp_path, mo
     assert result.awaiting.reason is ResumeReason.EXTERNAL_CONDITION
     assert result.awaiting.details["llm_code"] == "provider_authentication"
     context = RunContext(service.repository, result, resume_input=None)
-    errors = context.working.read_candidate_json("chapter-guide-postprocessing-errors")
-    assert any(error["message"] == "fixture invalid completed guide" for error in errors["errors"])
+    first = plan_source_chapters(_document(tmp_path))[0]
+    delivery_ref = context.artifacts.find(f"chapters/{first.chapter_id}/guide-delivery")
+    assert delivery_ref is not None
+    issue = json.loads(context.artifacts.read_bytes(delivery_ref))
+    assert issue["category"] == "guide_content_recovered"
+    assert issue["evidence"] == "fixture invalid completed guide"
 
 
 def test_glossary_matching_does_not_cross_word_boundaries(
@@ -1953,107 +1959,48 @@ def test_reviewer_can_accept_without_forcing_an_extra_revision(
         ) is None
 
 
-def test_invalid_terminal_revision_reports_program_owned_candidate(
-    tmp_path: Path,
+def test_invalid_terminal_revision_preserves_candidate_and_delivers_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from alc_render import render_publication_html
+
+    monkeypatch.setattr(companion_build, "repair_guide_candidate", lambda *a, **kw: None)
     document = _document(tmp_path)
     chapters = plan_source_chapters(document)
     tasks = FakeGuideTasks(
         semantic_invalid_contract=CHAPTER_GUIDE_PROMPT_VERSION,
-        # Each chapter receives P-R-P-R-P; corrupt only chapter two's
-        # terminal proposal so final deterministic validation owns the error.
         semantic_invalid_calls=frozenset({6}),
     )
     service = CompanionService(tmp_path / "jobs")
-
-    failed = service.build(
+    completed = service.build(
         CompanionBuildRequest(document, target_language="en"),
         execution=CompanionExecutionOptions(pipeline_chapters=False, preload_chapter_evidence=False, workers=1),
-        task_service=tasks,  # type: ignore[arg-type]
+        task_service=tasks,
         translation_adapter=FakeTranslationAdapter(mode="skipped"),
     )
-
-    assert failed.status is RunStatus.FAILED
-    assert failed.error is not None
+    assert completed.status is RunStatus.SUCCEEDED, completed.error
     candidate_path = (
-        service.repository.run_directory(failed.run_id)
-        / "working/candidates/chapters"
-        / chapters[1].chapter_id
-        / "guide-final.json"
+        service.repository.run_directory(completed.run_id)
+        / "working/candidates/chapters" / chapters[1].chapter_id / "guide-final.json"
     )
-    assert failed.error.details["candidate_path"] == str(candidate_path)
-    assert failed.error.details["chapter_id"] == chapters[1].chapter_id
-    progress = service.progress(failed.run_id)
-    assert progress["phase"] == "guides"
-    assert progress["next_action"] == {
-        "kind": "repair_candidate_and_resume",
-        "command": "alc-companion resume",
-        "input_required": False,
-        "request_artifact": None,
-        "candidate_path": str(candidate_path),
-    }
     candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
     assert candidate["companions"][0]["after_part"] == 9999
+    publication = service.publication(completed.run_id)
+    ledger = publication.reader_profile["delivery_ledger"]
+    assert ledger["delivery_grade"] == "degraded"
+    assert any(issue["category"] == "guide_content_recovered" for issue in ledger["issues"])
     store = ImmutableArtifactStore(
-        service.repository.run_directory(failed.run_id),
-        repository_root=service.repository.root,
+        service.repository.run_directory(completed.run_id), repository_root=service.repository.root,
     )
-    assert store.find(
-        f"chapters/{chapters[0].chapter_id}/guide-accepted"
-    ) is not None
-    assert store.find(
-        f"chapters/{chapters[1].chapter_id}/guide-accepted"
-    ) is None
-
-    first_candidate_path = (
-        service.repository.run_directory(failed.run_id)
-        / "working/candidates/chapters"
-        / chapters[0].chapter_id
-        / "guide-final.json"
-    )
-    first_candidate = json.loads(
-        first_candidate_path.read_text(encoding="utf-8")
-    )
-    first_candidate["chapter_guide"]["content_markdown"] = (
-        "Recovered guide content."
-    )
-    first_candidate_path.write_text(
-        json.dumps(first_candidate), encoding="utf-8"
-    )
-    candidate["companions"][0]["after_part"] = 1
-    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
-    guide_calls = tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION]
-
-    recovered = service.resume(
-        failed.run_id,
-        execution=CompanionExecutionOptions(pipeline_chapters=False, preload_chapter_evidence=False, workers=1),
-        task_service=tasks,  # type: ignore[arg-type]
-        translation_adapter=FakeTranslationAdapter(mode="skipped"),
-    )
-
-    assert recovered.status is RunStatus.SUCCEEDED
-    completed_progress = service.progress(recovered.run_id)
-    assert completed_progress["phase"] == "completed"
-    assert completed_progress["completed_units"] == completed_progress[
-        "total_units"
-    ]
-    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] == guide_calls
-    recovered_store = ImmutableArtifactStore(
-        service.repository.run_directory(recovered.run_id),
-        repository_root=service.repository.root,
-    )
-    recovered_guide_ref = recovered_store.find(
-        "recovery-1/chapters/"
-        f"{chapters[0].chapter_id}/guide-accepted"
-    )
-    assert recovered_guide_ref is not None
-    recovered_guide = json.loads(
-        recovered_store.read_bytes(recovered_guide_ref)
-    )
-    assert (
-        recovered_guide["learning_units"][0]["content_markdown"]
-        == "Recovered guide content."
-    )
+    for chapter in chapters:
+        assert store.find(f"chapters/{chapter.chapter_id}/guide-accepted") is not None
+    html_path = tmp_path / "reader.html"
+    publication_path = service.materialize_publication(completed.run_id, tmp_path / "reader-workspace")
+    render_publication_html(publication_path, html_path)
+    html = html_path.read_text(encoding="utf-8")
+    assert "A quantum field appears here." in html
+    assert "Relativity appears there." in html
+    assert "A focused source-anchored explanation" in html
 
 
 def test_resume_rebuilds_joined_chapter_after_guide_replay(
@@ -2295,7 +2242,7 @@ def test_unfinished_legacy_handlers_require_a_new_build(
 
 
 @pytest.mark.parametrize("read_source", [False, True])
-def test_local_app_requires_source_read_receipts(tmp_path, read_source):
+def test_local_app_marks_missing_source_read_receipts_without_blocking_delivery(tmp_path, read_source):
     from ac_llm import LLMExecutionOptions, LLMExecutionProfile, HostRequest, HostResponseStatus
 
     class ReadingTasks(FakeGuideTasks):
@@ -2323,12 +2270,17 @@ def test_local_app_requires_source_read_receipts(tmp_path, read_source):
         task_service=ReadingTasks(),
         translation_adapter=FakeTranslationAdapter(mode="enabled"),
     )
+    assert completed.status is RunStatus.SUCCEEDED, completed.error
+    publication = service.publication(completed.run_id)
+    ledger = publication.reader_profile["delivery_ledger"]
+    issues = [issue for issue in ledger["issues"] if issue["category"] == "guide_content_recovered"]
     if read_source:
-        assert completed.status is RunStatus.SUCCEEDED
+        assert not issues
     else:
-        assert completed.status is RunStatus.FAILED
-        assert completed.error.code == "chapter_source_read_incomplete"
-        assert ImmutableArtifactStore(service.repository.run_directory(prepared.run_id)).find("result") is None
+        assert ledger["delivery_grade"] == "degraded"
+        assert issues
+        assert all(issue["source_preserved"] for issue in issues)
+        assert all(issue["evidence"] == "chapter_guide_review_audit_invalid" for issue in issues)
 
 
 def test_local_app_missing_document_cli_fails_before_model_work(tmp_path, monkeypatch):
@@ -2521,7 +2473,7 @@ def test_preloaded_evidence_reaches_proposer_and_independent_reviewer(tmp_path, 
 
 
 @pytest.mark.parametrize("pipeline", [True, False])
-def test_content_pause_keeps_other_chapter_and_publishes_partial_reader(tmp_path, pipeline):
+def test_content_pause_keeps_other_chapter_and_delivers_reader(tmp_path, pipeline):
     from ac_llm import LLMPaused
     from ac_jobs import ResumeReason
     class PauseChapter(FakeGuideTasks):
@@ -2537,15 +2489,20 @@ def test_content_pause_keeps_other_chapter_and_publishes_partial_reader(tmp_path
         execution=CompanionExecutionOptions(workers=1,pipeline_chapters=pipeline,
             preload_chapter_evidence=False,document_cache_root=tmp_path/'paper'),
         task_service=PauseChapter(), translation_adapter=FakeTranslationAdapter(mode='enabled'))
-    assert result.status is RunStatus.PAUSED
-    root = service.repository.run_directory(prepared.run_id)/'partial-reader'
-    state = json.loads((root/'state.json').read_text())
-    assert state['completed_chapters'] == 1, result.awaiting
-    assert state['total_chapters'] == 2
-    assert state['incomplete_chapters'] == ['Chapter']
-    html = (root/'companion.html').read_text()
-    assert '部分结果' in html
-    assert 'A focused source-anchored explanation' in html
+    assert result.status is RunStatus.SUCCEEDED, result.error
+    from alc_render import render_publication_html
+    publication = service.publication(result.run_id)
+    ledger = publication.reader_profile["delivery_ledger"]
+    assert ledger["delivery_grade"] == "degraded"
+    assert any(issue["category"] == "guide_evaluated_omitted" and issue["source_preserved"]
+               for issue in ledger["issues"])
+    html_path = tmp_path / "reader.html"
+    publication_path = service.materialize_publication(result.run_id, tmp_path / "reader-workspace")
+    render_publication_html(publication_path, html_path)
+    html = html_path.read_text(encoding="utf-8")
+    assert "A quantum field appears here." in html
+    assert "Relativity appears there." in html
+    assert "A focused source-anchored explanation" in html
 
 
 @pytest.mark.parametrize("review_rounds", [0, 1, 2])
@@ -2706,3 +2663,153 @@ def test_late_provider_failure_keeps_bilingual_partial_reader(tmp_path, monkeypa
     assert 'data-alc-source-only="true"' not in html
     assert 'alc-translate' in html
     assert service.progress(result.run_id)['partial_reader_available']
+
+
+def test_guide_batches_count_command_metadata_not_only_evidence(tmp_path, monkeypatch):
+    import alc_companion.build as build
+    original = build._chapter_source_commands
+
+    def expanded(*args, **kwargs):
+        result = original(*args, **kwargs)
+        result['metadata'] = 'x' * (230_000 * len(args[1].block_ids))
+        return result
+
+    monkeypatch.setattr(build, '_chapter_source_commands', expanded)
+    monkeypatch.setattr(CompanionBuildHandler, '_cross_chapter_editorial_review',
+                        lambda self, context, chapters, accepted, **kw: (accepted, None))
+    document = _document(tmp_path)
+    service = CompanionService(tmp_path / 'jobs')
+    result = service.build(CompanionBuildRequest(document, target_language='zh-CN'),
+        execution=CompanionExecutionOptions(document_cache_root=tmp_path / 'paper'),
+        task_service=FakeGuideTasks(reviewer_stop_round=1, with_reference=True),
+        translation_adapter=FakeTranslationAdapter(mode='enabled'))
+    assert result.status is RunStatus.SUCCEEDED, result.error
+
+
+def test_failed_postprocessing_recovery_can_repartition_old_batch(tmp_path, monkeypatch):
+    import alc_companion.build as build
+    from alc_companion.chapter_evidence import ChapterEvidenceError
+    validate = build.validate_chapter_guide
+    recover = build.recover_chapter_guide
+    monkeypatch.setattr(build, "repair_guide_candidate", lambda *a, **kw: None)
+    monkeypatch.setattr(build, "recover_chapter_guide",
+                        lambda *a, **kw: (_ for _ in ()).throw(ValueError("legacy recovery unavailable")))
+    monkeypatch.setattr(build, 'validate_chapter_guide',
+                        lambda *a, **kw: (_ for _ in ()).throw(ValueError('old reference validation')))
+    monkeypatch.setattr(CompanionBuildHandler, '_cross_chapter_editorial_review',
+                        lambda self, context, chapters, accepted, **kw: (accepted, None))
+    service = CompanionService(tmp_path / 'jobs')
+    options = CompanionExecutionOptions(document_cache_root=tmp_path / 'paper')
+    tasks = FakeGuideTasks(reviewer_stop_round=1, with_reference=True)
+    adapter = FakeTranslationAdapter(mode='enabled')
+    failed = service.build(CompanionBuildRequest(_document(tmp_path), target_language='zh-CN'),
+        execution=options, task_service=tasks, translation_adapter=adapter)
+    assert failed.status is RunStatus.FAILED
+    monkeypatch.setattr(build, 'validate_chapter_guide', validate)
+    monkeypatch.setattr(build, 'recover_chapter_guide', recover)
+    original = CompanionBuildHandler._chapter_model_context
+    def smaller(self, context, source, chapter, **kwargs):
+        if len(chapter.block_ids) > 1:
+            raise ChapterEvidenceError('chapter_evidence_too_large', chapter.chapter_id, 'context')
+        return original(self, context, source, chapter, **kwargs)
+    monkeypatch.setattr(CompanionBuildHandler, '_chapter_model_context', smaller)
+    calls = list(adapter.calls)
+    resumed = service.resume(failed.run_id, execution=options, task_service=tasks, translation_adapter=adapter)
+    assert resumed.status is RunStatus.SUCCEEDED, resumed.error
+    assert [c for c in adapter.calls if c.endswith("/translation")] == [c for c in calls if c.endswith("/translation")]
+
+
+@pytest.mark.parametrize("pipeline", [True, False])
+@pytest.mark.parametrize("pause_stage", ["reviewer", "revision"])
+def test_content_pause_retains_latest_durable_proposal(tmp_path, pipeline, pause_stage):
+    from ac_llm import LLMPaused
+    from ac_jobs import ResumeReason
+
+    class PauseAfterProposal(FakeGuideTasks):
+        def execute_or_resume(self, context, request, **kwargs):
+            contract, payload = _request_payload(request.prompt)
+            pause = (
+                contract == CHAPTER_GUIDE_REVIEW_PROMPT_VERSION
+                if pause_stage == "reviewer"
+                else contract == CHAPTER_GUIDE_PROMPT_VERSION
+                and payload["_round_task"]["kind"] == "revised_proposal"
+            )
+            if pause:
+                return LLMPaused(ResumeReason.SUPERVISION_REQUIRED, "content", {
+                    "code": "output_invalid", "automatic_retry_exhausted": True,
+                })
+            return super().execute_or_resume(context, request, **kwargs)
+
+    service = CompanionService(RunRepository(tmp_path / "jobs"))
+    prepared = service.prepare(CompanionBuildRequest(_document(tmp_path), target_language="zh-CN"))
+    result = service.execute(prepared.run_id,
+        execution=CompanionExecutionOptions(workers=1, pipeline_chapters=pipeline,
+            preload_chapter_evidence=False, document_cache_root=tmp_path / "paper"),
+        task_service=PauseAfterProposal(), translation_adapter=FakeTranslationAdapter(mode="enabled"))
+    assert result.status is RunStatus.SUCCEEDED, result.error
+    publication = service.publication(result.run_id)
+    from alc_render import render_publication_html
+    publication_path = service.materialize_publication(result.run_id, tmp_path / "reader-workspace")
+    html_path = tmp_path / "reader.html"
+    render_publication_html(publication_path, html_path)
+    assert "A focused source-anchored explanation" in html_path.read_text(encoding="utf-8")
+    issues = publication.reader_profile["delivery_ledger"]["issues"]
+    assert any(issue["evidence"] == "review_incomplete"
+               and issue["fallback"] == "retained_candidate" for issue in issues)
+    assert not any(issue["category"] == "guide_evaluated_omitted" for issue in issues)
+
+
+def test_paused_proposal_recovery_is_scope_and_epoch_bound():
+    from types import SimpleNamespace
+    from alc_companion.build import _latest_paused_guide_proposal
+
+    values = {
+        "proposer-reviewer/scopes/old/loops/chapter/rounds/002/proposals/guide-proposer": {"stale": True},
+        "proposer-reviewer/scopes/recovery-2/current/loops/chapter/rounds/001/proposals/guide-proposer": {"current": 1},
+        "proposer-reviewer/scopes/recovery-2/current/loops/chapter/rounds/002/proposals/guide-proposer": {"current": 2},
+    }
+
+    class Artifacts:
+        def __init__(self, prefix=""):
+            self.prefix = prefix
+
+        def scoped(self, scope):
+            return Artifacts(f"{self.prefix}/{scope}".strip("/"))
+
+        def find(self, artifact_id):
+            key = f"{self.prefix}/{artifact_id}"
+            return key if key in values else None
+
+        def read_bytes(self, ref):
+            return json.dumps(values[ref]).encode()
+
+    context = SimpleNamespace(artifacts=Artifacts(), recovery_epoch=2,
+                              execution_id=lambda scope: f"recovery-2/{scope}")
+    loop = SimpleNamespace(loop_id="chapter", max_rounds=2)
+    assert _latest_paused_guide_proposal(context, loop, execution_scope="current") == {"current": 2}
+    assert _latest_paused_guide_proposal(context, loop, execution_scope="old") is None
+
+
+@pytest.mark.parametrize("pipeline", [True, False])
+def test_external_reviewer_pause_is_not_content_recovery(tmp_path, pipeline):
+    from ac_llm import LLMPaused
+    from ac_jobs import ResumeReason
+
+    class PauseReviewer(FakeGuideTasks):
+        def execute_or_resume(self, context, request, **kwargs):
+            contract, _ = _request_payload(request.prompt)
+            if contract == CHAPTER_GUIDE_REVIEW_PROMPT_VERSION:
+                return LLMPaused(ResumeReason.EXTERNAL_CONDITION, "authentication", {
+                    "code": "provider_authentication",
+                })
+            return super().execute_or_resume(context, request, **kwargs)
+
+    service = CompanionService(RunRepository(tmp_path / "jobs"))
+    prepared = service.prepare(CompanionBuildRequest(_document(tmp_path), target_language="zh-CN"))
+    result = service.execute(prepared.run_id,
+        execution=CompanionExecutionOptions(workers=1, pipeline_chapters=pipeline,
+            preload_chapter_evidence=False, document_cache_root=tmp_path / "paper"),
+        task_service=PauseReviewer(), translation_adapter=FakeTranslationAdapter(mode="enabled"))
+    assert result.status is RunStatus.PAUSED
+    assert result.awaiting.reason is ResumeReason.EXTERNAL_CONDITION
+    assert result.awaiting.details["llm_code"] == "provider_authentication"

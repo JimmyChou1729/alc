@@ -19,7 +19,7 @@ def test_isolated_reader_origin_only_serves_verified_capability(tmp_path):
             assert 'set-cookie' not in response.headers
             assert client.get(url, headers={'Host':'evil.test'}).status_code == 403
             assert client.get(str(httpx.URL(url).copy_with(path='/api/jobs'))).status_code == 404
-            assert client.post(url).status_code == 501
+            assert client.post(url).status_code == 403
             page.write_text('changed')
             assert client.get(url).status_code == 409
     finally:
@@ -32,6 +32,8 @@ def test_runtime_refresh_preserves_payload_and_unknown_html():
     result=refresh_reader_runtime(source)
     assert b'"unchanged":true' in result and b'<p>Source</p>' in result
     assert b'dismissTranslationQuality' in result
+    assert b'alc-glossary-create-fields' in result
+    assert refresh_reader_runtime(result) == result
     assert refresh_reader_runtime(b'<html>unknown</html>')==b'<html>unknown</html>'
 
 
