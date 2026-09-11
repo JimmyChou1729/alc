@@ -423,6 +423,37 @@ def source_identity(block: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def validate_caption_translation(text: str, block: Mapping[str, Any]) -> None:
+    """Detect definite label loss and severe caption-prefix truncation in new output."""
+    if str(block.get("kind")) not in {"figure", "image"}:
+        return
+    source = block_text(block)
+    label = re.match(r"^\s*(?:FIGURE|FIG\.?|图|圖)\s*(\d+(?:[.\-]\d+)*[A-Za-z]?)\b", source, re.I)
+    if label and not re.search(r"(?<![A-Za-z0-9_.-])" + re.escape(label[1]) + r"(?![A-Za-z0-9_]|[.-]\d)", text):
+        raise TranslationSourceError(
+            "translation_caption_incomplete",
+            "caption translation omitted the source figure number; translate the complete caption, including its subject",
+            {"block_id": str(block["block_id"]), "figure_number": label[1]},
+        )
+    source_math = _markdown_math_spans(source)
+    target_math = _markdown_math_spans(text)
+    if not source_math or not target_math:
+        return
+    prefix = source[:source_math[0][0]]
+    translated_prefix = _without_markdown_math(text)
+    if label:
+        prefix = prefix[label.end():]
+        translated_prefix = re.sub(r"^\s*(?:FIGURE|FIG\.?|图|圖)\s*" + re.escape(label[1]) + r"[\s:：.]*", "", translated_prefix, flags=re.I)
+    translated_prefix = re.split(r"[。！？!?]|\.(?=\s|$)", translated_prefix, maxsplit=1)[0]
+    # Count the entire opening sentence so natural reordering around math is allowed.
+    if len(re.findall(r"[A-Za-z]+", prefix)) >= 6 and sum(c.isalnum() for c in translated_prefix) <= 3:
+        raise TranslationSourceError(
+            "translation_caption_incomplete",
+            "caption translation lost the descriptive text before its first formula; restore the complete subject",
+            {"block_id": str(block["block_id"])},
+        )
+
+
 def validate_translation_text(text: str, block: Mapping[str, Any]) -> None:
     if not isinstance(text, str) or not text.strip():
         raise TranslationSourceError(

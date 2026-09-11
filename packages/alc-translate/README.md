@@ -235,6 +235,12 @@ A retry contains only invalid or missing blocks, includes the exact bounded
 validation diagnostics, and retains valid neighbors from the first response.
 When the protected-atom repair still omits an atom, one final strict text-slot
 request targets only the failed blocks; the caller restores the original atoms.
+New figure-caption output is also checked for a missing figure number or an
+almost empty opening description around a formula. These narrow checks do not
+guarantee semantic completeness and do not revalidate previously accepted output.
+Failures use the same bounded repair and source-preservation path; they do not
+stop delivery. The final text-slot retry requires every original slot separately,
+without merging neighboring text; the existing maximum remains three attempts.
 After bounded repair, only still-invalid smallest source translation units
 preserve source text and record a fallback. Translation fragments assembled
 this way carry
@@ -351,6 +357,8 @@ Simple plain-text math labels such as `$x$` in preferred glossary translations
 are normalized to `x`; compound TeX remains subject to validation. Failed
 formula-bearing text-slot coverage uses a bounded, failed-block-only protected
 atom retry, with protected-atom review when target-language ordering differs.
+Formula detection uses the source atom plan, including structured inline math
+whose plain-text surface contains no dollar delimiters.
 Successful neighboring blocks and immutable formula/link identities are retained.
 
 Glossary recovery removes ANSI styling and a NUL immediately before a TeX command.
