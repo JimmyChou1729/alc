@@ -1,0 +1,15 @@
+dialog.alc-glossary-create { width:min(34rem, calc(100vw - 2rem)); max-height:calc(100dvh - 3rem); padding:0; overflow:auto; text-align:left; }
+.alc-glossary-create-header { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1.25rem 1.5rem; border-bottom:1px solid #dfe4e9; }
+.alc-glossary-create-header h2 { margin:0; font-size:1.25rem; line-height:1.4; }
+.alc-glossary-create-close { display:grid; place-items:center; width:2rem; height:2rem; border:0; border-radius:.4rem; background:transparent; color:#68717c; font:inherit; font-size:1.5rem; cursor:pointer; }
+.alc-glossary-create-close:hover { background:#edf3f8; }
+.alc-glossary-create-fields { display:grid; gap:1rem; padding:1.25rem 1.5rem; }
+.alc-glossary-create-fields label { display:grid; gap:.4rem; margin:0; font-size:.9rem; font-weight:600; color:#46515b; }
+.alc-glossary-create-fields input, .alc-glossary-create-fields textarea { display:block; box-sizing:border-box; width:100%; min-width:0; margin:0; padding:.65rem .75rem; border:1px solid #cbd7e3; border-radius:.5rem; color:#20262e; background:#fff; font:inherit; font-weight:400; line-height:1.5; }
+.alc-glossary-create-fields textarea { min-height:7rem; resize:vertical; }
+.alc-glossary-create-fields input:focus-visible, .alc-glossary-create-fields textarea:focus-visible, .alc-glossary-create button:focus-visible { outline:2px solid #4d87ad; outline-offset:2px; }
+.alc-glossary-create-error { margin:0; color:#a52e2e; font-size:.85rem; }
+.alc-glossary-create-error:empty { display:none; }
+.alc-glossary-create .alc-confirm-actions { justify-content:flex-end; margin:0; padding:1rem 1.5rem; border-top:1px solid #dfe4e9; }
+.alc-glossary-create { scrollbar-width:thin; scrollbar-color:#b2c4d2 transparent; }
+@media (max-width:480px) { .alc-glossary-create-header, .alc-glossary-create-fields, .alc-glossary-create .alc-confirm-actions { padding:1rem; } }

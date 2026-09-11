@@ -47,3 +47,21 @@ def test_notice_explanations_are_chinese_without_changing_evidence():
     assert record['reason'] == 'The symbol is unclear.'
     assert '无法' in record['display_reason']
     assert '标题' in result['unapplied_items'][0]['display_reason']
+
+
+def test_input_limit_is_not_reported_as_connection_failure():
+    from alc_web.errors import explain_error
+    message = explain_error({'resume': {'details': {'provider_failure': {
+        'ac_error_code': 'provider_invalid_request', 'detail_code': 'input_too_large'}}}})
+    assert '输入容量' in message
+    assert '连接' not in message
+
+
+def test_local_ocr_unknown_failure_does_not_claim_timeout():
+    from alc_web.errors import explain_error
+    message = explain_error({'code': 'mineru_local_failed',
+        'message': 'Local OCR failed (exit code 1, provider_error_without_details)'})
+    assert '未报告具体异常' in message
+    memory = explain_error({'code': 'mineru_local_failed',
+        'message': 'Local OCR failed (exit code 1, memory_exhausted)'})
+    assert '内存不足' in memory

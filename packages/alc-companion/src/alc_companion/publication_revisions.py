@@ -82,8 +82,11 @@ class CompanionFragmentReplacement:
     base_semantic_digest: str
     title: str | None
     markdown_body: str
+    resolve_translation_quality: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.resolve_translation_quality, bool):
+            raise ValueError("resolve_translation_quality must be boolean")
         _require_identifier(self.fragment_id, "fragment_id")
         _require_digest(self.base_semantic_digest, "base_semantic_digest")
         if self.title is not None and (
@@ -187,6 +190,7 @@ def encode_publication_revision_request(
                 "base_semantic_digest": item.base_semantic_digest,
                 "title": item.title,
                 "markdown_body": item.markdown_body,
+                **({"resolve_translation_quality": True} if item.resolve_translation_quality else {}),
             }
             for item in request.replacements
         ],
@@ -204,7 +208,10 @@ def decode_publication_revision_request(
             raise ValueError("replacements must be an array")
         replacements = []
         for raw in raw_replacements:
-            if not isinstance(raw, Mapping) or set(raw) != _REPLACEMENT_FIELDS:
+            if not isinstance(raw, Mapping) or set(raw) not in (
+                _REPLACEMENT_FIELDS,
+                _REPLACEMENT_FIELDS | {"resolve_translation_quality"},
+            ):
                 raise ValueError("replacement has invalid fields")
             replacements.append(
                 CompanionFragmentReplacement(
@@ -212,6 +219,7 @@ def decode_publication_revision_request(
                     base_semantic_digest=raw["base_semantic_digest"],
                     title=raw["title"],
                     markdown_body=raw["markdown_body"],
+                    resolve_translation_quality=raw.get("resolve_translation_quality", False),
                 )
             )
         return CompanionPublicationRevisionRequest(
@@ -428,7 +436,12 @@ def commit_publication_revision(
                 "publication_revision_citation_unknown",
                 f"replacement cites an unknown bibliography ID: {unknown}",
             )
+        _validate_quality_resolution(base, replacement)
         provenance = dict(base.provenance)
+        if replacement.resolve_translation_quality:
+            provenance["translation_quality_resolved"] = {
+                "by": "publication_review", "review_id": request.review_id,
+            }
         review = {
             "review_id": request.review_id,
             "reason": request.reason,
@@ -785,6 +798,19 @@ def _validate_revision_payload(payload: bytes, entry: Mapping[str, Any]) -> None
         raise ValueError("bundle revision bytes do not match their manifest")
 
 
+def _validate_quality_resolution(
+    base: FragmentRevision, replacement: CompanionFragmentReplacement,
+) -> None:
+    if replacement.resolve_translation_quality and (
+        base.role != "translation"
+        or base.markdown_body.strip() == replacement.markdown_body.strip()
+    ):
+        raise CompanionPublicationRevisionError(
+            "publication_revision_quality_resolution_invalid",
+            "resolving translation quality requires a changed translation body",
+        )
+
+
 def _validate_bundle_request_children(
     request: CompanionPublicationRevisionRequest,
     revisions: Sequence[tuple[FragmentRevision, Mapping[str, Any]]],
@@ -809,7 +835,12 @@ def _validate_bundle_request_children(
         except KeyError as exc:
             raise ValueError("bundle omits a requested child or its base") from exc
         citations = extract_markdown_citation_ids(replacement.markdown_body)
+        _validate_quality_resolution(base, replacement)
         provenance = dict(base.provenance)
+        if replacement.resolve_translation_quality:
+            provenance["translation_quality_resolved"] = {
+                "by": "publication_review", "review_id": request.review_id,
+            }
         review: dict[str, Any] = {
             "review_id": request.review_id,
             "reason": request.reason,

@@ -167,3 +167,17 @@ def test_review_audit_ignores_unneeded_out_of_range_locations() -> None:
 
     assert audit["checked_part_numbers"] == [1]
     assert audit["checked_section_numbers"] == []
+
+
+def test_reference_source_accepts_natural_language_and_checks_real_urls():
+    from alc_companion.generation_validation import _validate_reference_source
+    from alc_companion.generation_validation import CompanionContentError
+    import pytest
+
+    text = "经验证的章节原文与冻结中文译文：Special Relativity，第1章"
+    assert _validate_reference_source(text) == text
+    assert _validate_reference_source("https://en.wikipedia.org/wiki/Spacetime")
+    for value in ["zh.wikipedia.org/wiki/时空", "https://zh.wikipedia.org/wiki/时空",
+                  "https://example.com：invalid/path"]:
+        with pytest.raises(CompanionContentError):
+            _validate_reference_source(value)

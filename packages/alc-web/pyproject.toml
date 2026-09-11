@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "alc-web"
-version = "2.1.1"
+version = "2.1.2"
 description = "Local document jobs and Reader delivery for ALC."
 readme = "README.md"
 license = "MIT"

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "alc-catalog"
-version = "2.1.1"
+version = "2.1.2"
 description = "Local discovery of ALC project history, independent of application hosts."
 readme = "README.md"
 license = "MIT"

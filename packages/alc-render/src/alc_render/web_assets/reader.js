@@ -139,6 +139,8 @@
     exportHtmlTemplate: null,
     exportStandaloneSupported: false,
     sourceVisible: true,
+    glossaryVisible: true,
+    referencesVisible: true,
     pageMarkersVisible: false,
     hiddenRoles: new Set(),
     roleOrder: [],
@@ -146,7 +148,7 @@
     appearanceGroups: new Map(),
     appearanceStyle: null,
     visibilityStyle: null,
-    visibilityContentsSignature: null,
+    contentsLanguage: "source",
     visibilityReady: false,
     visibilityEmptyRoot: null,
     primaryTitleBlockId: "",
@@ -156,6 +158,20 @@
     pendingReaderLinkTimer: null,
     pendingReaderLinkHref: "",
     speechSupported: false,
+    speechVoiceChoices: {},
+    speechActiveProvider: "system",
+    localTtsLegacyLocalPreference: false,
+    localTtsEndpoint: "",
+    localTtsStatus: null,
+    localTtsStatusGeneration: 0,
+    localTtsStatusError: false,
+    localTtsRequest: null,
+    localTtsBuffer: [],
+    localTtsBuffering: null,
+    localTtsCurrentPart: null,
+    localTtsCache: new Map(),
+    localTtsAudio: null,
+    localTtsObjectUrl: "",
     speechReady: false,
     speechVoices: [],
     speechVoiceIdentity: "",
@@ -459,6 +475,9 @@
     );
     var defaults = chinese ? {
       contents: "目录",
+      contentsLanguage: traditional ? "目錄語言" : "目录语言",
+      contentsSource: "原文",
+      contentsTranslation: traditional ? "譯文" : "译文",
       collapse: "收起目录",
       expand: "展开目录",
       newSaveLocation: "新建保存位置",
@@ -503,6 +522,7 @@
       glossary: "术语表",
       glossaryTerm: traditional ? "術語" : "术语",
       references: "参考文献",
+      companionReferences: traditional ? "伴讀參考文獻" : "伴读参考文献",
       originalTerm: "原文术语",
       translatedTerm: traditional ? "譯文" : "译文",
       definition: "释义",
@@ -618,6 +638,9 @@
       restore: "恢复为新版本",
       imageOmitted: "图片未加载",
       closeDeletedContents: "关闭",
+      deleteGlossaryConfirm: "确认要删除术语 {term} 吗？",
+      addGlossary: "新增术语",
+      sourceTerm: "原文术语",
       deletedContents: "已删除内容",
       noDeletedContents: "没有已删除的内容",
       restoreContent: "恢复",
@@ -642,6 +665,9 @@
       restoreRecommended: "恢复推荐值"
     } : {
       contents: "Contents",
+      contentsLanguage: "Contents language",
+      contentsSource: "Source",
+      contentsTranslation: "Translation",
       collapse: "Collapse contents",
       expand: "Expand contents",
       newSaveLocation: "New save location",
@@ -686,6 +712,7 @@
       glossary: "Glossary",
       glossaryTerm: "Glossary",
       references: "References",
+      companionReferences: "Companion references",
       originalTerm: "Original term",
       translatedTerm: "Translation",
       definition: "Definition",
@@ -789,6 +816,9 @@
       restore: "Restore as new revision",
       imageOmitted: "Image not loaded",
       closeDeletedContents: "Close",
+      deleteGlossaryConfirm: "Delete glossary term {term}?",
+      addGlossary: "Add glossary term",
+      sourceTerm: "Source term",
       deletedContents: "Deleted content",
       noDeletedContents: "No deleted content",
       restoreContent: "Restore",
@@ -1034,6 +1064,7 @@
   function deletionTimestamp(revision) {
     var provenance = revision.provenance || {};
     var value = provenance.deleted_at;
+    if (!value && revision.role === "glossary") value = provenance.edited_at;
     if (!value && provenance.last_editor === "alc-render-browser") {
       var parent = (state.revisions.get(revision.fragment_id) || []).find(function (item) {
         return item.semantic_digest === revision.parent_semantic_digest;
@@ -1055,7 +1086,13 @@
 
   function deletedContentEntries() {
     var roles = ["source", "translation", "companion", "guide", "note"];
-    return Array.from(state.selected.values()).filter(function (revision) { return revision.deleted; }).sort(function (a, b) {
+    var entries = Array.from(state.selected.values()).filter(function (revision) { return revision.deleted; });
+    state.selectedGlossaryRevisions.forEach(function (revision) {
+      if (revision && revision.provenance.deleted === true) {
+        entries.push(Object.assign({}, revision, {role: "glossary", deleted: true, fragment_id: revision.entry_id}));
+      }
+    });
+    return entries.sort(function (a, b) {
       var at = deletionTimestamp(a), bt = deletionTimestamp(b);
       if (at !== bt) {
         if (at === null) return 1;
@@ -1073,6 +1110,15 @@
   }
 
   async function restoreDeletedContent(revision) {
+    if (revision.role === "glossary") {
+      var selected = state.selectedGlossaryRevisions.get(revision.entry_id);
+      if (!selected || selected.semantic_digest !== revision.semantic_digest) {
+        setStatus(labels().glossaryHistoryChanged, "error");
+        return false;
+      }
+      try { return await saveGlossaryMembership(revision.entry, false, false); }
+      catch (error) { setStatus(String(error.message || error), "error"); return false; }
+    }
     if (state.saveInProgress || state.exportInProgress || state.directorySelectionInProgress || !prepareForDraftSwitch()) return false;
     if (!state.directory && !await connectDirectory()) return false;
     if (!prepareForDraftSwitch()) return false;
@@ -1131,13 +1177,15 @@
     if (!entries.length) content.appendChild(element("p", "", labels().noDeletedContents));
     entries.forEach(function (revision) {
       var row = element("div", "alc-deleted-row");
-      var prior = earlierVisibleSourceRevision(revision);
-      var block = ensureSourceIndexes().blocksById.get(fragmentTargetId(revision));
-      var text = prior ? prior.markdown_body : block ? sourceEditorMarkdown(block) : "";
+      var glossary = revision.role === "glossary";
+      var prior = glossary ? null : earlierVisibleSourceRevision(revision);
+      var block = glossary ? null : ensureSourceIndexes().blocksById.get(fragmentTargetId(revision));
+      var text = glossary ? glossarySourceTerm(revision.entry) + " · " + String(revision.entry[glossaryTranslatedKey(revision.entry)] || "") :
+        prior ? prior.markdown_body : block ? sourceEditorMarkdown(block) : "";
       row.appendChild(element("div", "alc-deleted-preview", roleLabel(revision.role) + " · " + text.slice(0, 180)));
       var restore = element("button", "", labels().restoreContent);
       restore.type = "button";
-      restore.disabled = !prior && !(sourceEditOperation(revision) === "replace" && block);
+      restore.disabled = glossary ? !glossaryEntryIsEditable(revision.entry) : !prior && !(sourceEditOperation(revision) === "replace" && block);
       restore.addEventListener("click", async function () {
         dialog.close();
         await restoreDeletedContent(revision);
@@ -1296,7 +1344,7 @@
 
   function customSelectOptions(wrapper) {
     return Array.prototype.slice.call(
-      selectListbox(wrapper).querySelectorAll('[role="option"]')
+      selectListbox(wrapper).querySelectorAll('[role="option"]:not(:disabled)')
     );
   }
 
@@ -1360,7 +1408,21 @@
     trigger.disabled = select.disabled;
     value.textContent = selected ? selected.textContent : "";
     listbox.replaceChildren();
+    var currentNativeGroup = null;
+    var groupRoot = listbox;
     Array.prototype.forEach.call(select.options, function (nativeOption) {
+      var nativeGroup = nativeOption.parentElement && nativeOption.parentElement.tagName === "OPTGROUP" ? nativeOption.parentElement : null;
+      if (nativeGroup !== currentNativeGroup) {
+        currentNativeGroup = nativeGroup;
+        groupRoot = listbox;
+        if (nativeGroup) {
+          groupRoot = element("div", "alc-select-group");
+          groupRoot.setAttribute("role", "group");
+          groupRoot.setAttribute("aria-label", nativeGroup.label);
+          groupRoot.appendChild(element("div", "alc-select-group-label", nativeGroup.label));
+          listbox.appendChild(groupRoot);
+        }
+      }
       var option = element("button", "alc-select-option", nativeOption.textContent);
       option.type = "button";
       option.setAttribute("role", "option");
@@ -1368,6 +1430,7 @@
         "aria-selected", String(nativeOption.value === select.value)
       );
       option.dataset.value = nativeOption.value;
+      option.disabled = Boolean(nativeOption.disabled || (nativeGroup && nativeGroup.disabled));
       option.addEventListener("click", function () {
         select.value = option.dataset.value;
         select.dispatchEvent(new window.Event("change", {bubbles: true}));
@@ -1394,7 +1457,7 @@
           options[target].focus();
         }
       });
-      listbox.appendChild(option);
+      groupRoot.appendChild(option);
     });
   }
 
@@ -1995,6 +2058,19 @@
     ) {
       throw new Error("glossary revision metadata is invalid");
     }
+    if (metadata.provenance.deleted !== undefined && typeof metadata.provenance.deleted !== "boolean") {
+      throw new Error("glossary deleted flag must be a boolean");
+    }
+    if (metadata.provenance.created_base !== undefined &&
+      (metadata.revision !== 2 || metadata.provenance.propagation || metadata.provenance.deleted ||
+        !glossaryEntryIsEditable(metadata.entry) ||
+        !jsonValuesEqual(metadata.entry, metadata.provenance.created_base))) {
+      throw new Error("glossary creation base is invalid");
+    }
+    if (metadata.provenance.insert_after !== undefined &&
+      (!metadata.provenance.created_base || !portableIdentifier(metadata.provenance.insert_after) || metadata.provenance.insert_after === metadata.entry_id)) {
+      throw new Error("glossary insertion anchor is invalid");
+    }
     validateGlossaryPropagation(metadata.provenance.propagation);
     if (metadata.provenance.propagation &&
       (metadata.provenance.propagation.glossary_revisions || []).some(
@@ -2536,6 +2612,7 @@
     var publication = state.payload.publication;
     state.embeddedGlossaryRevisions = (state.payload.glossary_revisions || []).slice();
     state.glossaryBase = JSON.parse(JSON.stringify(publication.glossary || []));
+    state.createdGlossaryBaseIds = new Set();
     publication.glossary = JSON.parse(JSON.stringify(state.glossaryBase));
     var entryCounts = new Map();
     state.glossaryBase.forEach(function (entry) {
@@ -2625,6 +2702,7 @@
     state.selectedGlossary = new Map();
     state.selectedGlossaryRevisions = new Map();
     var diagnostics = state.glossaryFileDiagnostics.slice();
+    registerCreatedGlossaryBases(state.glossaryRevisions);
     state.glossaryBase.forEach(function (base) {
       var entryId = glossaryEntryId(base);
       if (!entryId) return;
@@ -2697,17 +2775,25 @@
       state.selectedGlossaryRevisions.set(entryId, selected);
     });
     state.glossaryDiagnostics = diagnostics;
-    state.payload.publication.glossary = state.glossaryBase.map(function (base) {
+    state.selectedGlossaryRevisions.forEach(function (revision, entryId) {
+      if (revision && revision.provenance.deleted === true) state.selectedGlossary.delete(entryId);
+    });
+    state.payload.publication.glossary = state.glossaryBase.filter(function (base) {
+      var revision = state.selectedGlossaryRevisions.get(glossaryEntryId(base));
+      return !revision || revision.provenance.deleted !== true;
+    }).map(function (base) {
       var entryId = glossaryEntryId(base);
       return state.glossaryDuplicateIds.has(entryId) ? base :
         state.selectedGlossary.get(entryId) || base;
     });
+    syncDeletedContentControl();
   }
 
   function equivalentGlossaryChild(children, descendants) {
     if (!children.length) return null;
     if (!children.every(function (revision) {
-      return jsonValuesEqual(revision.entry, children[0].entry);
+      return jsonValuesEqual(revision.entry, children[0].entry) &&
+        Boolean(revision.provenance.deleted) === Boolean(children[0].provenance.deleted);
     })) return null;
     var continued = descendants ? children.filter(function (revision) {
       return (descendants.get(revision.semantic_digest) || []).length > 0;
@@ -3086,21 +3172,45 @@
     }
   }
 
+  function activeDeliveryIssues(ledger) {
+    return ledger.issues.filter(function (issue) {
+      if (!issue || ["translation_source_text", "translation_review_skipped"].indexOf(issue.category) < 0) return true;
+      // The header renders before distant translation chunks are hydrated.
+      var publication = state.payload && state.payload.publication;
+      var blocks = publication && publication.source_document && publication.source_document.blocks || [];
+      var index = blocks.findIndex(function (block) { return block.block_id === issue.scope; });
+      if (index >= 0) {
+        loadPayloadForBlockRange(index, index + 1);
+        if (state.payloadVersion === "v2") state.fragmentGroups = groupedFragments(publication.source_document);
+      }
+      var revisions = state.selected ? Array.from(state.selected.values()) : [];
+      return !revisions.some(function (fragment) {
+        if (fragment.role !== "translation" || fragment.priority > 100 || !translationQualityResolved(fragment)) return false;
+        var anchor = fragment.anchor || {};
+        return anchor.target_id === issue.scope || (anchor.related_blocks || []).some(function (block) {
+          return block.block_id === issue.scope;
+        });
+      });
+    });
+  }
+
   function renderDeliverySummary() {
     var ledger = deliveryLedger();
     if (
       deliverySummaryIsDismissed() || !ledger || ledger.delivery_grade === "complete" ||
       document.body.dataset.alcExportSnapshot === "true"
     ) return null;
+    var issues = activeDeliveryIssues(ledger);
+    if (!issues.length) return null;
     var chinese = targetLanguage().toLowerCase().indexOf("zh") === 0;
     var counts = new Map();
-    ledger.issues.forEach(function (issue) {
+    issues.forEach(function (issue) {
       var category = String(issue && issue.category || "other");
       counts.set(category, (counts.get(category) || 0) + 1);
     });
     var panel = element("aside", "alc-delivery-summary");
     panel.dataset.deliveryGrade = ledger.delivery_grade;
-    panel.dataset.deliveryIssueCount = String(ledger.issues.length);
+    panel.dataset.deliveryIssueCount = String(issues.length);
     panel.setAttribute("aria-labelledby", "alc-delivery-summary-title");
     var header = element("header", "alc-delivery-summary-header");
     var title = element(
@@ -3140,7 +3250,7 @@
       known += count;
       list.appendChild(element("li", "", String(count) + " " + label));
     });
-    var other = ledger.issues.length - known;
+    var other = issues.length - known;
     if (other > 0) {
       list.appendChild(element(
         "li", "", String(other) + " " +
@@ -3857,6 +3967,22 @@
     var known = Array.from(state.sourceBibliographyIndex.aliases.values())
       .indexOf(targetId) >= 0;
     return known ? revealSourceNavigationTarget() : false;
+  }
+
+  function revealAppendixTarget(targetId) {
+    var property = targetId === "alc-glossary" ? "glossaryVisible" :
+      targetId === "alc-references" ? "referencesVisible" : "";
+    if (!property && targetId.indexOf("reference-") === 0 && bibliographyIndex().groups.some(function (group) {
+      return "reference-" + group.targetId === targetId;
+    })) property = "referencesVisible";
+    if (!property) return false;
+    if (state[property]) return true;
+    state[property] = true;
+    if (state.visibilityReady) {
+      renderVisibilityOptions();
+      applyVisibility();
+    }
+    return true;
   }
 
   function revealSourceNavigationTarget() {
@@ -4939,6 +5065,15 @@
     return root;
   }
 
+  function sourceReplacementUsesOriginalLayout(block, replacement) {
+    if (!replacement) return true;
+    if (replacement.deleted || sourceEditOperation(replacement) !== "replace") return false;
+    var appearance = replacement.appearance || {};
+    if ((appearance.foreground && appearance.foreground !== "inherit") ||
+      (appearance.background && appearance.background !== "transparent")) return false;
+    return replacement.markdown_body === sourceEditorMarkdown(block);
+  }
+
   function renderSourceRow(block, fragments) {
     fragments = fragments.filter(function (item) { return !sourceEditOperation(item); });
     var row = element("article", "alc-source-row");
@@ -4987,9 +5122,10 @@
       document.documentElement.lang;
     var replacement = sourceReplacement(block.block_id);
     var inlineDraft = sourceInlineDraft(block);
-    var sourceBlock = inlineDraft ? renderFragment(inlineDraft) : replacement ? (replacement.deleted ?
-      element("div", "alc-source-deleted") : renderFragment(replacement)) : renderSourceBlock(block);
-    if (!replacement) {
+    var originalLayout = sourceReplacementUsesOriginalLayout(block, replacement);
+    var sourceBlock = inlineDraft ? renderFragment(inlineDraft) : originalLayout ? renderSourceBlock(block) :
+      replacement.deleted ? element("div", "alc-source-deleted") : renderFragment(replacement);
+    if (originalLayout) {
       ["click", "dblclick"].forEach(function (type) {
         source.addEventListener(type, function (event) {
           if ((state.readerPreferences.editActivation === "single") !== (type === "click")) return;
@@ -7246,6 +7382,141 @@
     return root;
   }
 
+  function orderGlossaryEntries(entries, revisions) {
+    if (new Set(entries.map(glossaryEntryId)).size !== entries.length) return entries;
+    var byId = new Map(entries.map(function (entry) { return [glossaryEntryId(entry), entry]; }));
+    var children = new Map(), anchored = new Set();
+    revisions.forEach(function (values, id) {
+      var roots = values.filter(function (revision) { return revision.revision === 2 && revision.provenance.created_base; });
+      if (roots.length !== 1 || !byId.has(id)) return;
+      var root = roots[0], parent = root.provenance.insert_after;
+      if (!parent || parent === id || !byId.has(parent)) return;
+      var list = children.get(parent) || [];
+      list.push({id: id, time: String(root.provenance.edited_at || "")});
+      children.set(parent, list); anchored.add(id);
+    });
+    children.forEach(function (list) {
+      list.sort(function (a, b) { return b.time.localeCompare(a.time) || a.id.localeCompare(b.id); });
+    });
+    var result = [], seen = new Set();
+    function append(entry) {
+      var stack = [entry];
+      while (stack.length) {
+        var next = stack.pop(), id = glossaryEntryId(next);
+        if (seen.has(id)) continue;
+        seen.add(id); result.push(next);
+        (children.get(id) || []).slice().reverse().forEach(function (child) { stack.push(byId.get(child.id)); });
+      }
+    }
+    entries.forEach(function (entry) { if (!anchored.has(glossaryEntryId(entry))) append(entry); });
+    entries.forEach(append);
+    return result;
+  }
+
+  function glossaryBaselinesFor(revisions) {
+    var previous = state.createdGlossaryBaseIds || new Set();
+    var entries = state.glossaryBase.filter(function (entry) { return !previous.has(glossaryEntryId(entry)); });
+    var digests = new Map(state.glossaryBaseDigests);
+    previous.forEach(function (id) { digests.delete(id); });
+    var created = new Set();
+    revisions.forEach(function (values, entryId) {
+      if (entries.some(function (entry) { return glossaryEntryId(entry) === entryId; })) return;
+      var roots = values.filter(function (revision) {
+        return revision.revision === 2 && revision.provenance.created_base &&
+          glossaryEntryIsEditable(revision.entry) &&
+          jsonValuesEqual(revision.entry, revision.provenance.created_base);
+      });
+      if (roots.length !== 1) return;
+      created.add(entryId);
+      entries.push(JSON.parse(JSON.stringify(roots[0].entry)));
+      digests.set(entryId, roots[0].parent_semantic_digest);
+    });
+    return {entries: orderGlossaryEntries(entries, revisions), digests: digests, created: created};
+  }
+
+  function registerCreatedGlossaryBases(revisions) {
+    var baseline = glossaryBaselinesFor(revisions);
+    state.glossaryBase = baseline.entries;
+    state.glossaryBaseDigests = baseline.digests;
+    state.createdGlossaryBaseIds = baseline.created;
+  }
+
+  async function saveGlossaryMembership(entry, deleted, create, afterEntryId) {
+    if (state.saveInProgress || state.exportInProgress || state.directorySelectionInProgress || !prepareForDraftSwitch()) return false;
+    var id = glossaryEntryId(entry), prior = selectedGlossaryDigest(id);
+    if (!state.directory && !await connectDirectory()) return false;
+    if (!state.directory) return false;
+    if (!create && selectedGlossaryDigest(id) !== prior) throw new Error(labels().glossaryHistoryChanged);
+    state.saveInProgress = true;
+    try {
+      var current = state.selectedGlossaryRevisions.get(id);
+      var base = create ? await canonicalDigest(glossaryBaseMaterial(entry)) : selectedGlossaryDigest(id);
+      var metadata = {schema_version: GLOSSARY_REVISION_SCHEMA, entry_id: id,
+        revision: create ? 2 : current ? current.revision + 1 : 2,
+        parent_semantic_digest: base, entry: JSON.parse(JSON.stringify(entry)),
+        provenance: {producer: "alc-render-browser", edited_at: new Date().toISOString(), deleted: deleted}};
+      if (deleted) metadata.provenance.deleted_at = metadata.provenance.edited_at;
+      if (create) {
+        metadata.provenance.created_base = JSON.parse(JSON.stringify(entry));
+        if (afterEntryId) {
+          if (!state.selectedGlossary.has(afterEntryId)) throw new Error(labels().glossaryHistoryChanged);
+          metadata.provenance.insert_after = afterEntryId;
+        }
+      }
+      validateGlossaryRevisionMetadata(metadata);
+      var digest = await canonicalDigest(glossaryRevisionMaterial(metadata));
+      var folder = await glossaryDirectory(true);
+      await writeImmutableRevision(folder, glossaryRevisionFileName(metadata.revision, digest), encodeGlossaryRevision(metadata));
+      var previous = new Map(state.selectedGlossary);
+      addGlossaryRevision(Object.assign({}, metadata, {semantic_digest: digest, _origin: "directory"}));
+      resolveGlossaryAll();
+      state.payload.glossary_revisions = glossaryRevisionState().revisions;
+      refreshGlossarySurfaces(previous);
+      setStatus(labels().glossarySaveSuccess);
+      return true;
+    } finally { state.saveInProgress = false; }
+  }
+
+  async function deleteGlossaryEntry(entry) {
+    if (!await confirmReaderAction(labels().deleteGlossaryConfirm.replace("{term}", glossarySourceTerm(entry)))) return;
+    try { await saveGlossaryMembership(entry, true, false); }
+    catch (error) { setStatus(String(error.message || error), "error"); }
+  }
+
+  function showAddGlossary(afterEntryId) {
+    if (!prepareForDraftSwitch()) return;
+    var strings = labels(), dialog = element("dialog", "alc-confirm-dialog alc-glossary-create");
+    var entryId = "term-" + crypto.randomUUID();
+    var header = element("header", "alc-glossary-create-header");
+    var heading = element("h2", "", strings.addGlossary);
+    heading.id = "alc-glossary-create-heading";
+    dialog.setAttribute("aria-labelledby", heading.id);
+    var close = iconButton("alc-glossary-create-close", "×", strings.close);
+    close.onclick = function () { dialog.close(); };
+    header.appendChild(heading); header.appendChild(close); dialog.appendChild(header);
+    var body = element("div", "alc-glossary-create-fields");
+    var fields = [];
+    [strings.sourceTerm, strings.translatedTerm, strings.definition].forEach(function (label, index) {
+      var field = element("label", "", label), input = element(index === 2 ? "textarea" : "input");
+      input.setAttribute("aria-label", label); field.appendChild(input); body.appendChild(field); fields.push(input);
+    });
+    dialog.appendChild(body);
+    var error = element("p", "alc-glossary-create-error"); error.setAttribute("role", "alert"); body.appendChild(error);
+    var actions = element("div", "alc-confirm-actions"), cancel = element("button", "", strings.cancel), save = element("button", "", strings.save);
+    cancel.onclick = function () { dialog.close(); };
+    save.onclick = async function () {
+      var entry = {entry_id: entryId, term: fields[0].value.trim(), translated_term: fields[1].value.trim(), definition: fields[2].value.trim()};
+      if (!entry.term || !entry.translated_term || !glossaryEntryIsEditable(entry)) { error.textContent = strings.glossaryTranslatedRequired; return; }
+      save.disabled = cancel.disabled = close.disabled = true;
+      try { if (await saveGlossaryMembership(entry, false, true, afterEntryId)) dialog.close(); }
+      catch (e) { error.textContent = String(e.message || e); }
+      finally { save.disabled = cancel.disabled = close.disabled = false; }
+    };
+    dialog.addEventListener("cancel", function (event) { if (save.disabled) event.preventDefault(); });
+    dialog.addEventListener("close", function () { dialog.remove(); });
+    actions.appendChild(cancel); actions.appendChild(save); dialog.appendChild(actions); document.body.appendChild(dialog); dialog.showModal(); fields[0].focus();
+  }
+
   function renderGlossaryCardActions(entry) {
     var strings = labels();
     var source = glossarySourceTerm(entry);
@@ -7277,6 +7548,11 @@
       beginGlossaryEdit(entry);
     });
     root.appendChild(edit);
+    var remove = iconButton("alc-card-action", "−", strings.deleteElement);
+    remove.onclick = function (event) { event.stopPropagation(); deleteGlossaryEntry(entry); };
+    var add = iconButton("alc-card-action", "+", strings.addGlossary);
+    add.onclick = function (event) { event.stopPropagation(); showAddGlossary(glossaryEntryId(entry)); };
+    root.appendChild(remove); root.appendChild(add);
     return root;
   }
 
@@ -7549,14 +7825,17 @@
     if (!root) return;
     root.replaceChildren();
     root.appendChild(visibilityOption("source", labels().original, state.sourceVisible));
-    root.appendChild(visibilityOption(
-      "page-markers", labels().documentData, state.pageMarkersVisible
-    ));
     state.roleOrder.forEach(function (role) {
+      if (role === "source") return;
       root.appendChild(visibilityOption(
         role, roleLabel(role), !state.hiddenRoles.has(role)
       ));
     });
+    root.appendChild(visibilityOption("glossary-section", labels().glossary, state.glossaryVisible));
+    root.appendChild(visibilityOption("references-section", labels().companionReferences, state.referencesVisible));
+    root.appendChild(visibilityOption(
+      "page-markers", labels().documentData, state.pageMarkersVisible
+    ));
   }
 
   function visibilityOption(value, text, checked) {
@@ -7570,6 +7849,10 @@
         state.sourceVisible = input.checked;
       } else if (value === "page-markers") {
         state.pageMarkersVisible = input.checked;
+      } else if (value === "glossary-section") {
+        state.glossaryVisible = input.checked;
+      } else if (value === "references-section") {
+        state.referencesVisible = input.checked;
       } else if (input.checked) {
         state.hiddenRoles.delete(value);
       } else {
@@ -7584,7 +7867,7 @@
 
   function visibleRoleCount() {
     return state.roleOrder.filter(function (role) {
-      return !state.hiddenRoles.has(role);
+      return role !== "source" && !state.hiddenRoles.has(role);
     }).length;
   }
 
@@ -7602,15 +7885,6 @@
     );
     if (state.visibilityEmptyRoot) state.visibilityEmptyRoot.hidden = channels !== 0;
     updateVisibilityStyles(channels);
-    if (!scope) {
-      var signature = state.sourceVisible ? "source" : Array.from(
-        state.hiddenRoles
-      ).sort().join("\u0000");
-      if (signature !== state.visibilityContentsSignature) {
-        state.visibilityContentsSignature = signature;
-        updateContentsTitles();
-      }
-    }
     scheduleScrollableTableSync();
   }
 
@@ -7621,13 +7895,17 @@
       document.head.appendChild(state.visibilityStyle);
     }
     var rules = [];
+    if (!state.glossaryVisible) rules.push('#alc-glossary,[data-contents-entry="glossary"]{display:none}');
+    if (!state.referencesVisible) rules.push('#alc-references,[data-contents-entry="references"]{display:none}');
     state.hiddenRoles.forEach(function (role) {
+      if (role === "source") return;
       rules.push(
         '.alc-fragment[data-role-slot="' + roleSlot(role) + '"]{display:none}'
       );
     });
     if (!state.sourceVisible) {
       rules.push(".alc-source-card{display:none}");
+      rules.push('.alc-fragment[data-role-slot="' + roleSlot("source") + '"]{display:none}');
       var translationSlot = state.roleSlots.get("translation");
       var translationVisible = translationSlot !== undefined &&
         !state.hiddenRoles.has("translation");
@@ -7637,7 +7915,7 @@
         );
       }
       var visibleSlots = state.roleOrder.filter(function (role) {
-        return !state.hiddenRoles.has(role);
+        return role !== "source" && !state.hiddenRoles.has(role);
       }).map(function (role) {
         return '.alc-fragment[data-role-slot="' + roleSlot(role) + '"]';
       });
@@ -7796,7 +8074,7 @@
 
   function syncSpeechPlayers() {
     if (typeof document === "undefined") return;
-    var playable = state.speechSupported && state.speechVoices.length > 0 &&
+    var playable = speechAvailable() &&
       state.speechRoles.size > 0;
     var segment = speechCurrentSegment();
     speechPlayers().forEach(function (player) {
@@ -7806,7 +8084,7 @@
         var showProgress = state.speechPlaying && state.speechQueue.length &&
           state.speechIndex >= 0;
         progress.textContent = showProgress ?
-          speechProgressText(state.speechIndex, state.speechQueue.length) :
+          (state.speechStatus || speechProgressText(state.speechIndex, state.speechQueue.length)) :
           state.speechStatus;
         progress.dataset.kind = !showProgress && state.speechStatusError ?
           "error" : "info";
@@ -7821,7 +8099,7 @@
             state.speechPaused ? labels().speechResume : labels().speechPlay
         );
         play.title = play.getAttribute("aria-label");
-        play.disabled = !playable;
+        play.disabled = !playable && !state.speechPlaying;
       }
       var previous = player.querySelector('[data-speech-action="previous"]');
       var next = player.querySelector('[data-speech-action="next"]');
@@ -7846,16 +8124,18 @@
       }
       var rate = player.querySelector('[data-speech-action="rate"]');
       if (rate) {
-        rate.textContent = labels().speechRate + " " + state.speechRate + "×";
+        rate.textContent = labels().speechRate + " " + displayedSpeechRate() + "×";
         rate.setAttribute(
-          "aria-label", labels().speechRate + " " + state.speechRate + "×"
+          "aria-label", labels().speechRate + " " + displayedSpeechRate() + "×"
         );
       }
       var rateMenu = player.querySelector(".alc-speech-rate-menu");
       if (rateMenu && !rateMenu.hidden) positionSpeechRateMenu(player);
       player.querySelectorAll(".alc-speech-rate-option").forEach(function (option) {
+        option.hidden = Number(option.dataset.speechRate) > speechRateLimit();
+        option.disabled = option.hidden;
         option.setAttribute(
-          "aria-selected", String(Number(option.dataset.speechRate) === state.speechRate)
+          "aria-selected", String(Number(option.dataset.speechRate) === displayedSpeechRate())
         );
       });
       var list = player.querySelector(".alc-speech-playlist");
@@ -7920,14 +8200,16 @@
 
   function setSpeechRate(value) {
     var next = Number(value);
-    if (!Number.isFinite(next) || next < 0.5 || next > 3) return;
+    if (!Number.isFinite(next) || next < 0.5 || next > speechRateLimit()) return;
     state.speechRate = next;
-    if (state.speechPlaying && state.speechIndex >= 0) {
+    if (state.speechPlaying && state.speechActiveProvider === "local") {
+      if (state.localTtsAudio) applyLocalTtsRate(state.localTtsAudio);
+      fillLocalTtsBuffer(state.speechGeneration);
+    } else if (state.speechPlaying && state.speechIndex >= 0) {
       var paused = state.speechPaused;
       speakSpeechIndex(state.speechIndex);
       if (paused) {
-        window.speechSynthesis.pause();
-        state.speechPaused = true;
+        toggleSpeechPause();
       }
     }
     syncSpeechPlayers();
@@ -8077,6 +8359,7 @@
       typeof window.SpeechSynthesisUtterance === "function"
     );
     state.speechReady = true;
+    setupLocalTts();
     renderSpeechRoleOptions();
 
     trigger.addEventListener("click", function () {
@@ -8085,13 +8368,14 @@
       if (!panel.hidden) {
         positionToolPanel(panel);
         refreshSpeechVoices();
+        if (state.localTtsEndpoint) refreshLocalTtsStatus();
       }
     });
     window.addEventListener("resize", function () { positionToolPanel(panel); });
     ["source", "target"].forEach(function (kind) {
       var select = document.getElementById("alc-speech-" + kind + "-voice");
       select.addEventListener("change", function () {
-        state.speechVoiceIdentities[kind] = select.value;
+        chooseSpeechVoice(kind === "source" ? "en" : "zh", select.value);
       });
       installCustomSelect(select);
     });
@@ -8113,9 +8397,10 @@
       }
     });
 
+    window.addEventListener("beforeunload", function () { stopSpeech(false); });
     if (!state.speechSupported) {
       renderSpeechVoiceOptions();
-      setSpeechStatus(strings.speechUnavailable, true);
+      updateSpeechAvailabilityStatus();
       updateSpeechControls();
       return;
     }
@@ -8126,8 +8411,434 @@
     } else {
       window.speechSynthesis.onvoiceschanged = refreshSpeechVoices;
     }
-    window.addEventListener("beforeunload", function () { stopSpeech(false); });
     refreshSpeechVoices();
+  }
+
+  function localTtsText(english, chinese) {
+    return labels().speechPlay === "Play" ? english : chinese;
+  }
+
+  function localSpeechIdentity(modelId, voice) {
+    return JSON.stringify({provider: "local", model_id: String(modelId), voice: String(voice)});
+  }
+
+  function decodeLocalSpeechIdentity(identity) {
+    try {
+      var value = JSON.parse(identity);
+      return value && !Array.isArray(value) && value.provider === "local" &&
+        typeof value.model_id === "string" && typeof value.voice === "string" ?
+        {model_id: value.model_id, voice: value.voice} : null;
+    } catch (_error) { return null; }
+  }
+
+  function speechChoiceForLanguage(language) {
+    var key = primaryLanguageTag(language);
+    var choices = state.speechVoiceChoices || {};
+    var explicit = Object.prototype.hasOwnProperty.call(choices, key);
+    var identity = explicit ? choices[key] : "";
+    if (!explicit) {
+      var kind = primaryLanguageTag(speechProfileLanguage("source")) === key ? "source" : "target";
+      identity = state.speechVoiceIdentities[kind] || (kind === "source" ? state.speechVoiceIdentity : "") || "";
+      if (!identity && state.localTtsEndpoint) {
+        var status = state.localTtsStatus;
+        if (!status) return {pending: true, identity: ""};
+        var selection = (status.selections || {})[key];
+        if (!selection && state.localTtsLegacyLocalPreference) {
+          var legacy = (status.models || []).find(function (model) { return model.id === "kokoro-int8-multi-lang-v1_1"; });
+          if (legacy && status["voice_" + key] !== undefined) {
+            selection = {model_id: legacy.id, voice: String(status["voice_" + key])};
+          }
+        }
+        if (selection) identity = localSpeechIdentity(selection.model_id, selection.voice);
+      }
+    }
+    // Portable exports have no host capability and use operating-system voices.
+    if (!state.localTtsEndpoint && decodeLocalSpeechIdentity(identity)) identity = "";
+    return {identity: identity, local: decodeLocalSpeechIdentity(identity)};
+  }
+
+  function speechSelection(segment) {
+    var language = segment && segment.language || speechProfileLanguage(
+      segment && segment.role === "source" ? "source" : "target"
+    );
+    var choice = speechChoiceForLanguage(language);
+    if (choice.pending) return {provider: "local", available: false, error: localTtsFailure(), language: language};
+    if (choice.local) {
+      var model = ((state.localTtsStatus || {}).models || []).find(function (item) {
+        return item.id === choice.local.model_id;
+      });
+      var voice = model && (model.voices || []).find(function (item) {
+        return String(item.id) === choice.local.voice && voiceMatchesLanguage({lang: item.language}, language);
+      });
+      return {provider: "local", model_id: choice.local.model_id, voice: choice.local.voice,
+        language: language, identity: choice.identity,
+        available: Boolean(state.localTtsEndpoint && !state.localTtsStatusError && model && model.installed && voice),
+        error: localTtsText(
+          "The selected local voice is unavailable. Install its model or choose a system voice in the voice menu.",
+          "所选本地音色不可用。请安装对应模型，或在音色菜单中选择系统语音。"
+        )};
+    }
+    var voiceObject = (state.speechVoices || []).find(function (voice) {
+      return speechVoiceIdentity(voice) === choice.identity;
+    }) || automaticSpeechVoice(language);
+    return {provider: "system", language: language, identity: choice.identity, voiceObject: voiceObject,
+      available: Boolean(state.speechSupported && (state.speechVoices || []).length),
+      error: state.speechSupported ? labels().speechNoVoices : labels().speechUnavailable};
+  }
+
+  function speechAvailable() {
+    return ["source", "target"].some(function (kind) {
+      return speechSelection({language: speechProfileLanguage(kind), role: kind}).available;
+    });
+  }
+
+  function speechRateLimit() { return 3; }
+
+  function displayedSpeechRate() { return state.speechRate; }
+
+  function updateSpeechAvailabilityStatus() {
+    if (state.speechPlaying) return;
+    if (speechAvailable()) setSpeechStatus(state.speechRoles.size ? labels().speechReady : labels().speechChooseContent, !state.speechRoles.size);
+    else setSpeechStatus(speechSelection({language: speechProfileLanguage("source"), role: "source"}).error, true);
+  }
+
+  function readLocalTtsEndpoint() {
+    var config = document.getElementById("alc-tts-config");
+    if (!config || !/^https?:$/.test(window.location.protocol)) return "";
+    try {
+      var endpoint = JSON.parse(config.textContent).endpoint;
+      if (typeof endpoint !== "string" || !/^\/(?!\/)/.test(endpoint)) return "";
+      var url = new URL(endpoint, window.location.href);
+      if (url.origin !== window.location.origin || url.search || url.hash) return "";
+      return url.pathname.replace(/\/$/, "");
+    } catch (_error) { return ""; }
+  }
+
+  function stripLocalTtsRuntime(root) {
+    if (root.querySelector("#alc-tts-config")) root.querySelectorAll(
+      'meta[http-equiv="Content-Security-Policy"]'
+    ).forEach(function (meta) {
+      meta.setAttribute("content", (meta.getAttribute("content") || "").replace(
+        /(^|;)\s*connect-src\s+[^;]*/gi, "$1 connect-src 'none'"
+      ));
+    });
+    root.querySelectorAll("#alc-tts-config, .alc-local-tts-controls").forEach(function (node) {
+      node.remove();
+    });
+  }
+
+  function setupLocalTts() {
+    state.localTtsEndpoint = readLocalTtsEndpoint();
+    try {
+      var saved = JSON.parse(window.localStorage.getItem("alc.reader.speech-voices") || "{}");
+      if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+        Object.keys(saved).forEach(function (key) {
+          if (/^[a-z]{2,8}$/.test(key) && typeof saved[key] === "string") state.speechVoiceChoices[key] = saved[key];
+        });
+      }
+      var legacy = window.localStorage.getItem("alc.reader.speech-engine");
+      if (!Object.keys(state.speechVoiceChoices).length && legacy === "system") state.speechVoiceChoices = {en: "", zh: ""};
+      state.localTtsLegacyLocalPreference = legacy === "local";
+    } catch (_error) { /* Storage is optional in standalone readers. */ }
+    if (state.localTtsEndpoint) {
+      refreshLocalTtsStatus();
+      window.addEventListener("focus", function () { refreshLocalTtsStatus(); });
+    }
+  }
+
+  function chooseSpeechVoice(language, identity) {
+    state.speechVoiceChoices[primaryLanguageTag(language)] = identity;
+    try { window.localStorage.setItem("alc.reader.speech-voices", JSON.stringify(state.speechVoiceChoices)); } catch (_error) {}
+    var playing = state.speechPlaying;
+    var paused = state.speechPaused;
+    if (playing) {
+      speakSpeechIndex(state.speechIndex);
+      if (paused && state.speechPlaying) toggleSpeechPause();
+    } else cancelLocalTts();
+    renderSpeechVoiceOptions();
+    updateSpeechAvailabilityStatus();
+    updateSpeechControls();
+  }
+
+  async function refreshLocalTtsStatus() {
+    if (!state.localTtsEndpoint) return;
+    var generation = ++state.localTtsStatusGeneration;
+    try {
+      var response = await fetch(state.localTtsEndpoint + "/status", {cache: "no-store"});
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      var status = await response.json();
+      if (generation !== state.localTtsStatusGeneration) return;
+      state.localTtsStatus = status;
+      state.localTtsStatusError = false;
+    } catch (_error) {
+      if (generation !== state.localTtsStatusGeneration) return;
+      state.localTtsStatusError = true;
+    }
+    renderSpeechVoiceOptions();
+    updateSpeechAvailabilityStatus();
+    updateSpeechControls();
+  }
+
+  function localTtsFailure() {
+    return localTtsText(
+      "Local speech is unavailable. Check the local TTS service, or choose a system voice in the voice menu.",
+      "本地朗读不可用。请检查本地 TTS 服务，或在音色菜单中选择系统语音。"
+    );
+  }
+
+  function cancelLocalTts() {
+    if (state.localTtsRequest) state.localTtsRequest.abort();
+    state.localTtsRequest = null;
+    cancelLocalTtsBuffer();
+    state.localTtsCurrentPart = null;
+    releaseLocalTtsAudio();
+  }
+
+  function releaseLocalTtsAudio() {
+    if (state.localTtsAudio) {
+      state.localTtsAudio.onended = null;
+      state.localTtsAudio.onerror = null;
+      state.localTtsAudio.pause();
+      state.localTtsAudio.removeAttribute("src");
+      state.localTtsAudio.load();
+      state.localTtsAudio = null;
+    }
+    if (state.localTtsObjectUrl) URL.revokeObjectURL(state.localTtsObjectUrl);
+    state.localTtsObjectUrl = "";
+  }
+
+  function playLocalTtsAudio(audio, generation) {
+    try {
+      var result = audio.play();
+      if (result && result.catch) result.catch(function () {
+        if (generation !== state.speechGeneration || audio !== state.localTtsAudio || state.speechPaused) return;
+        finishSpeech(false, localTtsFailure());
+      });
+    } catch (_error) {
+      if (generation === state.speechGeneration) finishSpeech(false, localTtsFailure());
+    }
+  }
+
+  function localTtsSentenceBoundary(characters, index) {
+    var character = characters[index];
+    if (/[。！？!?\n]/.test(character)) return true;
+    if (character !== ".") return false;
+    var next = characters[index + 1] || "";
+    if (next && !/\s/.test(next)) return false;
+    var prefix = characters.slice(0, index).join("");
+    var token = (prefix.match(/[A-Za-z.]+$/) || [""])[0];
+    // Initials, dotted abbreviations, and common titles do not end spoken sentences.
+    if (/^[A-Za-z]$/.test(token) || token.includes(".") ||
+        /^(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|No|Fig|Figs|Eq|Eqs|Sec|Vol|pp|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)$/i.test(token)) return false;
+    return true;
+  }
+
+  function localTtsChunk(text, language) {
+    text = text.trim();
+    var characters = Array.from(text);
+    var chinese = primaryLanguageTag(language) === "zh" || /[\u3400-\u9fff]/.test(text);
+    var limit = chinese ? 400 : 1600;
+    var end = Math.min(characters.length, limit);
+    if (characters.length > limit) {
+      var lower = Math.floor(limit * .5);
+      for (var i = end - 1; i >= lower; i -= 1) {
+        if (localTtsSentenceBoundary(characters, i) || /[，,；;：:]/.test(characters[i])) {
+          end = i + 1;
+          break;
+        }
+      }
+      if (!chinese && end === limit) {
+        for (var j = end - 1; j >= lower; j -= 1) {
+          if (/\s/.test(characters[j])) { end = j + 1; break; }
+        }
+      }
+    }
+    return {text: characters.slice(0, end).join(""), rest: characters.slice(end).join("").trim()};
+  }
+
+  function localTtsPart(index, segment, remainder, selectionOverride) {
+    var selection = selectionOverride || speechSelection(segment);
+    var fullText = remainder === undefined ? speechSegmentText(segment) : remainder;
+    var chunk = localTtsChunk(fullText, selection.language);
+    var body = {text: chunk.text, language: selection.language,
+      model_id: selection.model_id, voice: selection.voice,
+      rate: 1};
+    return {index: index, segment: segment, rest: chunk.rest, fullText: fullText, body: body, selection: selection,
+      key: JSON.stringify([index, chunk.rest, body]), audioKey: JSON.stringify(body)};
+  }
+
+  function nextLocalTtsPart(part) {
+    // Settings refreshes apply at paragraph boundaries; explicit voice changes restart playback.
+    if (part.rest) return localTtsPart(part.index, part.segment, part.rest, part.selection);
+    var index;
+    if (state.speechLoopMode === "one") index = part.index;
+    else if (part.index + 1 < state.speechQueue.length) index = part.index + 1;
+    else if (state.speechLoopMode === "all") index = 0;
+    else return null;
+    index = readableSpeechIndex(index, 1);
+    return index < 0 ? null : localTtsPart(index, state.speechQueue[index]);
+  }
+
+  function applyLocalTtsRate(audio) {
+    audio.preservesPitch = true;
+    audio.playbackRate = state.speechRate;
+  }
+
+  function cancelLocalTtsBuffer() {
+    state.localTtsBuffering = null;
+    state.localTtsBuffer.forEach(function (entry) { entry.controller.abort(); });
+    state.localTtsBuffer = [];
+  }
+
+  async function localTtsAudioResult(blob) {
+    var maximum = 32 * 1024 * 1024;
+    if (!blob.size || blob.size > maximum) throw new Error("Local audio exceeds the buffer limit");
+    var bytes = await blob.arrayBuffer();
+    var view = new DataView(bytes);
+    function tag(offset) {
+      return String.fromCharCode(view.getUint8(offset), view.getUint8(offset + 1), view.getUint8(offset + 2), view.getUint8(offset + 3));
+    }
+    if (view.byteLength < 12 || tag(0) !== "RIFF" || tag(8) !== "WAVE") throw new Error("Invalid WAV audio");
+    var byteRate = 0;
+    var dataSize = 0;
+    for (var offset = 12; offset + 8 <= view.byteLength;) {
+      var size = view.getUint32(offset + 4, true);
+      if (offset + 8 + size > view.byteLength) throw new Error("Truncated WAV audio");
+      if (tag(offset) === "fmt " && size >= 16) byteRate = view.getUint32(offset + 16, true);
+      if (tag(offset) === "data") dataSize += size;
+      offset += 8 + size + (size % 2);
+    }
+    var duration = dataSize / byteRate;
+    if (!Number.isFinite(duration) || duration <= 0) throw new Error("Invalid WAV duration");
+    return {blob: blob, duration: duration, bytes: blob.size};
+  }
+
+  function cacheLocalTtsAudio(key, result) {
+    state.localTtsCache.delete(key);
+    state.localTtsCache.set(key, result);
+    var total = 0;
+    state.localTtsCache.forEach(function (entry) { total += entry.bytes; });
+    while (total > 32 * 1024 * 1024 && state.localTtsCache.size) {
+      var activeKey = state.localTtsCurrentPart && state.localTtsCurrentPart.audioKey;
+      var oldest = Array.from(state.localTtsCache.keys()).find(function (candidate) { return candidate !== activeKey; });
+      if (oldest === undefined) break;
+      total -= state.localTtsCache.get(oldest).bytes;
+      state.localTtsCache.delete(oldest);
+    }
+  }
+
+  function requestLocalTtsPart(part) {
+    var controller = new AbortController();
+    var entry = {key: part.key, part: part, controller: controller, result: null, promise: null};
+    // Speculative requests always resolve, including cancellation and service errors.
+    entry.promise = (async function () {
+      try {
+        var cached = state.localTtsCache.get(part.audioKey);
+        if (cached) {
+          cacheLocalTtsAudio(part.audioKey, cached);
+          entry.result = cached;
+          return cached;
+        }
+        var response = await fetch(state.localTtsEndpoint + "/speech", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          signal: controller.signal, body: JSON.stringify(part.body)
+        });
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        var result = await localTtsAudioResult(await response.blob());
+        if (controller.signal.aborted) return {error: new Error("Cancelled")};
+        cacheLocalTtsAudio(part.audioKey, result);
+        entry.result = result;
+        return result;
+      } catch (error) {
+        entry.result = {error: error};
+        return entry.result;
+      }
+    }());
+    return entry;
+  }
+
+  function fillLocalTtsBuffer(generation) {
+    if (state.localTtsBuffering || state.localTtsRequest || !state.localTtsCurrentPart || state.speechActiveProvider !== "local") return;
+    var token = {};
+    state.localTtsBuffering = token;
+    (async function () {
+      try {
+        while (generation === state.speechGeneration && state.localTtsBuffering === token && state.speechPlaying) {
+          var buffer = state.localTtsBuffer;
+          var duration = 0;
+          var bytes = 0;
+          buffer.forEach(function (entry) {
+            if (entry.result && !entry.result.error) { duration += entry.result.duration; bytes += entry.result.bytes; }
+          });
+          if (buffer.length >= 3 || duration >= 45 * state.speechRate || bytes >= 32 * 1024 * 1024) break;
+          var previous = buffer.length ? buffer[buffer.length - 1] : null;
+          if (previous && previous.result && previous.result.error) break;
+          var next = nextLocalTtsPart(previous ? previous.part : state.localTtsCurrentPart);
+          if (!next || next.selection.provider !== "local" || !next.selection.available) break;
+          var entry = requestLocalTtsPart(next);
+          buffer.push(entry);
+          var result = await entry.promise;
+          if (generation !== state.speechGeneration || state.localTtsBuffering !== token || entry.controller.signal.aborted) break;
+          if (result.error) break;
+          if (state.localTtsBuffer.indexOf(entry) >= 0 && bytes + result.bytes > 32 * 1024 * 1024) {
+            state.localTtsBuffer.splice(state.localTtsBuffer.indexOf(entry), 1);
+            break;
+          }
+        }
+      } finally {
+        if (state.localTtsBuffering === token) state.localTtsBuffering = null;
+      }
+    }()).catch(function () {
+      if (state.localTtsBuffering === token) state.localTtsBuffering = null;
+    });
+  }
+
+  async function speakLocalTts(index, segment, generation, remainder, selectionOverride) {
+    var part = localTtsPart(index, segment, remainder, selectionOverride);
+    if (!part.selection.available) { finishSpeech(false, part.selection.error); return; }
+    state.speechActiveProvider = "local";
+    var request = state.localTtsBuffer[0] || null;
+    if (request && request.key === part.key) state.localTtsBuffer.shift();
+    else { cancelLocalTtsBuffer(); request = null; }
+    state.localTtsCurrentPart = part;
+    releaseLocalTtsAudio();
+    state.speechIndex = index;
+    state.speechPlaying = true;
+    state.speechUtterance = null;
+    var dock = document.getElementById("alc-speech-dock");
+    if (dock) { dock.hidden = false; document.body.classList.add("alc-speech-dock-open"); }
+    setSpeechActiveNode(speechSegmentNode(segment));
+    setSpeechStatus(localTtsText("Generating local audio…", "正在生成本地语音……"), false);
+    updateSpeechControls();
+    request = request || requestLocalTtsPart(part);
+    state.localTtsRequest = request.controller;
+    var result = await request.promise;
+    if (generation !== state.speechGeneration || request.controller.signal.aborted) return;
+    state.localTtsRequest = null;
+    if (result.error) { finishSpeech(false, localTtsFailure()); return; }
+    cacheLocalTtsAudio(part.audioKey, result);
+    try {
+      var url = URL.createObjectURL(result.blob);
+      state.localTtsObjectUrl = url;
+      var audio = new window.Audio(url);
+      state.localTtsAudio = audio;
+      applyLocalTtsRate(audio);
+      audio.onended = function () {
+        if (generation !== state.speechGeneration || audio !== state.localTtsAudio) return;
+        var next = nextLocalTtsPart(part);
+        if (next && next.selection.provider === "local") speakLocalTts(next.index, next.segment, generation, next.fullText, next.selection);
+        else if (next) speakSpeechIndex(next.index);
+        else finishSpeech(true, "");
+      };
+      audio.onerror = function () {
+        if (generation === state.speechGeneration && audio === state.localTtsAudio) finishSpeech(false, localTtsFailure());
+      };
+      fillLocalTtsBuffer(generation);
+      setSpeechStatus("", false);
+      if (!state.speechPaused) playLocalTtsAudio(audio, generation);
+    } catch (_error) {
+      if (generation === state.speechGeneration) finishSpeech(false, localTtsFailure());
+    }
   }
 
   function closeSpeechPanel(restoreFocus) {
@@ -8143,6 +8854,7 @@
     root.replaceChildren();
     root.appendChild(speechRoleOption("source", labels().original));
     state.roleOrder.forEach(function (role) {
+      if (role === "source") return;
       root.appendChild(speechRoleOption(role, roleLabel(role)));
     });
     updateSpeechControls();
@@ -8160,7 +8872,7 @@
       if (state.speechPlaying) stopSpeech(false);
       if (!state.speechRoles.size) {
         setSpeechStatus(labels().speechChooseContent, true);
-      } else if (state.speechSupported && state.speechVoices.length) {
+      } else if (speechAvailable()) {
         setSpeechStatus(labels().speechReady, false);
       }
       updateSpeechControls();
@@ -8171,7 +8883,11 @@
   }
 
   function refreshSpeechVoices() {
-    if (!state.speechSupported) return;
+    if (!state.speechSupported) {
+      renderSpeechVoiceOptions();
+      updateSpeechAvailabilityStatus();
+      return;
+    }
     var voices = [];
     try {
       voices = Array.prototype.slice.call(window.speechSynthesis.getVoices() || []);
@@ -8183,21 +8899,8 @@
         String(left.name || "").localeCompare(String(right.name || ""));
     });
     state.speechVoices = voices;
-    ["source", "target"].forEach(function (kind) {
-      var identity = state.speechVoiceIdentities[kind];
-      if (identity && !voices.some(function (voice) {
-        return speechVoiceIdentity(voice) === identity;
-      })) state.speechVoiceIdentities[kind] = "";
-    });
     renderSpeechVoiceOptions();
-    if (!voices.length) {
-      setSpeechStatus(labels().speechNoVoices, true);
-    } else if (!state.speechPlaying) {
-      setSpeechStatus(
-        state.speechRoles.size ? labels().speechReady : labels().speechChooseContent,
-        !state.speechRoles.size
-      );
-    }
+    updateSpeechAvailabilityStatus();
     updateSpeechControls();
   }
 
@@ -8240,27 +8943,53 @@
     ["source", "target"].forEach(function (kind) {
       var select = document.getElementById("alc-speech-" + kind + "-voice");
       if (!select) return;
+      var language = kind === "source" ? "en" : "zh";
+      var choice = speechChoiceForLanguage(language);
       select.replaceChildren();
-      var automaticDescription = speechVoiceDescription(
-        automaticSpeechVoice(speechProfileLanguage(kind))
-      );
-      var automaticLabel = automaticDescription ?
-        labels().automaticVoiceSelection.replace(
-          "{voice}", automaticDescription
-        ) : labels().automaticVoice;
+      var values = [];
+      var models = state.localTtsEndpoint ? ((state.localTtsStatus || {}).models || []) : [];
+      models.filter(function (model) { return model.installed; }).forEach(function (model) {
+        var voices = (model.voices || []).filter(function (voice) {
+          return voiceMatchesLanguage({lang: voice.language}, language);
+        });
+        if (!voices.length) return;
+        var group = element("optgroup");
+        group.label = model.name;
+        voices.forEach(function (voice) {
+          var option = element("option", "", voice.name + " · " + voice.language);
+          option.value = localSpeechIdentity(model.id, voice.id);
+          values.push(option.value);
+          group.appendChild(option);
+        });
+        select.appendChild(group);
+      });
+      if (choice.local && values.indexOf(choice.identity) < 0) {
+        var missing = element("option", "", localTtsText("Unavailable", "不可用") + " · " + choice.local.model_id + " / " + choice.local.voice);
+        missing.value = choice.identity;
+        missing.disabled = true;
+        select.appendChild(missing);
+      }
+      var system = element("optgroup");
+      system.label = localTtsText("System voices", "系统语音");
+      var automaticDescription = speechVoiceDescription(automaticSpeechVoice(language));
+      var automaticLabel = automaticDescription ? labels().automaticVoiceSelection.replace("{voice}", automaticDescription) : labels().automaticVoice;
       var automatic = element("option", "", automaticLabel);
       automatic.value = "";
-      select.appendChild(automatic);
-      var matching = state.speechVoices.filter(function (voice) {
-        return voiceMatchesLanguage(voice, speechProfileLanguage(kind));
-      });
-      matching.forEach(function (voice) {
+      system.appendChild(automatic);
+      state.speechVoices.filter(function (voice) { return voiceMatchesLanguage(voice, language); }).forEach(function (voice) {
         var option = element("option", "", speechVoiceDescription(voice));
         option.value = speechVoiceIdentity(voice);
-        select.appendChild(option);
+        system.appendChild(option);
       });
-      select.value = state.speechVoiceIdentities[kind] || "";
-      select.disabled = !state.speechSupported || !matching.length;
+      select.appendChild(system);
+      // Retain an explicitly saved operating-system identity while its inventory loads.
+      if (choice.identity && !choice.local && !Array.prototype.some.call(select.options, function (option) { return option.value === choice.identity; })) {
+        var saved = element("option", "", localTtsText("Saved system voice", "已选系统音色"));
+        saved.value = choice.identity;
+        system.appendChild(saved);
+      }
+      select.value = choice.identity;
+      select.disabled = false;
       syncCustomSelect(select);
     });
   }
@@ -8458,12 +9187,7 @@
 
   function playSpeechFromCard(role, blockId, fragmentId) {
     if (role === "source" && sourceEditOperation(state.selected.get(fragmentId)) === "replace") fragmentId = null;
-    if (!state.speechSupported) {
-      setSpeechStatus(labels().speechUnavailable, true);
-      return;
-    }
     refreshSpeechVoices();
-    if (!state.speechVoices.length) return;
     var queue = buildSpeechQueue(new Set([role]));
     var index = queue.findIndex(function (segment) {
       return segment.blockId === blockId &&
@@ -8482,12 +9206,7 @@
   }
 
   function playClassificationSpeech(relation, fragments) {
-    if (!state.speechSupported) {
-      setSpeechStatus(labels().speechUnavailable, true);
-      return;
-    }
     refreshSpeechVoices();
-    if (!state.speechVoices.length) return;
     var parts = fragments.map(fragmentSpeechText).filter(Boolean);
     if (!parts.length) {
       setSpeechStatus(labels().speechNoReadableContent, true);
@@ -8506,12 +9225,7 @@
   }
 
   function playGlossarySpeech(entry) {
-    if (!state.speechSupported) {
-      setSpeechStatus(labels().speechUnavailable, true);
-      return;
-    }
     refreshSpeechVoices();
-    if (!state.speechVoices.length) return;
     var queue = buildGlossarySpeechQueue(entry);
     if (!queue.length) {
       setSpeechStatus(labels().speechNoReadableContent, true);
@@ -8587,25 +9301,11 @@
   }
 
   function selectedSpeechVoice(segment) {
-    var kind = segment && segment.role === "source" ? "source" : "target";
-    var identity = state.speechVoiceIdentities[kind] ||
-      (kind === "source" ? state.speechVoiceIdentity : "");
-    if (identity) {
-      var selected = state.speechVoices.find(function (voice) {
-        return speechVoiceIdentity(voice) === identity;
-      });
-      if (selected) return selected;
-    }
-    return automaticSpeechVoice(segment && segment.language);
+    return speechSelection(segment).voiceObject || null;
   }
 
   function playSpeech() {
-    if (!state.speechSupported) {
-      setSpeechStatus(labels().speechUnavailable, true);
-      return;
-    }
     refreshSpeechVoices();
-    if (!state.speechVoices.length) return;
     if (!state.speechRoles.size) {
       setSpeechStatus(labels().speechChooseContent, true);
       return;
@@ -8696,8 +9396,17 @@
     }
     state.speechGeneration += 1;
     var generation = state.speechGeneration;
-    window.speechSynthesis.cancel();
+    cancelLocalTts();
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
     var segment = state.speechQueue[index];
+    var selection = speechSelection(segment);
+    if (!selection.available) { finishSpeech(false, selection.error); return; }
+    state.speechActiveProvider = selection.provider;
+    if (selection.provider === "local") {
+      state.speechPaused = false;
+      speakLocalTts(index, segment, generation);
+      return;
+    }
     var text = speechSegmentText(segment);
     var utterance = new window.SpeechSynthesisUtterance(text);
     var voice = selectedSpeechVoice(segment);
@@ -8752,6 +9461,15 @@
 
   function toggleSpeechPause() {
     if (!state.speechPlaying) return;
+    if (state.speechActiveProvider === "local") {
+      state.speechPaused = !state.speechPaused;
+      if (state.localTtsAudio) {
+        if (state.speechPaused) state.localTtsAudio.pause();
+        else playLocalTtsAudio(state.localTtsAudio, state.speechGeneration);
+      }
+      updateSpeechControls();
+      return;
+    }
     if (state.speechPaused) {
       window.speechSynthesis.resume();
       state.speechPaused = false;
@@ -8771,7 +9489,8 @@
 
   function stopSpeech(showReady) {
     state.speechGeneration += 1;
-    if (state.speechSupported) window.speechSynthesis.cancel();
+    cancelLocalTts();
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
     state.speechQueue = [];
     state.speechIndex = -1;
     state.speechUtterance = null;
@@ -8784,6 +9503,7 @@
 
   function finishSpeech(completed, error) {
     state.speechGeneration += 1;
+    cancelLocalTts();
     state.speechUtterance = null;
     state.speechPlaying = false;
     state.speechPaused = false;
@@ -8827,6 +9547,7 @@
   function renderContents(list, sections, strings) {
     var contentsHeading = document.getElementById("alc-contents-heading");
     contentsHeading.textContent = strings.contents;
+    setupContentsLanguage(contentsHeading);
     sections.forEach(function (section) {
       var item = element("li");
       item.dataset.level = String(section.level);
@@ -8842,13 +9563,50 @@
       list.appendChild(item);
     });
     if ((state.payload.publication.glossary || []).length) {
-      appendContentsLink(list, strings.glossary, "#alc-glossary");
+      appendContentsLink(list, strings.glossary, "#alc-glossary", "glossary");
     }
     if ((state.payload.publication.bibliography || []).length) {
-      appendContentsLink(list, strings.references, "#alc-references");
+      appendContentsLink(list, strings.companionReferences, "#alc-references", "references");
     }
     appendSupplementCoverage(list);
+    updateContentsTitles();
+  }
 
+  function setupContentsLanguage(heading) {
+    var group = document.getElementById("alc-contents-language");
+    if (!group) {
+      var row = element("div", "alc-contents-heading-row");
+      heading.parentElement.insertBefore(row, heading);
+      row.appendChild(heading);
+      group = element("div", "alc-contents-language");
+      group.id = "alc-contents-language";
+      group.setAttribute("role", "group");
+      ["source", "translation"].forEach(function (language) {
+        var button = element("button");
+        button.type = "button";
+        button.dataset.contentsLanguage = language;
+        button.addEventListener("click", function () {
+          state.contentsLanguage = language;
+          syncContentsLanguage();
+          updateContentsTitles();
+        });
+        group.appendChild(button);
+      });
+      row.appendChild(group);
+    }
+    syncContentsLanguage();
+  }
+
+  function syncContentsLanguage() {
+    var group = document.getElementById("alc-contents-language");
+    if (!group) return;
+    var strings = labels();
+    group.setAttribute("aria-label", strings.contentsLanguage);
+    group.querySelectorAll("button").forEach(function (button) {
+      var source = button.dataset.contentsLanguage === "source";
+      button.textContent = source ? strings.contentsSource : strings.contentsTranslation;
+      button.setAttribute("aria-pressed", String(button.dataset.contentsLanguage === state.contentsLanguage));
+    });
   }
 
   function appendSupplementCoverage(list) {
@@ -8933,7 +9691,7 @@
             link.appendChild(child.cloneNode(true));
           });
           removeVisibleHtmlTags(link);
-          decorateGlossary(link, state.sourceVisible ? "source" : "target");
+          decorateGlossary(link, heading.dataset.contentsRole === "translation" ? "target" : "source");
           typeset(link);
         } else {
           appendTocTitle(link, link.dataset.sourceTitle);
@@ -8952,7 +9710,7 @@
     });
     (state.payload.selected_heading_fragments || []).forEach(function (fragment) {
       if (fragment.target_id === blockId && !loadedIds.has(fragment.fragment_id) &&
-          !state.revisions.has(fragment.fragment_id)) {
+          !state.revisions.has(fragment.fragment_id) && fragmentIsVisible(fragment)) {
         candidates.push(fragment);
       }
     });
@@ -8960,25 +9718,26 @@
       return Number(left.priority) - Number(right.priority) ||
         left.fragment_id.localeCompare(right.fragment_id);
     });
-    for (var index = 0; index < candidates.length; index += 1) {
-      var candidate = candidates[index];
-      if (state.sourceVisible) {
-        if (candidate.role !== "source" || candidate.priority > 100) continue;
-      } else if (candidate.role === "source" || state.hiddenRoles.has(candidate.role)) {
-        continue;
+    var roles = state.contentsLanguage === "translation" ? ["translation", "source"] : ["source"];
+    for (var roleIndex = 0; roleIndex < roles.length; roleIndex += 1) {
+      for (var index = 0; index < candidates.length; index += 1) {
+        var candidate = candidates[index];
+        if (candidate.role !== roles[roleIndex] || (candidate.role === "source" && candidate.priority > 100)) continue;
+        var holder = element("div");
+        holder.innerHTML = state.md.render(projectGlossaryMarkdown(candidate.markdown_body, candidate));
+        var heading = holder.firstElementChild;
+        if (heading && /^H[1-6]$/.test(heading.tagName)) {
+          heading.dataset.contentsRole = candidate.role;
+          return heading;
+        }
       }
-      var holder = element("div");
-      holder.innerHTML = state.md.render(projectGlossaryMarkdown(
-        candidate.markdown_body, candidate
-      ));
-      var heading = holder.firstElementChild;
-      if (heading && /^H[1-6]$/.test(heading.tagName)) return heading;
     }
     return null;
   }
 
-  function appendContentsLink(list, text, href) {
+  function appendContentsLink(list, text, href, entry) {
     var item = element("li");
+    if (entry) item.dataset.contentsEntry = entry;
     var link = element("a", "", text);
     link.href = href;
     item.appendChild(link);
@@ -8986,7 +9745,6 @@
   }
 
   function renderGlossary(main, glossary, strings) {
-    if (!glossary.length) return;
     var section = element("section", "alc-appendix");
     section.id = "alc-glossary";
     section.appendChild(element("h2", "", strings.glossary));
@@ -8995,6 +9753,10 @@
       dl.appendChild(renderGlossaryRow(entry, strings));
     });
     section.appendChild(dl);
+    if (!glossary.length) {
+      var add = iconButton("alc-card-action", "+", strings.addGlossary);
+      add.onclick = function () { showAddGlossary(null); }; section.appendChild(add);
+    }
     main.appendChild(section);
   }
 
@@ -9131,7 +9893,7 @@
     if (!bibliography.length) return;
     var section = element("section", "alc-appendix");
     section.id = "alc-references";
-    section.appendChild(element("h2", "", strings.references));
+    section.appendChild(element("h2", "", strings.companionReferences));
     var list = element("ol", "alc-reference-list");
     bibliographyIndex().groups.forEach(function (group) {
       var entry = group.entry;
@@ -9141,15 +9903,24 @@
       var title = entry.title || entry.source || id;
       var source = entry.source || entry.url || "";
       if (/^https?:\/\//i.test(source)) {
-        var link = element("a", "", title);
+        var link = element("a");
+        appendTocTitle(link, title);
         link.href = source;
         link.rel = "noopener noreferrer";
         item.appendChild(link);
       } else {
-        item.appendChild(element("strong", "", title));
+        var titleNode = element("strong");
+        appendTocTitle(titleNode, title);
+        item.appendChild(titleNode);
       }
       if (source && source !== title) {
-        item.appendChild(document.createTextNode(" — " + source));
+        var sourceNode = element("span");
+        if (/^https?:\/\//i.test(source)) {
+          sourceNode.textContent = " — " + source;
+        } else {
+          appendTocTitle(sourceNode, " — " + source);
+        }
+        item.appendChild(sourceNode);
       }
       (entry.dois || []).forEach(function (doi) {
         item.appendChild(document.createTextNode(" DOI: " + doi));
@@ -9734,6 +10505,7 @@
     var chunk = chunkForTargetId(targetId);
     if (!chunk) return false;
     revealSourceTarget(targetId);
+    revealAppendixTarget(targetId);
     renderChunk(chunk);
     armHashCalibration(canonicalHash, keyboardNavigation === true);
     if (updateHistory) {
@@ -10060,6 +10832,7 @@
     if (!state.exportStandaloneSupported) return;
     var root = document.documentElement.cloneNode(true);
     removeDeletedContentControls(root);
+    stripLocalTtsRuntime(root);
     var body = root.querySelector("body");
     var readingArea = root.querySelector("#ac-document");
     var header = root.querySelector("#alc-book-header");
@@ -10445,8 +11218,8 @@
       buildChangedMarkdown(resourcePaths, categories) :
       buildCompleteMarkdown(resourcePaths, categories);
     if (!complete.markdown) return null;
-    complete.markdown = degradeLegacyInternalMarkdownLinks(
-      complete.markdown
+    complete.markdown = normalizePortableInlineMathMarkdown(
+      degradeLegacyInternalMarkdownLinks(complete.markdown)
     );
     var includedResourcePaths = markdownReferencedResourcePaths(
       complete.markdown, resourcePaths
@@ -10494,7 +11267,9 @@
       buildCompleteMarkdown(resourcePaths, categories);
     if (!complete.markdown) return "";
     return stripPortableMarkdownResources(
-      degradeLegacyInternalMarkdownLinks(complete.markdown), resourcePaths
+      normalizePortableInlineMathMarkdown(
+        degradeLegacyInternalMarkdownLinks(complete.markdown)
+      ), resourcePaths
     );
   }
 
@@ -11017,7 +11792,7 @@
         normalizeMarkdown(String(fallback || "")), resourcePaths
       );
     }
-    return spans.map(function (span) {
+    var values = spans.map(function (span) {
       if (span.kind === "math") {
         var tex = String(span.tex || span.source || "");
         return containsUnescapedDollar(tex) ? "\\(" + tex + "\\)" :
@@ -11032,7 +11807,32 @@
         ) + "](" + markdownLinkDestination(target) + ")";
       }
       return escapeMarkdownInlineText(String(span.text || ""));
-    }).join("");
+    });
+    normalizeSourceInlineMathSpanBoundaries(spans, values);
+    return values.join("");
+  }
+
+  function normalizeSourceInlineMathSpanBoundaries(spans, values) {
+    spans.forEach(function (span, index) {
+      if (span.kind !== "math" || values[index].slice(0, 1) !== "$") return;
+      var tex = String(span.tex || span.source || "");
+      var previous = spans[index - 1];
+      var next = spans[index + 1];
+      var previousTouches = previous && previous.kind === "text" &&
+        /[A-Za-z0-9]$/.test(String(previous.text || ""));
+      var nextText = next && next.kind === "text" ?
+        String(next.text || "") : "";
+      var nextIdentifier = portableInlineMathIdentifier(nextText);
+      if (portableInlineMathOperator(tex)) {
+        if (previousTouches) values[index - 1] += " ";
+        if (/^[A-Za-z0-9]/.test(nextText)) values[index + 1] = " " + values[index + 1];
+        return;
+      }
+      if (!previousTouches && nextIdentifier) {
+        values[index] = "$" + tex + "\\mathrm{" + nextIdentifier[1] + "}$";
+        values[index + 1] = values[index + 1].slice(nextIdentifier[1].length);
+      }
+    });
   }
 
   function exportPresentationFieldMarkdown(view, resourcePaths) {
@@ -11692,6 +12492,242 @@
 
   function degradeLegacyInternalMarkdownLinks(markdown) {
     return degradeLegacyMarkdownLinks(markdown, legacyInternalMarkdownTarget);
+  }
+
+  function normalizePortableInlineMathMarkdown(markdown) {
+    var normalized = normalizeMarkdown(String(markdown || ""));
+    var tokens = state.md.parse(normalized, {});
+    var protectedLines = portableMathProtectedLineIndexes(tokens);
+    var codeRanges = portableMathCodeSpanRanges(normalized, tokens).concat(
+      portableMathLinkRanges(normalized)
+    );
+    var lineOffset = 0;
+    return normalized.split("\n").map(function (line, lineNumber) {
+      var currentOffset = lineOffset;
+      lineOffset += line.length + 1;
+      if (protectedLines.has(lineNumber)) return line;
+      var ranges = codeRanges.filter(function (range) {
+        return currentOffset < range[1] &&
+          range[0] < currentOffset + line.length;
+      }).map(function (range) {
+        return [
+          Math.max(0, range[0] - currentOffset),
+          Math.min(line.length, range[1] - currentOffset)
+        ];
+      });
+      var result = normalizePortableInlineMathLine(
+        line, ranges
+      );
+      return result;
+    }).join("\n");
+  }
+
+  function portableMathProtectedLineIndexes(tokens) {
+    var lines = new Set();
+    (tokens || []).forEach(function (token) {
+      if (
+        ["fence", "code_block", "alc_math_block"].indexOf(token.type) < 0 ||
+        !Array.isArray(token.map)
+      ) return;
+      for (var index = token.map[0]; index < token.map[1]; index += 1) {
+        lines.add(index);
+      }
+    });
+    return lines;
+  }
+
+  function portableMathCodeSpanRanges(markdown, tokens) {
+    var lines = markdown.split("\n");
+    var lineOffsets = [];
+    var offset = 0;
+    lines.forEach(function (line) {
+      lineOffsets.push(offset);
+      offset += line.length + 1;
+    });
+    var ranges = [];
+    markdownInlineLineRanges(tokens).forEach(function (lineRange) {
+      var start = lineOffsets[lineRange.start];
+      var end = lineRange.end < lineOffsets.length ?
+        lineOffsets[lineRange.end] : markdown.length;
+      var value = markdown.slice(start, end);
+      var position = 0;
+      while (position < value.length) {
+        if (value.charAt(position) !== "`") {
+          position += 1;
+          continue;
+        }
+        var run = 1;
+        while (value.charAt(position + run) === "`") run += 1;
+        var codeEnd = markdownCodeSpanEnd(value, position + run, run);
+        if (codeEnd < 0) {
+          position += run;
+          continue;
+        }
+        ranges.push([start + position, start + codeEnd + run]);
+        position = codeEnd + run;
+      }
+    });
+    return ranges;
+  }
+
+  function normalizePortableInlineMathLine(
+    line, initialProtectedRanges
+  ) {
+    var protectedRanges = portableMathProtectedInlineRanges(
+      line, initialProtectedRanges
+    );
+    var output = "";
+    var position = 0;
+    while (position < line.length) {
+      var protectedRange = protectedRanges.find(function (range) {
+        return range[0] <= position && position < range[1];
+      });
+      if (protectedRange) {
+        output += line.slice(position, protectedRange[1]);
+        position = protectedRange[1];
+        continue;
+      }
+      if (
+        line.charAt(position) !== "$" ||
+        markdownCharacterEscaped(line, position) ||
+        line.charAt(position - 1) === "$" ||
+        line.charAt(position + 1) === "$"
+      ) {
+        output += line.charAt(position);
+        position += 1;
+        continue;
+      }
+      if (portableCurrencyOpening(line, position)) {
+        output += line.charAt(position);
+        position += 1;
+        continue;
+      }
+      var end = inlineMathEnd(line, position + 1, "$");
+      if (
+        end <= position + 1 || protectedRanges.some(function (range) {
+          return position < range[1] && range[0] < end + 1;
+        })
+      ) {
+        output += line.charAt(position);
+        position += 1;
+        continue;
+      }
+      var body = line.slice(position + 1, end);
+      var before = line.charAt(position - 1);
+      var after = line.charAt(end + 1);
+      var beforeTouches = /[A-Za-z0-9]/.test(before);
+      var afterTouches = /[A-Za-z0-9]/.test(after);
+      if (!beforeTouches && !afterTouches) {
+        output += line.slice(position, end + 1);
+        position = end + 1;
+        continue;
+      }
+      if (portableInlineMathOperator(body)) {
+        if (beforeTouches && !/[ \t]$/.test(output)) output += " ";
+        output += line.slice(position, end + 1);
+        if (afterTouches) output += " ";
+        position = end + 1;
+        continue;
+      }
+      var identifier = portableInlineMathIdentifier(line.slice(end + 1));
+      if (!beforeTouches && identifier) {
+        output += "$" + body + "\\mathrm{" + identifier[1] + "}$";
+        position = end + 1 + identifier[1].length;
+        continue;
+      }
+      // Ambiguous adjacency must not block an otherwise usable export.
+      output += line.slice(position, end + 1);
+      position = end + 1;
+    }
+    return output;
+  }
+
+  function portableInlineMathIdentifier(value) {
+    var match = /^([A-Za-z][A-Za-z0-9]*)/.exec(value);
+    if (!match) return null;
+    return /^[A-Z][A-Z0-9]+$/.test(match[1]) ||
+      ["Gyr", "Gyrs", "Myr", "Myrs", "GeV", "MeV", "keV", "eV", "Mpc", "kpc", "pc"].indexOf(match[1]) >= 0 ? match : null;
+  }
+
+  function portableMathLinkRanges(markdown) {
+    var ranges = [];
+    for (var position = 0; position < markdown.length; position += 1) {
+      if (markdown.charAt(position) !== "[" || markdownCharacterEscaped(markdown, position)) continue;
+      var labelEnd = markdownLabelEnd(markdown, position);
+      if (labelEnd < 0 || markdown.charAt(labelEnd + 1) !== "(") continue;
+      var cursor = labelEnd + 2;
+      while (/\s/.test(markdown.charAt(cursor)) && cursor < markdown.length) cursor += 1;
+      var destination = state.md.helpers.parseLinkDestination(markdown, cursor, markdown.length);
+      if (!destination.ok) continue;
+      cursor = destination.pos;
+      var afterDestination = cursor;
+      while (/\s/.test(markdown.charAt(cursor)) && cursor < markdown.length) cursor += 1;
+      if (cursor > afterDestination && markdown.charAt(cursor) !== ")") {
+        var title = state.md.helpers.parseLinkTitle(markdown, cursor, markdown.length);
+        if (!title.ok) continue;
+        cursor = title.pos;
+        while (/\s/.test(markdown.charAt(cursor)) && cursor < markdown.length) cursor += 1;
+      }
+      if (markdown.charAt(cursor) === ")") ranges.push([labelEnd + 1, cursor + 1]);
+    }
+    return ranges;
+  }
+
+  function portableInlineMathOperator(value) {
+    return [
+      "=", "<", ">", "\\approx", "\\equiv", "\\ge", "\\geq",
+      "\\leftarrow", "\\le", "\\leq", "\\leftrightarrow", "\\mapsto",
+      "\\ne", "\\neq", "\\pm", "\\propto", "\\rightarrow", "\\sim",
+      "\\times", "\\to"
+    ].indexOf(String(value || "").trim()) >= 0;
+  }
+
+  function portableCurrencyOpening(line, start) {
+    var value = line.slice(start);
+    var amount = /^[$][0-9]+(?:[.,][0-9]+)?/.exec(value);
+    if (!amount) return false;
+    var after = value.charAt(amount[0].length);
+    return !after || /[ \t.,;:!?)\]]/.test(after);
+  }
+
+  function portableMathProtectedInlineRanges(line, initialRanges) {
+    if (markdownReferenceDefinition(line)) return [[0, line.length]];
+    var ranges = (initialRanges || []).map(function (range) {
+      return range.slice();
+    });
+    var position = 0;
+    while (position < line.length) {
+      var bracket = line.charAt(position) === "[" ? position :
+        line.slice(position, position + 2) === "![" ? position + 1 : -1;
+      if (bracket >= 0 && !markdownCharacterEscaped(line, bracket)) {
+        var labelEnd = markdownLabelEnd(line, bracket);
+        if (labelEnd >= 0 && line.charAt(labelEnd + 1) === "(") {
+          var destination = markdownDestinationRange(line, labelEnd + 2);
+          if (destination) ranges.push([destination.start, destination.end]);
+        }
+      }
+      if (line.charAt(position) === "<" &&
+          !markdownCharacterEscaped(line, position)) {
+        var angleEnd = line.indexOf(">", position + 1);
+        if (angleEnd >= 0 && portableMarkdownAngleConstruct(
+          line.slice(position, angleEnd + 1)
+        )) {
+          ranges.push([position, angleEnd + 1]);
+        }
+      }
+      position += 1;
+    }
+    ranges.sort(function (left, right) {
+      return left[0] - right[0] || left[1] - right[1];
+    });
+    return ranges;
+  }
+
+  function portableMarkdownAngleConstruct(value) {
+    return /^<!--[\s\S]*-->$/.test(value) ||
+      /^<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?\/?>$/.test(value) ||
+      /^<[A-Za-z][A-Za-z0-9+.-]*:[^ <>]+>$/.test(value) ||
+      /^<[^ <>@]+@[^ <>@]+>$/.test(value);
   }
 
   function degradeLegacyBibliographyMarkdownLinks(markdown) {
@@ -12556,6 +13592,8 @@
     var strings = labels();
     setupUnsavedDraftDialog();
     var connect = document.getElementById("alc-connect");
+    var folderIcon = connect.querySelector("svg");
+    if (folderIcon) folderIcon.innerHTML = '<path d="M3 17V6a2 2 0 0 1 2-2h4l2 3h7a2 2 0 0 1 2 2v2"></path><path d="M3 17l3-6h16l-3 8H5a2 2 0 0 1-2-2Z"></path>';
     updateDirectoryControl();
     if (!window.showDirectoryPicker) {
       connect.disabled = true;
@@ -13002,6 +14040,13 @@
     var outcomes = await loadDirectoryGlossaryRevisionFiles(
       files, previousCache, nextCache
     );
+    var candidateGroups = new Map();
+    candidates.concat(outcomes.filter(function (outcome) { return outcome && outcome.revision; }).map(function (outcome) { return outcome.revision; })).forEach(function (revision) {
+      var values = candidateGroups.get(revision.entry_id) || [];
+      if (!values.some(function (value) { return value.semantic_digest === revision.semantic_digest; })) values.push(revision);
+      candidateGroups.set(revision.entry_id, values);
+    });
+    var candidateBases = glossaryBaselinesFor(candidateGroups).entries;
     var batchRevisionsByGlossaryDigest = new Map();
     for (var outcomeIndex = 0; outcomeIndex < outcomes.length; outcomeIndex += 1) {
       var outcome = outcomes[outcomeIndex];
@@ -13009,7 +14054,7 @@
       if (outcome.revision) {
         try {
           var batch = await loadGlossaryPropagationBatch(
-            directory, outcome.revision
+            directory, outcome.revision, candidateBases
           );
           candidates.push(outcome.revision);
           batch.glossaryRevisions.forEach(function (revision) {
@@ -13050,7 +14095,8 @@
     return handle.getFileHandle(segments[segments.length - 1]);
   }
 
-  async function loadGlossaryPropagationBatch(directory, glossaryRevision) {
+  async function loadGlossaryPropagationBatch(directory, glossaryRevision, candidateBases) {
+    candidateBases = candidateBases || state.glossaryBase;
     var propagation = glossaryRevision.provenance &&
       glossaryRevision.provenance.propagation;
     if (propagation === undefined) {
@@ -13076,7 +14122,7 @@
         throw new Error("propagation fragment does not match its commit marker");
       }
       validateStoredGlossaryMentions(
-        revision, revision.markdown_body, state.glossaryBase
+        revision, revision.markdown_body, candidateBases
       );
       revision._origin = "directory";
       revisions.push(revision);
@@ -13093,7 +14139,7 @@
         await (await dependentHandle.getFile()).text(),
         dependentReference.path.split("/").pop()
       );
-      var base = glossaryBaseEntry(dependentReference.entry_id);
+      var base = candidateBases.find(function (entry) { return glossaryEntryId(entry) === dependentReference.entry_id; });
       if (!base || state.glossaryDuplicateIds.has(dependent.entry_id) ||
         dependent.entry_id === glossaryRevision.entry_id ||
         dependent.entry_id !== dependentReference.entry_id ||
@@ -13118,10 +14164,11 @@
   }
 
   function structurallySelectedGlossaryChains(revisions) {
+    var baseline = glossaryBaselinesFor(revisions);
     var chains = [];
-    state.glossaryBase.forEach(function (base) {
+    baseline.entries.forEach(function (base) {
       var entryId = glossaryEntryId(base);
-      var baseDigest = state.glossaryBaseDigests.get(entryId);
+      var baseDigest = baseline.digests.get(entryId);
       if (!entryId || !baseDigest) return;
       var values = (revisions.get(entryId) || []).filter(function (revision) {
         return validGlossaryRevisionChange(base, revision.entry);
@@ -15014,6 +16061,12 @@
       }
     }
     validateGlossaryRevisionMetadata(metadata);
+    if (metadata.provenance.created_base) {
+      if (metadata.revision !== 2 || !jsonValuesEqual(metadata.entry, metadata.provenance.created_base) ||
+          await canonicalDigest(glossaryBaseMaterial(metadata.provenance.created_base)) !== metadata.parent_semantic_digest) {
+        throw new Error("Invalid new glossary entry base");
+      }
+    }
     var digest = await canonicalDigest(glossaryRevisionMaterial(metadata));
     var expected = /^revision-([0-9]{6,})-([0-9a-f]{64})[.](?:md|json)$/.exec(
       filename

@@ -4858,13 +4858,24 @@ def test_simple_math_delimiters_in_glossary_label_preserve_translation():
             _validate_glossary_window(value,[term])
 
 
-def test_paragraph_repair_keeps_atoms_and_supports_followup_review():
+@pytest.mark.parametrize("structured_math", [False, True])
+def test_paragraph_repair_keeps_atoms_and_supports_followup_review(structured_math):
     from alc_translate.workflow import (_protected_translation_retry_request,
         _validate_model_protected_atom_window, _review_text_slot_projection,
         _apply_text_slot_review)
     from alc_translate.atoms import source_protected_parts
     block={'block_id':'repair-b','kind':'paragraph','ordinal':0,'section_path':[],
            'payload':{'text':'Before $x$ after.', 'inline_spans':[{'kind':'text','text':'Before $x$ after.'}]}}
+    if structured_math:
+        block['payload'] = {
+            'text': 'Before x after.',
+            'inline_spans': [
+                {'kind': 'text', 'text': 'Before ', 'start': 0, 'end': 7},
+                {'kind': 'math', 'text': 'x', 'source': 'x', 'tex': 'x', 'start': 7, 'end': 8},
+                {'kind': 'text', 'text': ' after.', 'start': 8, 'end': 15},
+            ],
+        }
+        assert '$' not in block_text(block)
     from ac_llm import LLMRequest, JsonOutput
     request=LLMRequest('parent','prompt',JsonOutput(TRANSLATION_SCHEMA))
     language=LanguageResult('a'*64,'b'*64,'en','known',1,'zh-CN','enabled')
@@ -4880,9 +4891,67 @@ def test_paragraph_repair_keeps_atoms_and_supports_followup_review():
     assert projection['content']['schema_version']==PROTECTED_ATOM_RESULT_SCHEMA
     review={'schema_version':PROTECTED_ATOM_REVIEW_RESULT_SCHEMA,'translation_patches':[],'summary':'完整'}
     assert _apply_text_slot_review(review,draft,[block])[0]['text']==draft[0]['text']
+    doc['translations'][0]['parts'] = [parts[0], parts[1]]
+    with pytest.raises(TranslationWorkflowError) as error:
+        _validate_model_protected_atom_window(doc, [block])
+    assert error.value.code == 'translation_coverage_invalid'
     doc['translations'][0]['parts']=[parts[0], parts[0], *parts[1:]]
     with pytest.raises(TranslationWorkflowError):
         _validate_model_protected_atom_window(doc,[block])
+
+
+@pytest.mark.parametrize("failed_text", ["Plain prose.", "Read [the paper](https://example.test)."])
+def test_formula_neighbor_does_not_change_nonformula_retry(failed_text):
+    from ac_llm import JsonOutput, LLMRequest
+    from alc_translate.atoms import text_slot_ids
+    from alc_translate.workflow import _protected_translation_retry_request
+
+    blocks = [
+        {"block_id": "failed", "kind": "paragraph", "payload": {"text": failed_text}},
+        {
+            "block_id": "valid-math", "kind": "paragraph",
+            "payload": {
+                "text": "Before x after.",
+                "inline_spans": [
+                    {"kind": "text", "text": "Before "},
+                    {"kind": "math", "text": "x", "tex": "x"},
+                    {"kind": "text", "text": " after."},
+                ],
+            },
+        },
+    ]
+    candidate = {
+        "schema_version": TEXT_SLOT_RESULT_SCHEMA,
+        "translations": {
+            block["block_id"]: {
+                "text_slots": {
+                    slot_id: "有效译文" if block["block_id"] == "valid-math" else ""
+                    for slot_id in text_slot_ids(block)
+                }
+            }
+            for block in blocks
+        },
+    }
+    from alc_translate.workflow import _validate_text_slot_window
+    _validate_text_slot_window(
+        {
+            "schema_version": TEXT_SLOT_RESULT_SCHEMA,
+            "translations": {"valid-math": candidate["translations"]["valid-math"]},
+        },
+        [blocks[1]],
+    )
+    retry = _protected_translation_retry_request(
+        LLMRequest("parent", "prompt", JsonOutput(TRANSLATION_SCHEMA)),
+        TranslationWorkflowError("translation_coverage_invalid", "missing text"),
+        candidate,
+        blocks,
+        glossary=[],
+        target_language="zh-CN",
+        language=LanguageResult("a" * 64, "b" * 64, "en", "known", 1, "zh-CN", "enabled"),
+        window_ordinal=0,
+    )
+    assert "alc.translate.paragraph_repair.v1" not in retry.prompt
+    assert "valid-math" not in retry.prompt
 
 
 @pytest.mark.parametrize("value, expected", [
@@ -4894,3 +4963,43 @@ def test_paragraph_repair_keeps_atoms_and_supports_followup_review():
 def test_glossary_control_repair_preserves_unknown_corruption(value, expected):
     from alc_translate.workflow import _recover_glossary_control_text
     assert _recover_glossary_control_text(value) == expected
+
+
+@pytest.mark.parametrize('repair_succeeds', [True, False])
+def test_caption_integrity_repairs_or_preserves_source_without_stopping(tmp_path, repair_succeeds):
+    from dataclasses import replace
+    (tmp_path / 'figure.png').write_bytes(b'\x89PNG fixture')
+    path = tmp_path / 'caption.md'
+    path.write_text('# Chapter\n\n![figure](figure.png "FIGURE 6.8 Conformal diagram for the Kerr solution with $x$. A complete description follows.")\n\nHealthy neighbor.\n')
+    paper = AcDocumentService(cache_root=tmp_path / 'cache')
+    source = TranslationSource(RichDocumentParserService(paper.repository).parse_source(paper.import_source(path)))
+    figure_id = next(b['block_id'] for b in source_blocks(source) if b['kind'] == 'figure')
+    class CaptionTasks(FakeTasks):
+        caption_attempts = 0
+        def execute_or_resume(self, context, request, **kwargs):
+            result = super().execute_or_resume(context, request, **kwargs)
+            translations = result.value.get('translations', [])
+            if not isinstance(translations, list):
+                return result
+            for item in translations:
+                if item['block_id'] != figure_id:
+                    continue
+                self.caption_attempts += 1
+                if self.caption_attempts == 1 or not repair_succeeds:
+                    atom = next(p for p in item['parts'] if p['kind'] == 'atom')
+                    item['parts'] = [{'kind': 'text', 'text': '带有 '}, atom,
+                                     {'kind': 'text', 'text': '。后面的说明。'}]
+            return replace(result, value={**result.value, 'translations': translations})
+    tasks = CaptionTasks()
+    context = _context(tmp_path, 'caption-integrity')
+    result = TranslationWorkflowService(tasks).translate_blocks(context, source,
+        language=LanguageResult(source.document_digest, source.source_digest, 'en', 'known', 1, 'zh-CN', 'enabled'),
+        glossary=GlossaryResult(source.document_digest, source.source_digest, 'zh-CN', 1, 'e'*64, ()),
+        target_language='zh-CN', review_rounds=0)
+    assert isinstance(result, TranslationResult)
+    assert tasks.caption_attempts == 2
+    revisions = [decode_fragment_revision(context.artifacts.read_bytes(item.artifact).decode(), filename=Path(item.revision.path).name) for item in result.revision_artifacts]
+    caption = next(r for r in revisions if r.anchor.target_id == figure_id)
+    assert 'FIGURE 6.8' in caption.markdown_body
+    assert bool(caption.provenance.get('translation_fallback')) is (not repair_succeeds)
+    assert any('translated:Healthy neighbor.' in r.markdown_body for r in revisions)

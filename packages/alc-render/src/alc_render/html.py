@@ -6,7 +6,7 @@ import base64
 import binascii
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 from html import escape, unescape
 from html.parser import HTMLParser
@@ -35,6 +35,7 @@ from .contracts import (
 )
 from .delivery_ledger import DeliveryLedgerError, delivery_ledger_from_profile
 from .glossary import (
+    glossary_with_created_entries,
     GLOSSARY_MENTIONS_SCHEMA,
     GLOSSARY_REVISION_DIRECTORY,
     GlossaryRevision,
@@ -1091,6 +1092,7 @@ def _load_glossary_revisions(
         *glossary_root.rglob("*.md"),
         *glossary_root.rglob("*.json"),
     ]
+    parsed_glossary = []
     for path in sorted(glossary_paths):
         resolved_path = path.resolve()
         try:
@@ -1119,6 +1121,11 @@ def _load_glossary_revisions(
                 )
             )
             continue
+        parsed_glossary.append((path, revision))
+    publication = replace(publication, glossary=glossary_with_created_entries(
+        publication.glossary, [revision for _path, revision in parsed_glossary]
+    ))
+    for path, revision in parsed_glossary:
         try:
             batch = _load_glossary_propagation_batch(publication, root, revision)
         except (HTMLRenderError, ValueError) as exc:
@@ -2431,8 +2438,7 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
       type="button" aria-label="New save location" title="New save location">
       <svg class="alc-tool-icon" viewBox="0 0 24 24" aria-hidden="true"
         focusable="false">
-        <path d="M3 7h6l2 2h10l-2 10H3Z"></path>
-        <path d="M12 12v5M9.5 14.5h5"></path>
+        <path d="M3 17V6a2 2 0 0 1 2-2h4l2 3h7a2 2 0 0 1 2 2v2"></path><path d="M3 17l3-6h16l-3 8H5a2 2 0 0 1-2-2Z"></path>
       </svg>
     </button>
     <div class="alc-settings-control">
@@ -3188,6 +3194,9 @@ def _validate_reader_glossary_revisions(
     selected: list[GlossaryRevision] = []
     selected_chains: list[tuple[GlossaryRevision, ...]] = []
     publication_ids: set[str] = set()
+    publication = replace(publication, glossary=glossary_with_created_entries(
+        publication.glossary, [item for values in groups.values() for item in values]
+    ))
     for entry in publication.glossary:
         entry_id = entry.get("entry_id")
         if (

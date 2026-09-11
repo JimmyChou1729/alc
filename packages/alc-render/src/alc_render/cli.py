@@ -35,7 +35,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
-        if args.command == "compose":
+        if args.command == "tts":
+            from .tts_cli import run_tts
+            result = run_tts(args)
+        elif args.command == "compose":
             result = _compose(args)
         elif args.command == "render":
             result = _render(args)
@@ -53,6 +56,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         OSError,
         UnicodeError,
         ValueError,
+        RuntimeError,
     ) as exc:
         parser.error(str(exc))
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
@@ -133,6 +137,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     standalone.add_argument("input", type=Path)
     standalone.add_argument("output", type=Path)
+    from .tts_cli import add_tts_parser
+    add_tts_parser(subparsers)
     return parser
 
 

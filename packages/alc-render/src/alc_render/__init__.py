@@ -1,6 +1,6 @@
 """Atomic overlays and standalone publication rendering for ALC."""
 
-__version__ = "2.1.1"
+__version__ = "2.1.2"
 
 from .quality import publication_translation_quality
 

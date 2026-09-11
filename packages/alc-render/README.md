@@ -321,6 +321,13 @@ Single HTML mirrors the same panel grid, and Markdown packages include each
 available panel as its own digest-addressed resource.
 
 Translation, guide, companion, note, and glossary content can be edited inline.
+Glossary rows expose speech, edit, delete, and add controls. New entries and
+deletion tombstones use immutable glossary revisions, preserved in HTML exports
+and saved directories. Deleting a term removes its glossary row and term
+highlights without changing source or translation text. An empty glossary keeps
+an add control available. Existing entries keep their stored order; the plus control
+inserts a new term directly after that row. Its versioned insertion anchor keeps
+the position across directory loading and HTML export.
 Original source blocks use the same inline editor through their edit control or
 configured click gesture; the inline Advanced button opens detailed editing.
 Source corrections and additions use versioned `source` fragments; the frozen
@@ -333,9 +340,12 @@ and leaves the translated figure unchanged. In side-by-side layout, deleting eit
 language preserves the other language’s column. Deleted content leaves no visible
 placeholder and can be restored from Deleted content.
 The Deleted content toolbar button, before More settings, appears when deleted
-fragments exist and lists deleted source and supplemental fragments;
+fragments or glossary terms exist and lists deleted source, supplemental content,
+and glossary terms;
 Restore appends a new revision using the last visible content and leaves the panel
-closed. Deleted content is ordered by newest deletion first, then by source position
+closed. Restoring a glossary term retains its saved position. Restored source
+content identical to the original uses the original block layout instead of
+reinterpreting its text as Markdown. Deleted content is ordered by newest deletion first, then by source position
 for older records without a deletion timestamp; ties put source before translation.
 Contents titles follow saved source heading replacements while the source is visible,
 and visible translated headings when the source is hidden. Saving or restoring a
@@ -370,6 +380,12 @@ resource links into plain labels. The Markdown package contains `document.md`,
 a manifest, and only the validated resources referenced by the selected
 content. Local resource links are rewritten to digest-addressed `resources/`
 paths. Formulas, code, tables, footnotes, and external links remain Markdown.
+
+Both Markdown modes normalize portable inline-math boundaries. An adjacent
+ASCII acronym or recognized unit is folded into upright TeX, and recognized operators receive
+visible spacing. Code, display math, link destinations, currency, and escaped
+dollars are left unchanged. Ambiguous boundaries remain verbatim and do not
+prevent the rest of the document from being exported.
 
 Because portable CommonMark has no standard paired-anchor contract for these
 legacy source identities, both Markdown modes export exact `#bib.bibN` and
@@ -446,6 +462,16 @@ columns without a model-generated translation fragment. Source-only publications
 keep a single figure. Internal editorial review summaries are excluded from the
 table of contents; their underlying report resources remain in the publication.
 
+The contents heading has its own Source/Translation title selector. It does not
+change visible document layers; a missing translated heading uses the source title.
+The Show content and speech panels each expose only one Original option, including
+source-role overlays. Show content also has a Glossary toggle for the glossary
+section and its contents entry; it leaves inline term annotations and saved
+glossary entries intact. A separate Companion references toggle controls the
+Companion bibliography appendix and its contents entry. This appendix is distinct
+from any References section preserved inside the source document. An explicit
+internal link to a hidden appendix reveals it and synchronizes its toggle.
+
 The table of contents follows deletion and restoration of its original source
 heading anchor, independent of the translation's visibility. Closing the quality
 summary persists dismissal per source document in browser storage, including
@@ -461,3 +487,10 @@ inside prose are preserved. The manifest still records both selected revisions.
 
 The deleted-content dialog keeps its heading and close action outside the scrolling
 list. The list uses the same thin, hover/focus scrollbar treatment as other panels.
+
+## Optional local speech
+
+`alc-render tts` installs and manages optional local Kokoro speech and opens
+standalone Readers with a local audio connection. System speech remains the
+default. See [Local TTS](LOCAL_TTS.md) for consent, installation, playback and
+portability details.

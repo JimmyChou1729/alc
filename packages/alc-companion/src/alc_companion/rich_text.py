@@ -61,32 +61,40 @@ def validate_rich_markdown(
 
 
 def canonicalize_display_math(value: str) -> str:
-    """Put unambiguous whole-line ``$$...$$`` math into canonical blocks."""
+    """Isolate paired display delimiters without rewriting formula content."""
 
     if not isinstance(value, str):
         raise RichTextError("learning-unit markdown must be a string")
-    lines = value.split("\n")
-    code_lines = _code_line_numbers(value)
+    visible = _visible_markdown(value)
+    positions = _double_dollar_positions(visible)
+    if len(positions) % 2:
+        raise RichTextError("display-math $$ delimiters are unbalanced")
+    for index, position in enumerate(positions):
+        if (
+            position > 0
+            and visible[position - 1] == "$"
+            and not _is_escaped(visible, position - 1)
+        ) or visible[position + 2 : position + 3] == "$":
+            raise RichTextError("display-math $$ delimiters are ambiguous")
+        if index % 2 and not value[positions[index - 1] + 2 : position].strip():
+            raise RichTextError("display-math body must not be empty")
+
     output: list[str] = []
-    for line_number, line in enumerate(lines):
-        if line_number in code_lines:
+    for line, visible_line in zip(value.split("\n"), visible.split("\n")):
+        delimiters = _double_dollar_positions(visible_line)
+        if not delimiters or visible_line.strip() == "$$":
             output.append(line)
             continue
-        visible = _outside_code_spans(line)
-        positions = _double_dollar_positions(visible)
-        stripped = line.strip()
-        if (
-            len(positions) == 2
-            and stripped.startswith("$$")
-            and stripped.endswith("$$")
-            and not stripped[2:-2].strip().startswith("$$")
-        ):
-            body = stripped[2:-2].strip()
-            if body and "$$" not in _outside_code_spans(body):
-                indent = line[: len(line) - len(line.lstrip())]
-                output.extend((indent + "$$", indent + body, indent + "$$"))
-                continue
-        output.append(line)
+        indent = line[: len(line) - len(line.lstrip())]
+        start = 0
+        for position in delimiters:
+            segment = line[start:position]
+            if segment.strip():
+                output.append((indent if start else "") + segment)
+            output.append(indent + "$$")
+            start = position + 2
+        if line[start:].strip():
+            output.append(indent + line[start:])
     normalized = "\n".join(output)
     _validate_display_math(normalized)
     return normalized
@@ -99,12 +107,8 @@ def _parser() -> MarkdownIt:
 
 
 def _validate_display_math(value: str) -> None:
-    code_lines = _code_line_numbers(value)
     display_open = False
-    for line_number, line in enumerate(value.split("\n")):
-        if line_number in code_lines:
-            continue
-        visible = _outside_code_spans(line)
+    for visible in _visible_markdown(value).split("\n"):
         positions = _double_dollar_positions(visible)
         if not positions:
             continue
@@ -126,11 +130,20 @@ def _code_line_numbers(value: str) -> set[int]:
     return lines
 
 
+def _visible_markdown(value: str) -> str:
+    code_lines = _code_line_numbers(value)
+    visible = "\n".join(
+        " " * len(line) if number in code_lines else line
+        for number, line in enumerate(value.split("\n"))
+    )
+    return _outside_code_spans(visible)
+
+
 def _outside_code_spans(line: str) -> str:
     output = list(line)
     position = 0
     while position < len(line):
-        if line[position] != "`":
+        if line[position] != "`" or _is_escaped(line, position):
             position += 1
             continue
         run_end = position
@@ -153,7 +166,9 @@ def _outside_code_spans(line: str) -> str:
         if closing < 0:
             position = run_end
             continue
-        output[position:closing] = " " * (closing - position)
+        output[position:closing] = [
+            "\n" if char == "\n" else " " for char in line[position:closing]
+        ]
         position = closing
     return "".join(output)
 
@@ -165,15 +180,21 @@ def _double_dollar_positions(value: str) -> tuple[int, ...]:
         if value[index : index + 2] != "$$":
             index += 1
             continue
-        slashes = 0
-        cursor = index - 1
-        while cursor >= 0 and value[cursor] == "\\":
-            slashes += 1
-            cursor -= 1
-        if slashes % 2 == 0:
-            positions.append(index)
+        if _is_escaped(value, index):
+            index += 1
+            continue
+        positions.append(index)
         index += 2
     return tuple(positions)
+
+
+def _is_escaped(value: str, position: int) -> bool:
+    slashes = 0
+    cursor = position - 1
+    while cursor >= 0 and value[cursor] == "\\":
+        slashes += 1
+        cursor -= 1
+    return slashes % 2 == 1
 
 
 def _citation(state: StateInline, silent: bool) -> bool:

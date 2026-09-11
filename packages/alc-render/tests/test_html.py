@@ -3800,7 +3800,9 @@ def test_delivery_quality_uses_selected_revisions_and_rejects_tampering(tmp_path
         initial,
         revision=2,
         parent_semantic_digest=initial.semantic_digest,
-        provenance={"producer": "alc-translate"},
+        provenance={**initial.provenance, "translation_quality_resolved": {
+            "by": "publication_review", "review_id": "retranslate",
+        }},
         markdown_body="已修复的翻译",
     )
     updated_path = write_fragment_revision(tmp_path, updated)
@@ -3811,3 +3813,26 @@ def test_delivery_quality_uses_selected_revisions_and_rejects_tampering(tmp_path
     path.write_text("corrupt")
     with pytest.raises(ValueError):
         publication_translation_quality(tmp_path / "publication.json")
+
+
+def test_created_glossary_directory_round_trip_retains_deletion(tmp_path):
+    publication_path, _publication, _ = _workspace(tmp_path)
+    entry = {'entry_id': 'term-manifold', 'term': 'Manifold',
+             'translated_term': '流形', 'definition': 'A smooth space.'}
+    created = GlossaryRevision(
+        entry_id=entry['entry_id'], revision=2,
+        parent_semantic_digest=glossary_base_semantic_digest(entry), entry=entry,
+        provenance={'created_base': entry, 'deleted': False},
+    )
+    deleted = replace(created, revision=3, parent_semantic_digest=created.semantic_digest,
+                      provenance={'deleted': True})
+    write_glossary_revision(tmp_path, created)
+    write_glossary_revision(tmp_path, deleted)
+    output = tmp_path / 'created-reader.html'
+    result = render_publication_html(publication_path, output)
+    assert deleted.semantic_digest in result.selected_glossary_revision_digests
+    payload = _payload(output.read_text())
+    history = [r for r in payload['glossary_revisions'] if r['entry_id'] == entry['entry_id']]
+    assert len(history) == 2
+    assert history[-1]['provenance']['deleted'] is True
+    validate_standalone_html(_publication, output)

@@ -79,6 +79,7 @@ from .atoms import (
     assemble_text_slot_translation,
     protected_atom_ids,
     protected_atom_part_groups,
+    protected_atom_plan,
     protected_atom_subplan,
     protected_result_document,
     source_protected_parts,
@@ -124,6 +125,7 @@ from .source import (
     source_note_blocks,
     source_note_link_markdown,
     validate_translation_text,
+    validate_caption_translation,
 )
 
 REVIEW_SUPERVISION_SCHEMA = "alc.translate.review_supervision.v1"
@@ -3948,6 +3950,7 @@ def _validate_model_protected_atom_window(
                 block, translated["parts"]
             )
             validate_translation_text(text, block)
+            validate_caption_translation(text, block)
         except ProtectedAtomError as exc:
             raise TranslationWorkflowError(exc.code, str(exc), exc.details) from exc
         except TranslationSourceError as exc:
@@ -4006,6 +4009,7 @@ def _validate_text_slot_window(
                 block, translated["text_slots"]
             )
             validate_translation_text(text, block)
+            validate_caption_translation(text, block)
         except ProtectedAtomError as exc:
             raise TranslationWorkflowError(exc.code, str(exc), exc.details) from exc
         except TranslationSourceError as exc:
@@ -4128,9 +4132,15 @@ def _protected_translation_retry_request(
     user_intent: str = "",
 ) -> LLMRequest:
     invalid = _invalid_protected_candidate_blocks(candidate, blocks) or tuple(blocks)
-    if (error.code == "translation_coverage_invalid"
+    if (
+        error.code == "translation_coverage_invalid"
         and candidate.get("schema_version") == TEXT_SLOT_RESULT_SCHEMA
-        and any("$" in block_text(block) for block in invalid)):
+        and any(
+            atom["kind"] == "formula"
+            for block in invalid
+            for atom in protected_atom_plan(block)["atoms"]
+        )
+    ):
         payload = {
             "target_language": target_language,
             "glossary": list(glossary),
@@ -4174,6 +4184,23 @@ def _protected_translation_retry_request(
         request.session,
         request.inputs,
     )
+    if error.code == "translation_atom_missing":
+        # Return to the immutable source slots instead of asking the model to
+        # guess where the missing formula placeholders belong.
+        prefix, payload = scoped.prompt.split("\n\nInput JSON:\n", 1)
+        scoped = LLMRequest(
+            _task_id("translation-atom-slot-repair", {"parent": scoped.task_id, "contract": "v1"}),
+            prefix
+            + "\n\nThe previous paragraph repair omitted protected formulas. "
+            "This final repair uses the original source text slots; the caller restores "
+            "every formula at its original boundary. Translate each supplied text slot "
+            "independently and completely, keeping its exact slot ID. Do not move a "
+            "clause into an adjacent slot or leave a meaningful source slot empty, even "
+            "if neighboring slots read as one sentence. Do not output formula payloads "
+            "or a parts array. Return only the requested text-slot result."
+            + "\n\nInput JSON:\n" + payload,
+            scoped.output, scoped.model, scoped.session, scoped.inputs,
+        )
     return _semantic_retry_request(scoped, error)
 
 
