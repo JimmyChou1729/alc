@@ -388,9 +388,16 @@ def _raise_invalid_reference() -> dict[str, str]:
 def _validate_reference_source(source: str) -> str:
     candidates = re.findall(r"https?://[^\s<>()\]]+", source)
     if not candidates:
-        candidates = [source if "://" in source else f"//{source}"]
+        # A reference source may be a book title or a prose description.
+        candidates = re.findall(r"(?:[\w-]+\.)+wikipedia\.org(?:/[^\s<>()\]]*)?", source, re.I)
+        candidates = [f"//{candidate}" for candidate in candidates]
     for candidate in candidates:
-        hostname = (urlparse(candidate.rstrip(".,;")).hostname or "").casefold()
+        try:
+            hostname = (urlparse(candidate.rstrip(".,;。；")).hostname or "").casefold()
+        except ValueError as exc:
+            raise CompanionContentError(
+                "chapter_reference_invalid", "reference contains a malformed URL"
+            ) from exc
         if (
             hostname.endswith(".wikipedia.org")
             and hostname != "en.wikipedia.org"

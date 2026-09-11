@@ -2706,3 +2706,52 @@ def test_late_provider_failure_keeps_bilingual_partial_reader(tmp_path, monkeypa
     assert 'data-alc-source-only="true"' not in html
     assert 'alc-translate' in html
     assert service.progress(result.run_id)['partial_reader_available']
+
+
+def test_guide_batches_count_command_metadata_not_only_evidence(tmp_path, monkeypatch):
+    import alc_companion.build as build
+    original = build._chapter_source_commands
+
+    def expanded(*args, **kwargs):
+        result = original(*args, **kwargs)
+        result['metadata'] = 'x' * (230_000 * len(args[1].block_ids))
+        return result
+
+    monkeypatch.setattr(build, '_chapter_source_commands', expanded)
+    monkeypatch.setattr(CompanionBuildHandler, '_cross_chapter_editorial_review',
+                        lambda self, context, chapters, accepted, **kw: (accepted, None))
+    document = _document(tmp_path)
+    service = CompanionService(tmp_path / 'jobs')
+    result = service.build(CompanionBuildRequest(document, target_language='zh-CN'),
+        execution=CompanionExecutionOptions(document_cache_root=tmp_path / 'paper'),
+        task_service=FakeGuideTasks(reviewer_stop_round=1, with_reference=True),
+        translation_adapter=FakeTranslationAdapter(mode='enabled'))
+    assert result.status is RunStatus.SUCCEEDED, result.error
+
+
+def test_failed_postprocessing_recovery_can_repartition_old_batch(tmp_path, monkeypatch):
+    import alc_companion.build as build
+    from alc_companion.chapter_evidence import ChapterEvidenceError
+    validate = build.validate_chapter_guide
+    monkeypatch.setattr(build, 'validate_chapter_guide',
+                        lambda *a, **kw: (_ for _ in ()).throw(ValueError('old reference validation')))
+    monkeypatch.setattr(CompanionBuildHandler, '_cross_chapter_editorial_review',
+                        lambda self, context, chapters, accepted, **kw: (accepted, None))
+    service = CompanionService(tmp_path / 'jobs')
+    options = CompanionExecutionOptions(document_cache_root=tmp_path / 'paper')
+    tasks = FakeGuideTasks(reviewer_stop_round=1, with_reference=True)
+    adapter = FakeTranslationAdapter(mode='enabled')
+    failed = service.build(CompanionBuildRequest(_document(tmp_path), target_language='zh-CN'),
+        execution=options, task_service=tasks, translation_adapter=adapter)
+    assert failed.status is RunStatus.FAILED
+    monkeypatch.setattr(build, 'validate_chapter_guide', validate)
+    original = CompanionBuildHandler._chapter_model_context
+    def smaller(self, context, source, chapter, **kwargs):
+        if len(chapter.block_ids) > 1:
+            raise ChapterEvidenceError('chapter_evidence_too_large', chapter.chapter_id, 'context')
+        return original(self, context, source, chapter, **kwargs)
+    monkeypatch.setattr(CompanionBuildHandler, '_chapter_model_context', smaller)
+    calls = list(adapter.calls)
+    resumed = service.resume(failed.run_id, execution=options, task_service=tasks, translation_adapter=adapter)
+    assert resumed.status is RunStatus.SUCCEEDED, resumed.error
+    assert [c for c in adapter.calls if c.endswith("/translation")] == [c for c in calls if c.endswith("/translation")]

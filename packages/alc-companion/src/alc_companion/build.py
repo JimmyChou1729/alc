@@ -153,7 +153,7 @@ from .request_contracts import (
 )
 from .rich_text import RichTextError
 from .source_identity import resolve_document_identity
-from .guide_batches import split_guide_chapter, batch_translation_index, merge_guide_batches
+from .guide_batches import split_guide_chapter, batch_translation_index, merge_guide_batches, normalize_batch_numbers
 from .source_planning import (
     SourceChapter,
     block_prompt_document,
@@ -1592,7 +1592,10 @@ class CompanionBuildHandler:
             if chapter.chapter_id != owner_id:
                 guide_context["processing_scope"] = (
                     "This is one contiguous batch of a larger chapter. Write only "
-                    "about the supplied parts; do not claim coverage of the full chapter."
+                    "about the supplied parts; do not claim coverage of the full chapter. "
+                    "Use only batch-local chapter.parts.part_number and section_number "
+                    "for output anchors and checked numbers. Numbers printed in source "
+                    "text or frozen translation headings are not batch-local anchors."
                 )
             guide_contexts[chapter.chapter_id] = guide_context
             guide_loops.append(
@@ -1646,6 +1649,15 @@ class CompanionBuildHandler:
                 )
             )
 
+        if existing_guide_batch is not None and context.recovery_epoch:
+            prior_ids = {loop.loop_id for loop in decode_batch_result(read_json(
+                context, existing_guide_batch, "prior guide topology"
+            )).loops}
+            if not {loop.loop_id for loop in guide_loops}.issubset(prior_ids):
+                # A corrected size budget can change the leaves on recovery.
+                # Old results cannot satisfy newly partitioned worker requests.
+                existing_guide_batch = None
+                replay_guide_batch = False
         guide_interruption = None
         guide_errors = []
         if guide_loops:
@@ -1738,6 +1750,8 @@ class CompanionBuildHandler:
                             proposal_value,
                             f"final guide proposal for {chapter_id}",
                         )
+                    parent = by_chapter[guide_owners[chapter_id]]
+                    proposal = normalize_batch_numbers(proposal, chapter, parent)
                     program_candidate = self._augment_chapter_candidate(
                         chapter, proposal
                     )
@@ -1781,7 +1795,7 @@ class CompanionBuildHandler:
                             candidate_id
                         )
                         candidate = self._augment_chapter_candidate(
-                            chapter, stored_candidate
+                            chapter, normalize_batch_numbers(stored_candidate, chapter, parent)
                         )
                         if candidate != stored_candidate:
                             candidate_path = (
@@ -1792,7 +1806,7 @@ class CompanionBuildHandler:
                     try:
                         if delivery_issue is None and self.recipe.review_rounds != 0:
                             validate_chapter_guide_review_audit(
-                                loop_result.final_review,
+                                normalize_batch_numbers(loop_result.final_review, chapter, parent, review=True),
                                 proposal=candidate,
                                 part_count=len(chapter.block_ids),
                                 section_count=len(chapter.section_block_ids),
@@ -2138,7 +2152,7 @@ class CompanionBuildHandler:
                 and (source_commands.get("availability") != "fallback_only"
                      or self.llm_options.profile is LLMExecutionProfile.LOCAL_APP)):
             evidence = preload_chapter(context, self._source_host_broker, chapter.chapter_id, source_commands)
-        return {
+        result = {
             **({"verified_chapter_evidence": evidence} if evidence is not None else {}),
             "target_language": self.request.target_language,
             "language_result": dict(language_identity),
@@ -2151,6 +2165,11 @@ class CompanionBuildHandler:
             "source_commands": source_commands,
             "glossary": list(glossary),
         }
+        # Commands and indexes can outweigh the evidence itself. Leave room
+        # for worker instructions, attached inputs and subsequent review rounds.
+        if len(canonical_json_bytes(result)) > 400_000:
+            raise ChapterEvidenceError("chapter_evidence_too_large", chapter.chapter_id, "complete context")
+        return result
 
     def _publish_completed_chapters(
         self,

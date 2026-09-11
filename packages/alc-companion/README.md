@@ -333,7 +333,9 @@ input path. Local application jobs require complete verifiable evidence. If a co
 truncated or unavailable, registered smaller part ranges are read to establish
 complete original and translation coverage. Evidence includes source bindings,
 content digests and compact location descriptors, with a 256,000-byte serialized
-budget per guide batch; command descriptors remain in the surrounding context.
+budget per guide batch. The complete serialized chapter context, including
+command descriptors, indexes and glossary, is also bounded to 400,000 bytes
+before creating guide workers, leaving room for instructions and review output.
 Oversized chapters are automatically partitioned at balanced section or block
 boundaries until each batch fits. This changes only guide processing: source
 chapter IDs, the outline, and completed translations remain intact. Each batch
@@ -415,3 +417,14 @@ Provider failures during chapter or editorial work remain resumable failures.
 They refresh the bilingual partial Reader from durable translations and accepted
 guides instead of publishing a successful source-only replacement. Source-only
 terminal delivery is limited to earlier preparation stages without chapter work.
+
+Reference sources may be natural-language descriptions or URLs. Prose titles are
+not parsed as URL authorities; explicit URLs retain host and syntax validation.
+
+Guide batches accept out-of-range parent chapter anchor numbers only when exact
+source block identity maps them into that batch. Already valid local numbers
+are unchanged and unknown numbers still fail validation. Confirmed parent
+source citations accompanying such anchors become source links; bibliography
+positions remain references. Reviewer coverage is mapped, never expanded.
+When no bibliography is supplied, numeric citations resolving to a batch source
+part become source links as well; unresolved numbers remain validation errors.
