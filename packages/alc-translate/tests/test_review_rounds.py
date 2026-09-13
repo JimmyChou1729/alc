@@ -70,11 +70,11 @@ def test_review_round_limit_and_early_exit(tmp_path, rounds, change, expected):
     workflow = TranslationWorkflowService(tasks)
     result = workflow.translate_blocks(context, source, review_rounds=rounds, **options)
     assert isinstance(result, TranslationResult)
-    assert len(tasks.reviews) == expected
-    assert len(set(tasks.reviews)) == expected
+    assert len(tasks.reviews) == expected * 2
+    assert len(set(tasks.reviews)) == expected * 2
     again = workflow.translate_blocks(context, source, review_rounds=rounds, **options)
     assert again == result
-    assert len(tasks.reviews) == expected
+    assert len(tasks.reviews) == expected * 2
     assert context.artifacts.find("translation/windows/0000/fallback") is None
 
 

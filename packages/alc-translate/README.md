@@ -364,3 +364,27 @@ Successful neighboring blocks and immutable formula/link identities are retained
 Glossary recovery removes ANSI styling and a NUL immediately before a TeX command.
 Other unknown control characters remain validation failures; recovery never removes
 formula commands or bypasses the normal glossary validator.
+
+Provider timeouts, transport failures, or exhausted crash retries during a
+translation window trigger at most one split into two smaller windows. Successful
+child results are retained; unresolved blocks use the existing source fallback.
+Authentication, user pause, and cancellation retain their existing stop behavior.
+Quota and rate-limit failures do not trigger extra split requests.
+
+Translation acceptance also detects catastrophic prose loss: a substantial
+paragraph reduced to a very short fragment is retried locally. If repair still
+fails, that paragraph keeps its source text and a fallback record while other
+translations remain usable. This conservative check does not establish semantic
+translation completeness or reject ordinary wording compression.
+
+After paragraph retries fail, multi-slot paragraphs can be translated again in
+small groups of at most three fixed text slots. The caller reinserts formulas
+and links; it does not guess how to realign a shifted candidate. Each failed
+paragraph has an eight-group limit. Unresolved slots retain their original text,
+with exact `partial_source_text_slot_ids` in diagnostics and fragment provenance;
+this does not claim that the whole paragraph is untranslated. Accepted sibling
+blocks and saved group results are reused on recovery.
+
+Glossary retries retain valid entries from earlier attempts and use merged-candidate errors for recovery. Literal control escapes are rejected as damaged text. Slot-group translation recovery covers the full paragraph in at most eight groups, adapting group size instead of leaving slots beyond a fixed cutoff untranslated.
+
+Translation review subwindows contain at most eight units in addition to the input byte limit. After bounded retries, a valid text-slot review envelope is salvaged per block: valid patches and unchanged reviewed blocks are retained, while only invalid patches keep the pre-review draft and receive an incomplete-review diagnostic. Unknown patch IDs or malformed envelopes remain whole-subwindow fallbacks.

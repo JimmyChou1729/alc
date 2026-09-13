@@ -2354,7 +2354,7 @@ def test_provider_timeout_preserves_completed_windows_and_falls_back_remaining(
         item.provenance.get("translation_fallback", {}).get("kind") == "source_text"
         for item in revisions
     )
-    assert tasks.translation_calls == 3
+    assert tasks.translation_calls == 7  # Two bounded child attempts per failed window.
     fallback_events = [
         event
         for event in context.events.read_all()
@@ -2444,7 +2444,7 @@ def test_nonconsecutive_provider_failures_do_not_skip_later_windows(
         for event in context.events.read_all()
         if event["event"] == "translation_provider_fallback"
     ]
-    assert len(provider_events) == 2
+    assert len(provider_events) == 1
     assert all(
         item["global_fallback_triggered"] is False
         and item["remaining_windows_skipped"] == 0
@@ -5003,3 +5003,177 @@ def test_caption_integrity_repairs_or_preserves_source_without_stopping(tmp_path
     assert 'FIGURE 6.8' in caption.markdown_body
     assert bool(caption.provenance.get('translation_fallback')) is (not repair_succeeds)
     assert any('translated:Healthy neighbor.' in r.markdown_body for r in revisions)
+
+
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+def test_paragraph_loss_repairs_only_bad_block_or_preserves_source(tmp_path, repair_succeeds):
+    from dataclasses import replace
+    abstract = " ".join(["We study interactions between physical systems and derive their observable behavior."] * 25)
+    path = tmp_path / "abstract.md"
+    path.write_text("# Paper\n\n" + abstract + "\n\nHealthy neighbor.\n")
+    paper = AcDocumentService(cache_root=tmp_path / "cache")
+    source = TranslationSource(RichDocumentParserService(paper.repository).parse_source(paper.import_source(path)))
+    abstract_id = next(b["block_id"] for b in source_blocks(source) if b["payload"].get("text") == abstract)
+    class AbstractTasks(FakeTasks):
+        attempts = 0
+        def execute_or_resume(self, context, request, **kwargs):
+            result = super().execute_or_resume(context, request, **kwargs)
+            translations = result.value.get("translations", [])
+            if not isinstance(translations, list):
+                return result
+            for item in translations:
+                if item["block_id"] != abstract_id:
+                    continue
+                self.attempts += 1
+                if self.attempts == 1 or not repair_succeeds:
+                    item["parts"] = [{"kind": "text", "text": "物理系统研究"}]
+            return replace(result, value={**result.value, "translations": translations})
+    tasks = AbstractTasks()
+    context = _context(tmp_path, "abstract-integrity")
+    result = TranslationWorkflowService(tasks).translate_blocks(context, source,
+        language=LanguageResult(source.document_digest, source.source_digest, "en", "known", 1, "zh-CN", "enabled"),
+        glossary=GlossaryResult(source.document_digest, source.source_digest, "zh-CN", 1, "e"*64, ()),
+        target_language="zh-CN", review_rounds=0)
+    assert isinstance(result, TranslationResult)
+    assert tasks.attempts == 2
+    revisions = [decode_fragment_revision(context.artifacts.read_bytes(item.artifact).decode(), filename=Path(item.revision.path).name) for item in result.revision_artifacts]
+    revision = next(r for r in revisions if r.anchor.target_id == abstract_id)
+    assert "derive their observable behavior" in revision.markdown_body
+    assert bool(revision.provenance.get("translation_fallback")) is (not repair_succeeds)
+    assert any("translated:Healthy neighbor." in r.markdown_body for r in revisions)
+
+
+@pytest.mark.parametrize("target", ["自然语言译文内容" * 15, "شرح النص الكامل " * 30, "A faithful translated explanation " * 30])
+def test_prose_completeness_allows_multilingual_normal_compression(target):
+    from alc_translate.workflow import validate_prose_completeness
+    block = {"block_id": "b", "kind": "paragraph", "payload": {"text": "A source sentence describes the complete result. " * 30}}
+    validate_prose_completeness(target, block)
+
+
+def test_prose_completeness_does_not_apply_to_short_text_or_heading():
+    from alc_translate.workflow import validate_prose_completeness
+    validate_prose_completeness("标题", {"block_id": "b", "kind": "heading", "payload": {"text": "Long heading " * 100}})
+    validate_prose_completeness("简述", {"block_id": "b", "kind": "paragraph", "payload": {"text": "Short description."}})
+
+
+
+def test_preexisting_short_accepted_window_replays_without_new_quality_gate(tmp_path, monkeypatch):
+    from dataclasses import replace
+    import alc_translate.workflow as workflow
+    original_guard = workflow.validate_prose_completeness
+    monkeypatch.setattr(workflow, "validate_prose_completeness", lambda *args: None)
+    abstract = "Complete source paragraph with several meaningful details. " * 30
+    path = tmp_path / "legacy.md"
+    path.write_text("# Paper\n\n" + abstract + "\n")
+    paper = AcDocumentService(cache_root=tmp_path / "cache")
+    source = TranslationSource(RichDocumentParserService(paper.repository).parse_source(paper.import_source(path)))
+    class LegacyTasks(FakeTasks):
+        attempt_count = 0
+        def execute_or_resume(self, context, request, **kwargs):
+            self.attempt_count += 1
+            result = super().execute_or_resume(context, request, **kwargs)
+            translations = result.value.get("translations", [])
+            if isinstance(translations, list):
+                for item in translations:
+                    item["parts"] = [{"kind": "text", "text": "简短旧译文"}]
+                return replace(result, value={**result.value, "translations": translations})
+            return result
+    tasks = LegacyTasks()
+    context = _context(tmp_path, "legacy-short")
+    service = TranslationWorkflowService(tasks)
+    kwargs = dict(language=LanguageResult(source.document_digest, source.source_digest, "en", "known", 1, "zh-CN", "enabled"),
+        glossary=GlossaryResult(source.document_digest, source.source_digest, "zh-CN", 1, "e"*64, ()),
+        target_language="zh-CN", review_rounds=0)
+    first = service.translate_blocks(context, source, **kwargs)
+    assert isinstance(first, TranslationResult)
+    calls = tasks.attempt_count
+    monkeypatch.setattr(workflow, "validate_prose_completeness", original_guard)
+    replayed = service.translate_blocks(context, source, **kwargs)
+    assert isinstance(replayed, TranslationResult)
+    assert tasks.attempt_count == calls
+    assert replayed == first
+
+
+
+def test_structured_source_math_is_not_counted_as_missing_prose():
+    from alc_translate.workflow import validate_prose_completeness
+    tex = " + ".join([r"\alpha"] * 105)
+    block = {"block_id": "b", "kind": "paragraph", "payload": {
+        "text": "The expression " + tex + " follows.", "inline_spans": [
+            {"kind": "text", "text": "The expression "},
+            {"kind": "math", "tex": tex, "text": tex},
+            {"kind": "text", "text": " follows."}]}}
+    validate_prose_completeness("表达式为 $" + tex + "$。", block)
+
+
+def test_small_group_recovery_publishes_partial_slot_provenance(tmp_path):
+    from dataclasses import replace
+    paragraph = " ".join(f"Source clause {i} before $x_{i}$ after." for i in range(8))
+    path = tmp_path / "groups.md"
+    path.write_text("# Paper\n\n" + paragraph + "\n\nHealthy neighbor.\n")
+    paper = AcDocumentService(cache_root=tmp_path / "cache")
+    source = TranslationSource(RichDocumentParserService(paper.repository).parse_source(paper.import_source(path)))
+    target = next(b["block_id"] for b in source_blocks(source) if "Source clause" in b["payload"].get("text", ""))
+    class GroupTasks(FakeTasks):
+        groups = 0
+        def execute_or_resume(self, context, request, **kwargs):
+            if "Contract: alc.translate.text_slot_group.v2" in request.prompt:
+                self.groups += 1
+                payload = json.loads(request.prompt.split("Input JSON:\n")[1])
+                values = {key: "译文 " + value for key, value in payload["text_slots"].items()}
+                if self.groups == 2:
+                    values = {key: "" for key in values}
+                return LLMCompleted({"text_slots": values}, "fake", "fake", None, None)
+            result = super().execute_or_resume(context, request, **kwargs)
+            translations = result.value.get("translations", [])
+            if isinstance(translations, list):
+                for item in translations:
+                    if item["block_id"] == target:
+                        item["parts"] = [{"kind": "text", "text": "Broken whole paragraph."}]
+                return replace(result, value={**result.value, "translations": translations})
+            return result
+    tasks = GroupTasks()
+    context = _context(tmp_path, "group-final")
+    result = TranslationWorkflowService(tasks).translate_blocks(context, source,
+        language=LanguageResult(source.document_digest, source.source_digest, "en", "known", 1, "zh-CN", "enabled"),
+        glossary=GlossaryResult(source.document_digest, source.source_digest, "zh-CN", 1, "e"*64, ()),
+        target_language="zh-CN", review_rounds=0)
+    assert isinstance(result, TranslationResult)
+    revisions = [decode_fragment_revision(context.artifacts.read_bytes(item.artifact).decode(), filename=Path(item.revision.path).name) for item in result.revision_artifacts]
+    revision = next(r for r in revisions if r.anchor.target_id == target)
+    assert len(revision.provenance["partial_source_text_slot_ids"]) == 3
+    assert "translation_fallback" not in revision.provenance
+    assert "译文 " in revision.markdown_body and "$x_7$" in revision.markdown_body
+    assert any("translated:Healthy neighbor." in r.markdown_body for r in revisions)
+
+
+def test_split_unit_partial_slots_reach_original_fragment(tmp_path):
+    import alc_translate.workflow as workflow
+    paragraph = " ".join(f"This is a complete source clause numbered {i} with $x_{i}$ details." for i in range(100))
+    path = tmp_path / "split-slots.md"
+    path.write_text("# Paper\n\n" + paragraph + "\n")
+    paper = AcDocumentService(cache_root=tmp_path / "cache")
+    source = TranslationSource(RichDocumentParserService(paper.repository).parse_source(paper.import_source(path)))
+    originals = source_blocks(source)
+    target = next(b for b in originals if b["kind"] == "paragraph")
+    language = LanguageResult(source.document_digest, source.source_digest, "en", "known", 1, "zh-CN", "enabled")
+    model_units, plans = workflow._bounded_model_translation_units(originals, glossary=[], target_language="zh-CN", language=language, budget_bytes=8000)
+    plan = next(p for p in plans if p.block_id == target["block_id"])
+    split_ids = [uid for group in plan.unit_groups for uid in group]
+    assert len(split_ids) > 1
+    context = _context(tmp_path, "split-slot-publication")
+    slot_ids = []
+    for uid in split_ids[:2]:
+        unit = next(u for u in model_units if u["block_id"] == uid)
+        slot = next(iter(workflow._text_slot_source_values(unit)))
+        slot_ids.append(slot)
+        context.artifacts.publish_json(workflow._slot_recovery_artifact_id(uid), {
+            "schema_version": "alc.translate.text_slot_recovery.v1", "block_id": uid,
+            "partial_source_text_slot_ids": [slot], "group_limit": 8, "last_error": "translation_coverage_invalid"})
+    result = workflow._publish_translation_result(context, source,
+        translations=[{"block_id": b["block_id"], "text": workflow._identity_preserving_source_text(b)} for b in originals],
+        units=originals, source_language="en", target_language="zh-CN", artifact_prefix="split-final", coverage="document", unit_plans=plans)
+    revisions = [decode_fragment_revision(context.artifacts.read_bytes(item.artifact).decode(), filename=Path(item.revision.path).name) for item in result.revision_artifacts]
+    original_revision = next(r for r in revisions if r.anchor.target_id == target["block_id"])
+    assert list(original_revision.provenance["partial_source_text_slot_ids"]) == slot_ids
+    assert "translation_fallback" not in original_revision.provenance

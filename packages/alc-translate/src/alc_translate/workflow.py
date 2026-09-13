@@ -84,6 +84,7 @@ from .atoms import (
     protected_result_document,
     source_protected_parts,
     text_slot_prompt_block,
+    _text_slot_source_values,
     text_slot_values_from_parts,
 )
 from .contracts import (
@@ -125,6 +126,7 @@ from .source import (
     source_note_blocks,
     source_note_link_markdown,
     validate_translation_text,
+    _without_markdown_math,
     validate_caption_translation,
 )
 
@@ -773,6 +775,9 @@ class TranslationWorkflowService:
                     resume_input=resume_input,
                     options=execution,
                     stopped_message="glossary generation stopped",
+                    retry_candidate_merger=lambda first, second, terms=window: _merge_glossary_candidates(first, second, terms),
+                    # Partial retry coverage is resolved by merging before validation.
+                    retry_diagnostic_validator=lambda value: value,
                 )
                 if isinstance(generated, (Paused, RunError)):
                     return generated
@@ -976,6 +981,8 @@ class TranslationWorkflowService:
                     "translation_progress",
                     {
                         "phase": "translation",
+                        "artifact_prefix": artifact_prefix,
+                        "recovery_epoch": context.recovery_epoch,
                         "completed_units": completed_units,
                         "total_units": len(model_units),
                         "unit": "translation units",
@@ -1124,6 +1131,8 @@ class TranslationWorkflowService:
                             )
                         )
                     ),
+                    retry_diagnostic_validator=lambda value, window=window: _validated_protected_draft_document(
+                        value, _candidate_diagnostic_blocks(value, window)),
                     retry_candidate_merger=(
                         lambda first, second, window=window: (
                             _merge_protected_translation_candidates(
@@ -1132,6 +1141,52 @@ class TranslationWorkflowService:
                         )
                     ),
                 )
+                if (
+                    isinstance(generated, (Paused, RunError))
+                    and _provider_fallback_reason(generated)
+                    in {
+                        "provider_idle_timeout",
+                        "provider_crash_retry_exhausted",
+                        "provider_timeout",
+                        "provider_unavailable",
+                        "provider_transport",
+                        "timeout",
+                        "transport",
+                        "unavailable",
+                    }
+                    and len(window) > 1
+                ):
+                    unsplit_failure = generated
+                    generated = _retry_smaller_translation_windows(
+                        self.task_service,
+                        context,
+                        request,
+                        generated,
+                        window=window,
+                        candidate_id=candidate_id,
+                        resume_input=resume_input,
+                        options=execution,
+                        glossary=_window_glossary(window, glossary.entries),
+                        target_language=target_language,
+                        language=language,
+                        window_ordinal=ordinal,
+                        user_intent=user_intent,
+                    )
+                    if not isinstance(generated, (Paused, RunError)):
+                        consecutive_provider_window_failures = 0
+                        if isinstance(generated, _InvalidGeneratedOutput):
+                            _publish_translation_provider_failure(
+                                context,
+                                f"{fallback_id}-provider",
+                                outcome=unsplit_failure,
+                                model=model,
+                                reason_code=_provider_fallback_reason(unsplit_failure),
+                                stage="translation",
+                                window_ordinal=ordinal,
+                                consecutive_window_failures=0,
+                                global_fallback_triggered=False,
+                                remaining_windows_skipped=0,
+                            )
                 if isinstance(generated, Paused):
                     provider_reason = _provider_fallback_reason(generated)
                     if provider_reason is None:
@@ -1223,15 +1278,36 @@ class TranslationWorkflowService:
                         "fallback_units": fallback_units,
                     }
                 if isinstance(generated, _InvalidGeneratedOutput):
+                    generated = _repair_failed_text_slot_groups(
+                        self.task_service, context, request, generated, window=window,
+                        options=execution, resume_input=resume_input, target_language=target_language,
+                        glossary=glossary.entries, user_intent=user_intent,
+                    )
+                    if isinstance(generated, (Paused, RunError)):
+                        return generated
                     fallback, source_fallback_ids = _salvaged_translation_fallback(
                         window, candidate=generated.candidate
+                    )
+                    split_review_skipped = (
+                        [
+                            item["block_id"]
+                            for item in fallback
+                            if item["block_id"] not in source_fallback_ids
+                        ]
+                        if (generated.error.details.get("provider_split_recovered") or generated.error.details.get("slot_group_recovered"))
+                        and review_rounds != 0
+                        else []
                     )
                     _publish_translation_fallback(
                         context,
                         fallback_id,
                         source_text_block_ids=source_fallback_ids,
-                        review_skipped_block_ids=[],
-                        reason_codes=[generated.error.code],
+                        review_skipped_block_ids=split_review_skipped,
+                        reason_codes=[generated.error.code] + (["provider_split_recovered"] if generated.error.details.get("provider_split_recovered") else []),
+                    )
+                    fallback_units.update(
+                        (block_id, "review_skipped")
+                        for block_id in split_review_skipped
                     )
                     fallback_units.update(
                         (block_id, "source_text") for block_id in source_fallback_ids
@@ -1391,6 +1467,7 @@ class TranslationWorkflowService:
                                         )
                                     reviewed.extend(accepted_review)
                                 continue
+                        review_rejected_ids = None
                         review_error: tuple[str, str] | None = None
                         reviewed_window: list[dict[str, str]] | None = None
                         model_review_blocks = [
@@ -1460,7 +1537,7 @@ class TranslationWorkflowService:
                                 else (
                                     f"translation/{artifact_prefix}/windows/"
                                     f"{ordinal:04d}/reviews/"
-                                    f"{review_ordinal:04d}.json"
+                                    f"{review_ordinal:04d}-{_digest(review_draft)[:20]}.json"
                                 )
                             )
                             if review_rounds is not None:
@@ -1517,11 +1594,18 @@ class TranslationWorkflowService:
                                     review_generated.error.code,
                                     str(review_generated.error),
                                 )
+                                try:
+                                    reviewed_window, review_rejected_ids = _salvage_text_slot_review(
+                                        review_generated.candidate, review_draft, review_blocks
+                                    )
+                                except TranslationWorkflowError:
+                                    pass
                             else:
                                 reviewed_window = review_generated
                         if review_error is not None:
-                            reviewed_window = list(review_draft)
-                            review_ids = [
+                            if reviewed_window is None:
+                                reviewed_window = list(review_draft)
+                            review_ids = review_rejected_ids if review_rejected_ids is not None else [
                                 str(item["block_id"]) for item in review_blocks
                             ]
                             review_skipped_ids.extend(review_ids)
@@ -1665,6 +1749,7 @@ class TranslationWorkflowService:
                 artifact_prefix=partial_prefix,
                 coverage="selection",
                 protected_atom_block_ids=_protected_original_block_ids(unit_plans, tuple(available.values())),
+                unit_plans=unit_plans,
                 fallback_kinds={
                     key: value
                     for key, value in _collapse_translation_fallbacks(
@@ -1760,6 +1845,8 @@ class TranslationWorkflowService:
             "translation_progress",
             {
                 "phase": "translation",
+                "artifact_prefix": artifact_prefix,
+                "recovery_epoch": context.recovery_epoch,
                 "completed_units": len(model_units),
                 "total_units": len(model_units),
                 "unit": "translation units",
@@ -1803,6 +1890,7 @@ class TranslationWorkflowService:
             coverage=coverage,
             fallback_kinds=fallback_blocks,
             protected_atom_block_ids=protected_atom_block_ids,
+            unit_plans=unit_plans,
         )
         _validate_translation_result(
             context,
@@ -1855,6 +1943,7 @@ def _validated_generation(
     options: LLMExecutionOptions,
     stopped_message: str,
     repair_missing_atoms: bool = False,
+    retry_diagnostic_validator: Callable[[Any], Any] | None = None,
     retry_request_factory: (
         Callable[[LLMRequest, TranslationWorkflowError, Mapping[str, Any]], LLMRequest]
         | None
@@ -1871,6 +1960,10 @@ def _validated_generation(
         try:
             return validator(candidate)
         except TranslationWorkflowError as exc:
+            latest = context.working.find_candidate(candidate_id + "-last-retry")
+            if latest is not None:
+                diagnostic = context.working.read_candidate_json(candidate_id + "-last-retry")
+                exc = TranslationWorkflowError(diagnostic["code"], diagnostic["message"], diagnostic["details"])
             return _InvalidGeneratedOutput(exc, candidate_path, candidate)
 
     first_candidate_id = _attempt_candidate_id(candidate_id)
@@ -1912,6 +2005,16 @@ def _validated_generation(
             raise StoppedError(stopped_message)
         assert isinstance(outcome, LLMCompleted)
         candidate_value = outcome.value
+        latest_error = None
+        if attempt >= 2:
+            try:
+                (retry_diagnostic_validator or validator)(candidate_value)
+            except TranslationWorkflowError as raw_error:
+                latest_error = raw_error
+                context.working.write_candidate_json(candidate_id + "-last-retry", {
+                    "code": raw_error.code, "message": str(raw_error), "details": raw_error.details,
+                    "candidate": _generated_candidate_document(candidate_value),
+                })
         if (
             attempt >= 2
             and first_candidate is not None
@@ -1945,12 +2048,105 @@ def _validated_generation(
                 current_request = retry_request_factory(request, exc, document)
                 continue
             path = context.working.write_candidate_json(candidate_id, document)
-            return _InvalidGeneratedOutput(exc, path, document)
+            return _InvalidGeneratedOutput(latest_error or exc, path, document)
         persisted = validated if isinstance(validated, Mapping) else candidate_value
         context.working.write_candidate_json(
             candidate_id, _generated_candidate_document(persisted)
         )
         return validated
+
+
+def _retry_smaller_translation_windows(
+    service,
+    context,
+    request,
+    original_failure,
+    *,
+    window,
+    candidate_id,
+    resume_input,
+    options,
+    glossary,
+    target_language,
+    language,
+    window_ordinal,
+    user_intent,
+):
+    """Split a failed provider window once, preserving successful child results."""
+    midpoint = (len(window) + 1) // 2
+    recovered = []
+    reason = _provider_fallback_reason(original_failure)
+    for index, blocks in enumerate((window[:midpoint], window[midpoint:])):
+        child_id = f"{candidate_id}-provider-split-{index}"
+        scoped = _protected_translation_retry_request(
+            request,
+            TranslationWorkflowError(
+                "translation_provider_split", "Retry a smaller source window"
+            ),
+            {},
+            blocks,
+            glossary=glossary,
+            target_language=target_language,
+            language=language,
+            window_ordinal=window_ordinal,
+            user_intent=user_intent,
+        )
+        result = _validated_generation(
+            service,
+            context,
+            scoped,
+            validator=lambda value, blocks=blocks: _validated_protected_draft_document(
+                value, blocks
+            ),
+            candidate_id=child_id,
+            resume_input=resume_input,
+            options=options,
+            stopped_message="block translation stopped",
+            repair_missing_atoms=True,
+            retry_request_factory=lambda original, error, candidate, blocks=blocks: _protected_translation_retry_request(
+                original,
+                error,
+                candidate,
+                blocks,
+                glossary=glossary,
+                target_language=target_language,
+                language=language,
+                window_ordinal=window_ordinal,
+                user_intent=user_intent,
+            ),
+            retry_candidate_merger=lambda first, second, blocks=blocks: _merge_protected_translation_candidates(
+                first, second, blocks
+            ),
+        )
+        if isinstance(result, (Paused, RunError)):
+            if _provider_fallback_reason(result) is None:
+                return result
+            continue
+        candidate = (
+            result.candidate if isinstance(result, _InvalidGeneratedOutput) else result
+        )
+        items, missing = _salvaged_translation_fallback(blocks, candidate=candidate)
+        recovered.extend(item for item in items if item["block_id"] not in missing)
+    if not recovered:
+        return original_failure
+    document = _translation_result_document(recovered)
+    # Persist the aggregate only when every source block is present. An
+    # incomplete aggregate remains eligible for the normal local salvage path.
+    try:
+        validated = _validated_protected_draft_document(document, window)
+    except TranslationWorkflowError:
+        path = context.working.write_candidate_json(candidate_id, document)
+        return _InvalidGeneratedOutput(
+            TranslationWorkflowError(
+                reason,
+                "Provider retry recovered only part of the window",
+                {"provider_split_recovered": True},
+            ),
+            path,
+            document,
+        )
+    context.working.write_candidate_json(candidate_id, document)
+    return validated
 
 
 def _attempt_candidate_id(candidate_id: str) -> str:
@@ -2142,6 +2338,8 @@ _GLOSSARY_TRANSLATED_TERM_MATH_MARKERS = (
 
 
 def _has_forbidden_glossary_control(value: str) -> bool:
+    if re.search(r"\\u00(?:0[0-8bcef]|1[0-9a-f]|7f)", value, re.IGNORECASE):
+        return True
     return any(
         (
             ord(character) < 0x20
@@ -3242,6 +3440,8 @@ def _provider_reason_from_codes(
     reason_codes: Sequence[str],
 ) -> str | None:
     values = set(reason_codes)
+    if "provider_split_recovered" in values:
+        return None
     return next(
         (reason for reason in _PROVIDER_FALLBACK_REASON_ORDER if reason in values),
         None,
@@ -3761,7 +3961,7 @@ def _translation_review_windows(
             window_ordinal=window_ordinal,
             user_intent=user_intent,
         )
-        if len(candidate_text.encode("utf-8")) <= budget_bytes:
+        if len(candidate_blocks) <= 8 and len(candidate_text.encode("utf-8")) <= budget_bytes:
             current_blocks = candidate_blocks
             current_translations = candidate_translations
             continue
@@ -3951,6 +4151,7 @@ def _validate_model_protected_atom_window(
             )
             validate_translation_text(text, block)
             validate_caption_translation(text, block)
+            validate_prose_completeness(text, block)
         except ProtectedAtomError as exc:
             raise TranslationWorkflowError(exc.code, str(exc), exc.details) from exc
         except TranslationSourceError as exc:
@@ -4010,6 +4211,7 @@ def _validate_text_slot_window(
             )
             validate_translation_text(text, block)
             validate_caption_translation(text, block)
+            validate_prose_completeness(text, block)
         except ProtectedAtomError as exc:
             raise TranslationWorkflowError(exc.code, str(exc), exc.details) from exc
         except TranslationSourceError as exc:
@@ -4587,7 +4789,6 @@ def _review_replacements(
     return replacements
 
 
-
 def _apply_review(
     value: Any,
     draft: Sequence[Mapping[str, Any]],
@@ -4640,6 +4841,26 @@ def _apply_review(
             }
         )
     return _validate_protected_atom_window(protected_result_document(reviewed), blocks)
+
+
+def _salvage_text_slot_review(value, draft, blocks):
+    """Retain valid patches only after validating the complete review envelope."""
+    if not isinstance(value, Mapping) or value.get("schema_version") != TEXT_SLOT_REVIEW_RESULT_SCHEMA:
+        raise TranslationWorkflowError("translation_review_invalid", "not a text-slot review")
+    patches = value.get("translation_patches")
+    if not isinstance(patches, Mapping) or set(patches) - {str(item["block_id"]) for item in draft}:
+        raise TranslationWorkflowError("translation_review_invalid", "invalid review patch IDs")
+    _apply_text_slot_review({**value, "translation_patches": {}}, draft, blocks)
+    reviewed, rejected = [], []
+    for item, block in zip(draft, blocks, strict=True):
+        block_id = str(item["block_id"])
+        subset = {block_id: patches[block_id]} if block_id in patches else {}
+        try:
+            reviewed.extend(_apply_text_slot_review({**value, "translation_patches": subset}, [item], [block]))
+        except TranslationWorkflowError:
+            reviewed.append(dict(item))
+            rejected.append(block_id)
+    return reviewed, rejected
 
 
 def _apply_text_slot_review(
@@ -4933,6 +5154,7 @@ def _publish_translation_result(
     coverage: str,
     fallback_kinds: Mapping[str, str] | None = None,
     protected_atom_block_ids: set[str] | None = None,
+    unit_plans: Sequence[_TranslationUnitPlan] = (),
 ) -> TranslationResult:
     rich_blocks = {item.block_id: item for item in source.rich.blocks}
     units_by_id = {str(item["block_id"]): item for item in units}
@@ -4998,6 +5220,17 @@ def _publish_translation_result(
                 str(translated["text"]),
             )
             note_provenance = {}
+        matching_plan = next((plan for plan in unit_plans if plan.block_id == block_id), None)
+        recovery_ids = [block_id] if matching_plan is None else [
+            unit_id for group in matching_plan.unit_groups for unit_id in group]
+        partial_slots = []
+        for recovery_id in recovery_ids:
+            recovery_ref = context.artifacts.find(_slot_recovery_artifact_id(recovery_id))
+            if recovery_ref is not None:
+                slot_diagnostic = _read_json_artifact(context, recovery_ref, "text-slot recovery")
+                partial_slots.extend(slot_diagnostic.get("partial_source_text_slot_ids", []))
+        if partial_slots:
+            note_provenance["partial_source_text_slot_ids"] = list(dict.fromkeys(partial_slots))
         fragment_material = {
             "producer": "alc-translate",
             "source": source_identity.rich_document_digest,
@@ -5204,3 +5437,170 @@ def _salvage_glossary_window(value, terms):
         except TranslationWorkflowError:
             continue
     return retained
+
+
+def validate_prose_completeness(text: str, block: Mapping[str, Any]) -> None:
+    if str(block.get("kind")) not in {"paragraph", "source_note", "translation_unit"}:
+        return
+    def size(value):
+        prose = _without_markdown_math(value)
+        prose = re.sub(r"https?://\S+|`[^`]*`", "", prose)
+        cjk = r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]"
+        return len(re.findall(cjk, prose)) + len(re.findall(r"[^\W\d_]+", re.sub(cjk, " ", prose)))
+    def source_prose(parts):
+        return " ".join(str(part["text"]) if part["kind"] == "text" else
+                        source_prose(part["parts"]) if part["kind"] == "link" else ""
+                        for part in parts)
+    source_size = size(source_prose(protected_atom_plan(block)["parts"]))
+    translated_size = size(text)
+    # Detect catastrophic paragraph loss only; natural language compression
+    # and short headings are outside this deliberately conservative guard.
+    if source_size >= 100 and translated_size < max(12, source_size * 0.12):
+        raise TranslationSourceError(
+            "translation_prose_incomplete",
+            "translation reduced a substantial source paragraph to a short fragment; translate every source clause",
+            {"block_id": str(block.get("block_id", "")),
+             "source_prose_units": source_size, "translation_prose_units": translated_size},
+        )
+
+
+
+def _repair_failed_text_slot_groups(service, context, request, failure, *, window,
+                                    options, resume_input, target_language, glossary=(), user_intent=""):
+    """Re-translate failed multi-slot blocks without guessing shifted positions."""
+    repaired = {}
+    for block in _invalid_protected_candidate_blocks(failure.candidate, window):
+        source_slots = _text_slot_source_values(block)
+        if len(source_slots) < 6:
+            continue
+        block_id = str(block["block_id"])
+        values = dict(source_slots)
+        fallback_slots = list(source_slots)
+        groups = list(source_slots)
+        group_size = max(3, (len(groups) + 7) // 8)
+        for ordinal, start in enumerate(range(0, len(groups), group_size)):
+            ids = groups[start:start + group_size]
+            originals = {key: source_slots[key] for key in ids}
+            payload = {"block_id": block_id, "target_language": target_language,
+                       "user_intent": user_intent, "glossary": _window_glossary([block], glossary),
+                       "text_slots": originals,
+                       "previous_source": source_slots[groups[start - 1]] if start else "",
+                       "next_source": source_slots[groups[start + group_size]] if start + group_size < len(groups) else ""}
+            identity = _task_id("text-slot-group", payload)
+            saved_id = "translation/slot-groups/" + identity
+            saved = context.working.find_candidate(saved_id)
+            if saved is None:
+                schema = {"type": "object", "properties": {"text_slots": {
+                    "type": "object", "properties": {key: {"type": "string"} for key in ids},
+                    "required": ids, "additionalProperties": False}},
+                    "required": ["text_slots"], "additionalProperties": False}
+                scoped = LLMRequest(identity,
+                    "Contract: alc.translate.text_slot_group.v2\nFollow user_intent and use glossary terminology. Translate each supplied source text slot completely into target_language. "
+                    "Keep each translation under its exact slot ID. Never move content between slots or combine slots. "
+                    "Formula and link boundaries between slots are fixed by the caller. Context is source-only; do not translate it again. "
+                    "Do not summarize or omit clauses. Return only text_slots JSON.\nInput JSON:\n" + json.dumps(payload, ensure_ascii=False),
+                    JsonOutput(schema, repair="format"), request.model, request.session, request.inputs)
+                outcome = _execute(service, context, scoped, resume_input=resume_input, options=options)
+                if isinstance(outcome, LLMStopped):
+                    raise StoppedError("text-slot group repair stopped")
+                if isinstance(outcome, LLMFailed):
+                    failure_error = _run_error(outcome)
+                    if _provider_fallback_reason(failure_error) is None:
+                        return failure_error
+                if isinstance(outcome, LLMPaused):
+                    pause = Paused(_awaiting(outcome))
+                    if not is_local_content_pause(pause) and _provider_fallback_reason(pause) is None:
+                        return pause
+                raw = outcome.value if isinstance(outcome, LLMCompleted) else {}
+                context.working.write_candidate_json(saved_id, {"candidate": raw})
+            else:
+                raw = context.working.read_candidate_json(saved_id)["candidate"]
+            slots = raw.get("text_slots") if isinstance(raw, Mapping) else None
+            if not isinstance(slots, Mapping) or set(slots) != set(ids):
+                continue
+            try:
+                # Fill other slots with their source solely to validate this group;
+                # every failed paragraph slot is translated afresh, not realigned.
+                assembled, _ = assemble_text_slot_translation(block, {**source_slots, **slots})
+                validate_translation_text(assembled, block)
+            except (ProtectedAtomError, TranslationSourceError):
+                continue
+            values.update(slots)
+            fallback_slots = [key for key in fallback_slots if key not in slots]
+        text, parts = assemble_text_slot_translation(block, values)
+        repaired[block_id] = {"block_id": block_id, "parts": parts}
+        diagnostic_id = _slot_recovery_artifact_id(block_id)
+        first_delivery = context.artifacts.find(diagnostic_id) is None
+        context.artifacts.publish_json(diagnostic_id, {
+            "schema_version": "alc.translate.text_slot_recovery.v1", "block_id": block_id,
+            "partial_source_text_slot_ids": fallback_slots,
+            "group_limit": 8, "last_error": failure.error.code,
+        })
+        if fallback_slots and first_delivery:
+            context.events.emit("translation_fallback", {
+                "partial_source_text_block_ids": [block_id],
+                "partial_source_text_slot_ids": fallback_slots,
+                "reason_codes": ["translation_partial_source_slots"],
+                "source_text_block_ids": [], "review_skipped_block_ids": [],
+                "source_text_block_count": 0, "review_skipped_block_count": 0,
+            })
+    if not repaired:
+        return failure
+    retained, _ = _salvaged_translation_fallback(window, candidate=failure.candidate)
+    candidate = protected_result_document([
+        {**item, **repaired.get(str(item["block_id"]), {})} for item in retained
+    ])
+    return _InvalidGeneratedOutput(
+        TranslationWorkflowError(failure.error.code, str(failure.error),
+                                 {**failure.error.details, "slot_group_recovered": True}),
+        failure.candidate_path, candidate)
+
+
+
+def _slot_recovery_artifact_id(block_id):
+    key = block_id if re.fullmatch(r"[A-Za-z0-9._-]+", block_id) else _task_id("slot-block", {"block_id": block_id})
+    return "diagnostics/text-slot-recovery/" + key
+
+
+
+def _candidate_diagnostic_blocks(value, blocks):
+    translations = value.get("translations") if isinstance(value, Mapping) else None
+    if isinstance(translations, Mapping):
+        ids = set(translations)
+    elif isinstance(translations, list):
+        ids = {item["block_id"] for item in translations
+               if isinstance(item, Mapping) and isinstance(item.get("block_id"), str)}
+    else:
+        return blocks
+    selected = tuple(block for block in blocks if block["block_id"] in ids)
+    return selected or blocks
+
+
+def _merge_glossary_candidates(first, second, terms):
+    """Never replace a valid term with a missing or invalid retry entry."""
+    def index(value):
+        result = {}
+        entries = value.get("entries", []) if isinstance(value, Mapping) else []
+        for item in entries if isinstance(entries, list) else []:
+            if isinstance(item, Mapping) and isinstance(item.get("term_id"), str):
+                result.setdefault(item["term_id"], []).append(item)
+        return result
+    earlier, later = index(first), index(second)
+    entries = []
+    for term in terms:
+        choices = [later.get(term["term_id"], []), earlier.get(term["term_id"], [])]
+        chosen = None
+        for candidates in choices:
+            if len(candidates) != 1:
+                continue
+            try:
+                _validate_glossary_window({"entries": candidates}, [term])
+                chosen = candidates[0]
+                break
+            except TranslationWorkflowError:
+                pass
+        if chosen is not None:
+            entries.append(chosen)
+        else:
+            entries.extend(choices[0] or choices[1])
+    return {"entries": entries}
