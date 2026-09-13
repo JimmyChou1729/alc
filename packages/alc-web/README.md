@@ -53,7 +53,10 @@ python3 scripts/alc-web.py --runtime-doctor
 
 ## Notes
 
-- **Models**: CLI connections use existing official-service logins. Configure custom services through API connections using Responses, Chat Completions or Anthropic Messages.
+- **Claude models**: Sonnet, Opus and Haiku are CLI aliases resolved by the current Claude configuration, not a fetched provider catalog. Choose Custom model to enter an exact model ID.
+- **Degraded delivery**: If Companion generation or rendering falls back to source-only output, the task includes an explicit warning that translation and Companion were not delivered.
+- **Model list refresh**: CLI catalogs are cached for five minutes and checked when opening New task or Settings. Use **Refresh model list** to query immediately. Temporary discovery failures retain the last catalog. The list comes from the CLI on the service PATH; a separately installed desktop app may use a different CLI version.
+- **Models**: Codex uses its official-service login. Claude reuses official login or user-level service URL, token/API key and model mapping settings; hooks, plugins and project settings remain isolated. Authentication scripts and cloud-provider authentication are not supported. Configure custom services through API connections using Responses, Chat Completions or Anthropic Messages.
 - **Keys**: Stored in the service session or a supported OS credential store, not browser Local Storage. Saved keys are isolated by workspace; keys saved by older versions must be entered again.
 - **PDF**: Uses configured MinerU for OCR and image/structure preservation, or explicit text-only extraction. See PDF OCR below.
 - **Resume**: Reuses completed work and the original task configuration. Model setting changes apply to new tasks. Requests already sent may still incur usage.
@@ -147,3 +150,34 @@ model voices first and system voices afterward; selecting a voice selects its
 engine automatically. Preview uses unsaved selections. No model is downloaded
 by opening a document, and exported HTML contains no local connection credential.
 See [Local TTS](../alc-render/LOCAL_TTS.md) for setup and standalone HTML usage.
+
+Task progress uses completed work within weighted stages. Waiting longer does
+not increase completion: phases without measurable units remain at their entry
+boundary until the next phase starts. Companion translation, guide generation,
+and chapter assembly have separate shares, so completed translation cannot
+consume the unfinished guide share. Translation batches and completed guide
+workers/loops advance within each chapter, including single-chapter articles.
+Unknown Companion setup displays “准备原文” without an extra transitional stage.
+Saved work survives pause/resume and metric
+cache rebuilding; only a completed delivery reaches 100%.
+
+## Optional Companion research
+
+Companion research needs no path configuration. Local Web includes the same
+host adapter as the ALC plugin. It checks `arc-paper` on PATH, then enabled
+installed Codex/Claude user ARC plugins and standalone ARC skills. Only ready runtimes
+supporting the required commands are used; the adapter never runs `setup`.
+Missing, disabled, incompatible or unavailable ARC leaves the model's existing
+search capabilities available. No ARC or Codex installation is required to run
+Local Web, and research is not mandatory for every task.
+
+Advanced overrides remain optional: `ALC_ARC_PAPER` selects an existing
+executable, and `ALC_COMPANION_RESEARCH_HOST` selects a different host adapter.
+An empty value disables the corresponding discovery. Restart the server after
+changing advanced overrides. Existing deliveries are not regenerated.
+
+The research host accepts arXiv identifiers for ARC acquisition; it does not
+forward arbitrary model-selected URLs to the host network. Other webpages use
+authorized native web tools. Older Foundation environments without Claude
+connection support report a provider configuration warning instead of failing
+to import the application. The pinned runtime includes this capability.

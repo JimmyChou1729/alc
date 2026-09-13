@@ -979,3 +979,10 @@ def test_upload_accepts_pdf_larger_than_former_50_mib_limit(web, tmp_path):
     source = store.source(response.json()['id'])
     assert source['bytes'] == size
     assert (store.root / source['path']).stat().st_size == size
+
+
+def test_claude_connection_settings_are_supported_without_exposing_credentials(tmp_path):
+    from alc_web.providers import _routing_warning
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'env': {'ANTHROPIC_BASE_URL': 'https://fixture.invalid', 'ANTHROPIC_AUTH_TOKEN': 'fixture-private-token'}, 'hooks': {'fixture': []}}))
+    assert _routing_warning('claude', config_path=path, environment={}) is None

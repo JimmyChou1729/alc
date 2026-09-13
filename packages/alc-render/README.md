@@ -494,3 +494,51 @@ list. The list uses the same thin, hover/focus scrollbar treatment as other pane
 standalone Readers with a local audio connection. System speech remains the
 default. See [Local TTS](LOCAL_TTS.md) for consent, installation, playback and
 portability details.
+
+Fragment citations are interpreted as Markdown syntax. Markers inside code
+blocks, inline code, escaped examples, or link destinations are literal text,
+not bibliography references. Older immutable revisions that declared these
+literal markers remain readable when their declarations exactly match the
+historical extraction rule; missing or incorrect citations in actual prose
+still fail validation.
+
+Companion original-source references use caller-bound `alc-source:` locators
+containing a version, chapter anchor and source block IDs. The Reader formats
+these as an original-document label, the source heading and mapped PDF pages;
+unknown positions remain unlocated. Markdown export uses the same visible label.
+Legacy references explicitly identifying the original document receive a compact
+label and, when uniquely matched, a chapter link. Their batch-local part numbers
+are never converted to pages. Existing explicit equation labels are retained;
+reference IDs and stored source descriptions remain unchanged.
+
+Companion recovery notices are attached to the affected fragment through
+`alc.companion.recovery_diagnostic.v1` provenance and displayed in the Reader's
+interface language. They distinguish literal-format preservation, unresolved
+references, an unconfirmed source location, and unconfirmed source review. An explicit
+`content_quality_resolved: true` marker clears the current notice while preserving
+its history. Quality summaries use current revisions and glossary entries;
+automatically normalized content and resolved fallback incidents are retained
+in the ledger without being counted as outstanding issues. Legacy chapter
+notices remain until all retained warnings in that chapter have been resolved.
+
+Legacy missing-review and unknown recovery reasons require explicit resolution
+of every matching fragment; clean-looking Markdown alone does not clear them.
+
+Companion and guide titles support inline math using `$…$` or `\(…\)`;
+formula delimiters remain in editable titles, while speech uses plain text.
+
+Translations carrying `partial_source_text_slot_ids` display a partial-source
+notice and contribute to current quality warnings. They are not counted as wholly
+untranslated paragraphs; manually resolved revisions retain historical evidence.
+
+The Reader quality summary displays source-text fallback, incomplete review, translation review, and source notice categories. Glossary recovery and omission details remain in the audit ledger and do not open the summary panel.
+
+Source-note aliases are reserved for dedicated note navigation targets and are
+excluded from general structural targets. Standalone delivery validation rejects
+alias collisions across bibliography, structural, and note indexes before Reader
+startup. Existing publications can be rendered again without regenerating content.
+
+The Companion bibliography displays a linked title with one source label:
+arXiv ID first, otherwise DOI, otherwise the source hostname (or plain source
+text). Known arXiv HTML/PDF URLs are recognized even without separate identifier
+metadata. Presentation does not rewrite stored bibliography entries.

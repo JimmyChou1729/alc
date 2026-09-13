@@ -16,7 +16,7 @@ const fs=require('fs'),assert=require('assert');
 const source=fs.readFileSync(process.argv[1],'utf8');
 for(const name of ['renderVisibilityOptions','visibilityOption','visibleRoleCount','applyVisibility',
  'updateVisibilityStyles','renderSpeechRoleOptions','speechRoleOption','renderContents',
- 'setupContentsLanguage','syncContentsLanguage','updateContentsTitles','visibleHeadingForBlock','appendContentsLink','renderBibliography','revealAppendixTarget','activateHashTarget']) {
+ 'setupContentsLanguage','syncContentsLanguage','updateContentsTitles','visibleHeadingForBlock','appendContentsLink','renderBibliography','externalReferencePresentation','originalReferencePresentation','revealAppendixTarget','activateHashTarget']) {
  eval(source.match(new RegExp('  function '+name+'\\([^]*?\\n  }'))[0]);
 }
 class Node {

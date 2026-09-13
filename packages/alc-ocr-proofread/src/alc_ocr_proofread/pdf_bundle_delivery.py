@@ -48,6 +48,10 @@ def adopt_pdf_candidate(
         "manual_edits": candidate.get("manual_edits", {}),
         "manual_resolutions": candidate.get("manual_resolutions", {}),
     }
+    if candidate.get("inline_repairs"):
+        review.update(schema_version="ac.document.pdf_review.v3",
+                      inline_baseline_html=candidate["inline_baseline_html"],
+                      inline_repairs=candidate["inline_repairs"])
     return publish_reviewed_pdf_source(
         manifest, reviewed_source=corrected, review=review, output_dir=output_dir
     )

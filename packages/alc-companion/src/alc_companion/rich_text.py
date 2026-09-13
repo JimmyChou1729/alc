@@ -10,6 +10,10 @@ from markdown_it.rules_inline import StateInline
 from markdown_it.token import Token
 
 
+_ANSI_SGR = re.compile(r"(?:\x1b|(?<!\\)\\u001[bB])\[(?:[0-9]+(?:[;:][0-9]+)*)?m")
+_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
 _CITATION = re.compile(r"\[@([A-Za-z0-9][A-Za-z0-9._:-]*)\]")
 
 
@@ -20,6 +24,10 @@ class RichTextError(ValueError):
 def parse_markdown(value: str) -> tuple[Token, ...]:
     if not isinstance(value, str) or not value.strip():
         raise RichTextError("learning-unit markdown must be a non-empty string")
+    if "\x00" in value:
+        raise RichTextError("learning-unit markdown cannot contain NUL")
+    if has_unsupported_controls(value):
+        raise RichTextError("learning-unit markdown contains unsupported control characters")
     _validate_display_math(value)
     tokens = tuple(_parser().parse(value))
     _reject_raw_html(tokens)
@@ -58,6 +66,21 @@ def validate_rich_markdown(
                 f"citation is not in bibliography: {unknown}"
             )
     return values
+
+
+def strip_ansi_sgr(value: str) -> tuple[str, int]:
+    """Remove complete terminal style sequences outside Markdown code only."""
+    visible = _visible_markdown(value)
+    matches = [match for match in _ANSI_SGR.finditer(value)
+               if visible[match.start():match.end()] == match[0]]
+    for match in reversed(matches):
+        value = value[:match.start()] + value[match.end():]
+    return value, len(matches)
+
+
+def has_unsupported_controls(value: str) -> bool:
+    visible = _visible_markdown(value)
+    return bool(_CONTROL.search(visible) or re.search(r"(?<!\\)\\u001[bB]", visible))
 
 
 def canonicalize_display_math(value: str) -> str:
@@ -225,6 +248,8 @@ def _reject_raw_html(tokens: Sequence[Token]) -> None:
 __all__ = [
     "RichTextError",
     "canonicalize_display_math",
+    "strip_ansi_sgr",
+    "has_unsupported_controls",
     "citation_ids",
     "citation_ids_from_tokens",
     "parse_markdown",

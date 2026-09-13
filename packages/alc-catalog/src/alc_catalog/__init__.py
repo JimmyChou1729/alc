@@ -9,7 +9,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-__version__ = "2.1.2"
+__version__ = "2.1.3"
 
 KINDS = ('companion', 'translate', 'ocr-proofread', 'pdf-bundle-proofread')
 

@@ -46,21 +46,26 @@ def validate_candidate(manifest, candidate):
         corrected.encode()
     ).hexdigest() != candidate.get("corrected_sha256"):
         _invalid("Candidate source bytes changed.")
-    if _skeleton(corrected) != _skeleton(source.decode()):
-        _invalid("Candidate changes document structure.")
-    original_parser, corrected_parser = (
-        _HTML(source.decode(), bundle),
-        _HTML(corrected, bundle),
-    )
+    structured = bool(candidate.get("inline_repairs"))
+    baseline = candidate.get("inline_baseline_html") if structured else corrected
+    if not isinstance(baseline, str) or _skeleton(baseline) != _skeleton(source.decode()):
+        _invalid("Candidate baseline changes document structure or protected content.")
+    original_parser = _HTML(source.decode(), bundle)
+    baseline_parser = _HTML(baseline, bundle)
     if [(s.page, s.target) for s in original_parser.slots] != [
-        (s.page, s.target) for s in corrected_parser.slots
+        (s.page, s.target) for s in baseline_parser.slots
     ]:
         _invalid("Candidate changed editable source slots.")
-    for before, after in zip(original_parser.slots, corrected_parser.slots):
-        old_text = html.unescape(original_parser.source[before.start : before.end])
-        new_text = html.unescape(corrected_parser.source[after.start : after.end])
+    for before, after in zip(original_parser.slots, baseline_parser.slots):
+        old_text = html.unescape(original_parser.source[before.start:before.end])
+        new_text = html.unescape(baseline_parser.source[after.start:after.end])
         if old_text.strip() and not new_text.strip():
             _invalid("Candidate removes all content from an editable source node.")
+    if structured:
+        from ac_document.pdf_inline import validate_inline_revision
+        validate_inline_revision(source.decode(), corrected, bundle,
+            {**candidate, "schema_version": "ac.document.pdf_review.v3"})
+    corrected_parser = _HTML(corrected, bundle)
     pages = candidate.get("pages")
     if (
         not isinstance(pages, list)
@@ -105,10 +110,19 @@ def editable_candidate(manifest, candidate):
     _, original, corrected = validate_candidate(manifest, candidate)
     result = copy.deepcopy(candidate)
     result.setdefault("base_candidate_digest", candidate["candidate_digest"])
+    if candidate.get("inline_repairs"):
+        result["manual_editing_supported"] = False
     for page in result["pages"]:
         number = page["page_number"]
         old = [s for s in original.slots if s.page == number]
         new = [s for s in corrected.slots if s.page == number]
+        if candidate.get("inline_repairs"):
+            page["segments"] = [{"id": f"{number}:{i}", "kind": b.target,
+                "original_text": "", "corrected_text": html.unescape(corrected.source[b.start:b.end]),
+                "read_only": True} for i, b in enumerate(new)]
+            for i, item in enumerate(page["uncertainties"]):
+                item["id"] = f"{number}:{i}"
+            continue
         page["segments"] = [
             {
                 "id": f"{number}:{i}",
@@ -125,6 +139,8 @@ def editable_candidate(manifest, candidate):
 
 
 def revise_candidate(manifest, candidate, *, edits, resolutions):
+    if candidate.get("inline_repairs") and edits:
+        raise PDFSourceBundleError("pdf_review_structure_readonly", "含结构修订的结果请在 Reader 中编辑。")
     if candidate.get("manual_edits") or candidate.get("manual_resolutions"):
         _invalid(
             "Apply overrides to the original model candidate, not a previous revision."
@@ -167,7 +183,7 @@ def revise_candidate(manifest, candidate, *, edits, resolutions):
             + html.escape(effective[key], quote=slot.target != "text")
             + source[slot.end :]
         )
-    if _skeleton(source) != _skeleton(result["original_html"]):
+    if not result.get("inline_repairs") and _skeleton(source) != _skeleton(result["original_html"]):
         _invalid("Manual edits change document structure.")
     with tempfile.TemporaryDirectory(prefix="alc-review-validation-") as directory:
         service = PDFBundleProofreadService(directory)

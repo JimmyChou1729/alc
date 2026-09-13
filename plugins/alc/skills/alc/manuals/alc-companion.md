@@ -22,7 +22,7 @@ alc-companion --help
 If the bare command is unavailable, use the portable Skill runtime:
 
 ```bash
-<skill-dir>/scripts/alc-runtime alc-companion --help
+<skill-dir>/../../bin/alc-companion --help
 ```
 
 Inside an ALC source checkout, the package virtual environment is the direct
@@ -367,9 +367,10 @@ and at most two full revisions are requested. Add
 `--cross-chapter-editorial-review` only when the user requests the optional
 document-wide redundancy audit.
 
-Companion itself does not run academic research or depend on `arc-paper`.
+Companion does not depend on `arc-paper`. Guide workers may use the optional
+host research adapter documented in `SKILL.md`; absent ARC simply disables it.
 Optional academic enrichment may call ARC before the build and supply reviewed
-local supplements. If ARC is unavailable, ask whether to install it or proceed
+local supplements. If ARC is unavailable, proceed
 without enrichment. There is no guide-unit quota. Retain provenance and remove
 generic summary, paraphrase, or repetition.
 Paragraph-local and cross-paragraph explanations have equal status. Without an

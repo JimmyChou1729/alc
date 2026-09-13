@@ -45,6 +45,10 @@ For an ALC command unavailable on `PATH`, use the same launcher:
 <skill-dir>/scripts/alc-runtime alc-translate <command> [args...]
 ```
 
+For Companion, use `<skill-dir>/../../bin/alc-companion` when the command is
+not on PATH. This plugin entrypoint supplies the optional research host;
+do not bypass it with the generic runtime launcher for Companion builds.
+
 In DeepSeek Harness, use `$DSH_ALC_RUNTIME` in place of the launcher path.
 Prewarm with `alc-runtime setup`; inspect source identity and readiness with
 `alc-runtime doctor`. Runtime locks pin full Git SHAs for both ALC and AC
@@ -56,11 +60,21 @@ directory. Never treat durable runs as shared cache.
 
 ## Optional academic enrichment
 
-`alc-companion` itself neither imports ARC nor performs academic research. If
+`alc-companion` itself does not import or invoke ARC. Chapter workers may
+request research through a host adapter. The plugin launcher exposes
+`scripts/companion-research-host`, automatically checking `arc-paper` on PATH,
+enabled installed Codex/Claude user ARC plugins, and standalone ARC skills. Probe the
+runtime with `doctor` and required commands with `--help`; never run `setup`.
+Only ready, capable runtimes are used. Missing or failed discovery exposes no
+ARC tools and the build continues using available model search. Do not ask the
+user to configure paths. `ALC_ARC_PAPER` remains an optional advanced override. Do not install ARC to satisfy an
+internal worker request. An empty `ALC_COMPANION_RESEARCH_HOST` disables it.
+
+For separately prepared enrichment, if
 a Companion would materially benefit from paper discovery or literature
 review, the Skill may suggest using ARC first and passing reviewed local
-supplements into ALC. If ARC is unavailable, state that it is optional and ask
-whether the user wants to install it or continue without enrichment. Never
+supplements into ALC. If ARC is unavailable, continue with available host research or original
+evidence without requiring installation or path configuration. Never
 install ARC automatically and never make it a Python or runtime dependency of
 ALC.
 

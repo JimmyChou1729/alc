@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import copy
+import time
 import json
 import hashlib
 import tomllib
@@ -12,7 +14,10 @@ import subprocess
 import threading
 from typing import Any
 
-from ac_llm import codex_model_catalog
+import ac_llm
+from ac_llm import codex_model_catalog, ProviderFailure
+
+claude_connection_environment = getattr(ac_llm, "claude_connection_environment", None)
 from ac_llm.config import DEFAULT_MODELS
 
 from .models import ProviderInput
@@ -85,6 +90,36 @@ class SecretVault:
             ) from exc
 
 
+class CLIProfileCache:
+    """Refresh discovery without discarding a usable catalog on transient failure."""
+
+    def __init__(self, discovered: list[dict[str, Any]] | None = None):
+        self._fixed = discovered is not None
+        self._profiles = cli_profiles() if discovered is None else discovered
+        self._updated = time.monotonic()
+        self._lock = threading.Lock()
+
+    def get(self, *, force: bool = False) -> list[dict[str, Any]]:
+        with self._lock:
+            if not self._fixed and (force or time.monotonic() - self._updated >= 300):
+                fresh = cli_profiles()
+                previous = {p["id"]: p for p in self._profiles}
+                for profile in fresh:
+                    old = previous.get(profile["id"], {})
+                    if (
+                        profile.get("compatible")
+                        and not profile.get("models")
+                        and old.get("models")
+                    ):
+                        for key in ("models", "default_model", "reasoning_efforts"):
+                            profile[key] = old[key]
+                        profile["model_catalog_status"] = "stale"
+                        profile["model_catalog_message"] = "模型列表刷新失败，暂时保留上次结果，请稍后重试。"
+                self._profiles = fresh
+                self._updated = time.monotonic()
+            return copy.deepcopy(self._profiles)
+
+
 def cli_profiles() -> list[dict[str, Any]]:
     profiles = []
     for name in ("codex", "claude"):
@@ -135,6 +170,20 @@ def cli_profiles() -> list[dict[str, Any]]:
             models = [model.to_document() for model in catalog.models]
             catalog_status = catalog.status
             catalog_message = catalog.message
+        if name == "claude" and executable and supported and warning is None:
+            models = [
+                {
+                    "id": alias,
+                    "name": label,
+                    "description": "Claude CLI 模型别名，实际模型由现有 CLI 配置解析。",
+                    "reasoning_efforts": ["low", "medium", "high", "max"],
+                    "default_reasoning_effort": None,
+                    "provider_default": alias == "sonnet",
+                }
+                for alias, label in (("sonnet", "Sonnet"), ("opus", "Opus"), ("haiku", "Haiku"))
+            ]
+            catalog_status = "configured"
+            catalog_message = "Claude CLI 模型别名；服务可用性以实际调用为准。"
         default_model = DEFAULT_MODELS[name]["medium"]
         if models and default_model not in {model["id"] for model in models}:
             default_model = str(
@@ -149,7 +198,7 @@ def cli_profiles() -> list[dict[str, Any]]:
                 "name": (
                     "Codex CLI · OpenAI"
                     if name == "codex"
-                    else "Claude Code CLI · Anthropic"
+                    else "Claude Code CLI"
                 ),
                 "protocol": "cli",
                 "available": bool(executable),
@@ -209,40 +258,12 @@ def _routing_warning(
                 ):
                     return message
         else:
-            if any(
-                values.get(k)
-                for k in (
-                    "ANTHROPIC_BASE_URL",
-                    "CLAUDE_CODE_USE_BEDROCK",
-                    "CLAUDE_CODE_USE_VERTEX",
-                    "CLAUDE_CODE_USE_FOUNDRY",
-                )
-            ):
-                return message
-            path = (
-                config_path
-                or Path(values.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
-                / "settings.json"
-            )
-            if path.is_file():
-                if path.stat().st_size > 256 * 1024:
-                    return "CLI 配置过大，无法验证隔离调用的服务归属。"
-                config = json.loads(path.read_text())
-                if any(
-                    config.get(k)
-                    for k in ("apiKeyHelper", "forceLoginMethod", "forceLoginOrgUUID")
-                ) or any(
-                    k in config.get("env", {})
-                    for k in (
-                        "ANTHROPIC_API_KEY",
-                        "ANTHROPIC_AUTH_TOKEN",
-                        "ANTHROPIC_BASE_URL",
-                        "CLAUDE_CODE_USE_BEDROCK",
-                        "CLAUDE_CODE_USE_VERTEX",
-                        "CLAUDE_CODE_USE_FOUNDRY",
-                    )
-                ):
-                    return message
+            if not callable(claude_connection_environment):
+                return "当前 Foundation 运行环境不支持 Claude 连接配置，请更新运行环境。"
+            try:
+                claude_connection_environment(values, config_path=config_path)
+            except ProviderFailure:
+                return "Claude 连接配置无法读取，或使用了暂不支持的认证脚本/云服务认证。请配置服务地址及 token/API key，或使用 CLI 官方登录。"
     except (OSError, ValueError, TypeError, AttributeError):
         return "无法验证 CLI 配置；请检查配置或使用明确的 API 连接。"
     return None

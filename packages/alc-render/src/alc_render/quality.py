@@ -16,6 +16,15 @@ def publication_translation_quality(publication_path) -> dict:
     for revision in state.selected_revisions:
         if revision.provenance.get("translation_quality_resolved"):
             continue
+        partial = revision.provenance.get("partial_source_text_slot_ids")
+        if partial:
+            warning_ids.update(block.block_id for block in revision.anchor.related_blocks)
+            for anchor in revision.anchor.related_blocks:
+                block = blocks.get(anchor.block_id)
+                if block is not None:
+                    issues.append({"block_id": block.block_id, "ordinal": block.ordinal + 1,
+                        "excerpt": str(block.payload.get("text", ""))[:200],
+                        "reason": "本段部分文字保留了原文，其余译文已保留。"})
         warning = revision.provenance.get("translation_quality")
         if warning is not None:
             if not isinstance(warning, Mapping) or warning.get("schema_version") != "alc.translate.quality_diagnostic.v1":

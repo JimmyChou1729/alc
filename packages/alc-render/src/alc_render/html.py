@@ -53,6 +53,7 @@ from .glossary import (
 from .markdown import (
     block_text_to_markdown,
     extract_markdown_citation_ids,
+    _legacy_markdown_citation_ids,
     read_fragment_revision,
 )
 from ._io import atomic_write_bytes
@@ -887,6 +888,7 @@ def validate_standalone_html(
         raise HTMLRenderError(
             "standalone HTML legacy structural targets are inconsistent"
         )
+    _validate_internal_link_aliases(payload, embedded_publication.source_document)
     _validate_reader_resources(publication, payload)
     fragment_revisions: list[FragmentRevision] = []
     selected = _validate_reader_revisions(
@@ -1587,7 +1589,12 @@ def _validate_selected(
                 f"fragment citation is absent from the bibliography: {unknown}"
             )
         visible_citations = extract_markdown_citation_ids(revision.markdown_body)
-        if visible_citations != revision.citation_ids:
+        if visible_citations != revision.citation_ids and not (
+            revision.citation_ids == _legacy_markdown_citation_ids(revision.markdown_body)
+            and set(visible_citations).issubset(revision.citation_ids)
+        ):
+            # Older immutable revisions declared code examples as citations.
+            # Admit only that exact historical encoding, never missing prose IDs.
             raise HTMLRenderError(
                 "fragment Markdown citations do not match citation_ids: "
                 f"{revision.fragment_id}"
@@ -2086,6 +2093,27 @@ def _authoritative_source_target_manifest(
     return manifest
 
 
+def _source_note_aliases(document: RichDocument) -> set[str]:
+    if _SOURCE_NOTES_METADATA_KEY not in document.metadata:
+        return set()
+    if not callable(_source_notes):
+        raise HTMLRenderError("ac-document lacks source note support")
+    notes = _source_notes(document)
+    if notes is None:
+        raise HTMLRenderError("source note metadata is unavailable")
+    return {str(note["note_id"]) for note in notes["notes"]}
+
+
+def _validate_internal_link_aliases(payload: Mapping[str, Any], document: RichDocument) -> None:
+    aliases = _source_note_aliases(document)
+    for key in ("legacy_bibliography_targets", "legacy_structural_targets"):
+        for descriptor in payload.get(key, ()):
+            alias = descriptor.get("alias") if isinstance(descriptor, Mapping) else None
+            if not isinstance(alias, str) or not alias.strip() or alias in aliases:
+                raise HTMLRenderError("standalone HTML internal link aliases conflict")
+            aliases.add(alias)
+
+
 def _legacy_structural_targets(
     document: RichDocument,
 ) -> tuple[dict[str, str], ...]:
@@ -2099,6 +2127,9 @@ def _legacy_structural_targets(
     else:
         for spans in _source_inline_span_groups(document):
             _collect_legacy_structural_aliases(spans, referenced)
+    # Notes have dedicated Reader targets; their aliases must not also point
+    # to source blocks through the general structural manifest.
+    referenced.difference_update(_source_note_aliases(document))
     if not referenced:
         return ()
 

@@ -307,6 +307,25 @@ class CompanionService:
             is not None
             for chapter_id in chapter_ids
         )
+        from .progress_units import unit_fractions
+        translation_units, guide_units = unit_fractions(
+            self.repository.run_directory(run_id) / "events.jsonl",
+            chapter_ids, view.snapshot.recovery_epoch,
+        )
+        translation_fraction = sum(
+            1 if _find_artifact_in_lineage(
+                artifacts, f"chapters/{c}/translation/result",
+                recovery_epoch=view.snapshot.recovery_epoch,
+            ) is not None else translation_units.get(c, 0)
+            for c in chapter_ids
+        ) / max(1, len(chapter_ids))
+        guide_fraction = sum(
+            1 if _find_artifact_in_lineage(
+                artifacts, f"chapters/{c}/guide-accepted",
+                recovery_epoch=view.snapshot.recovery_epoch,
+            ) is not None else guide_units.get(c, 0)
+            for c in chapter_ids
+        ) / max(1, len(chapter_ids))
         final_ready = view.snapshot.result_ref is not None
         if view.snapshot.status is RunStatus.SUCCEEDED:
             glossary_ready = True
@@ -409,6 +428,8 @@ class CompanionService:
             "completed_chapters": joined,
             "translated_chapters": min(translated, len(chapter_ids)),
             "guided_chapters": guided,
+            "translation_fraction": max(translation_fraction, min(translated, len(chapter_ids)) / max(1, len(chapter_ids))),
+            "guide_fraction": max(guide_fraction, guided / max(1, len(chapter_ids))),
             "glossary_ready": glossary_ready,
             "translation_required": translation_required,
             "total_chapters": len(chapter_ids),

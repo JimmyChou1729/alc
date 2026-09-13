@@ -134,3 +134,25 @@ def test_delimiter_repair_does_not_allow_content_rewrites(replacement):
     assert not repair._preserves_content(
         {"content_markdown": "Equation:\n$$\nx+y"},
         {"content_markdown": replacement})
+
+
+@pytest.mark.parametrize('command', ['sigma', 'Delta', 'mathcal', 'mathbf'])
+def test_nul_command_escape_repair_preserves_content(command):
+    left = 'Explanation $' + '\x00' + command + '{x}$ [@1].'
+    assert repair._preserves_content({'content_markdown': left},
+                                    {'content_markdown': left.replace('\x00', '\\')})
+
+
+@pytest.mark.parametrize('left', [
+    'Prose \x00sigma', '`$\x00sigma$`', '```text\n$\x00sigma$\n```',
+    '$\x00unknown{x}$', '$\x00sigma',
+])
+def test_nul_repair_does_not_change_prose_code_or_unknown_commands(left):
+    assert not repair._preserves_content({'content_markdown': left},
+                                        {'content_markdown': left.replace('\x00', '\\')})
+
+
+def test_nul_repair_rejects_changed_math_or_citations():
+    original = {'content_markdown': 'Value $\x00sigma_{12}$ [@1]'}
+    for text in [r'Value $\sigma_{13}$ [@1]', r'Value $\sigma_{12}$ [@2]']:
+        assert not repair._preserves_content(original, {'content_markdown': text})

@@ -2009,3 +2009,37 @@ select {
   font-size: 13px;
   line-height: 22px;
 }
+
+.model-refresh-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  vertical-align: middle;
+}
+.model-refresh-icon:hover {
+  color: var(--primary);
+}
+.model-refresh-icon:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.model-refresh-icon:disabled {
+  cursor: wait;
+}
+
+.model-settings-grid input:not([type="checkbox"]),
+.model-settings-grid .select-trigger-wide,
+.api-connection-form .form-grid input:not([type="checkbox"]),
+.api-connection-form .form-grid .select-trigger-wide {
+  margin-top: 7px;
+  height: 44px;
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 22px;
+}

@@ -32,17 +32,18 @@ def estimate(job, seen, elapsed, progress, pages=0, ocr_done=0):
     base = 0
     for phase, seconds in stages:
         if phase == job['phase']:
-            # Slow time-based movement is capped by this phase's budget.
-            fraction = min(1, max(0, elapsed / (seconds * 1.5)))
+            # Time spent is not evidence of completed work. Unknown phases stay
+            # at their entry boundary until progress or the next phase arrives.
+            fraction = 0
             done, count = progress.get('completed_units'), progress.get('total_units')
             if phase == 'ocr_proofread' and pages:
                 done, count = ocr_done, pages
             if phase in {'translation', 'glossary', 'ocr_proofread'} and (not progress.get('phase') or progress.get('phase') == phase or phase == 'ocr_proofread'):
                 if type(done) is int and type(count) is int and count > 0:
-                    fraction = max(fraction, min(1, done / count))
+                    fraction = min(1, max(0, done / count))
             if phase == 'companion':
                 from .timing import percentage
-                fraction = max(fraction, min(1, max(0, (percentage('companion', progress, '') - 8) / 86)))
+                fraction = min(1, max(0, (percentage('companion', progress, '') - 8) / 86))
             return min(99, math.floor(99 * (base + seconds * fraction) / total))
         base += seconds
     return 0
