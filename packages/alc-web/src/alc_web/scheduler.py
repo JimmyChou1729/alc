@@ -98,6 +98,9 @@ class Scheduler:
     def launch(self, job):
         profile = job["spec"].get("provider", {})
         env = dict(os.environ)
+        if job["spec"].get("output") == "companion":
+            from .runtime import research_host_environment
+            env = research_host_environment(env)
         env.pop("AC_LLM_PROVIDER_CONFIG", None)
         env.pop("AC_LLM_CALL_API_KEY", None)
         root = self.store.job_directory(job["id"])

@@ -318,10 +318,12 @@ class Worker:
             if manifest:
                 args += ["--pdf-source-manifest" if pdf_manifest else "--html-source-manifest", str(manifest)]
             result = self.stage("companion", args)
+            warnings.extend(companion_delivery_warnings(result))
             self.phase("render")
             result = call_cli(
                 "alc-companion", ["render", "--project-dir", str(self.project)]
             )
+            warnings.extend(companion_delivery_warnings(result))
             html = result.get("data", {}).get("delivery", {}).get("html")
             if not html:
                 raise DeliveryFailed(
@@ -462,6 +464,13 @@ class Worker:
                 "warnings": warnings,
             },
         )
+
+
+def companion_delivery_warnings(result: dict) -> list[str]:
+    codes = {item.get("code") for item in result.get("warnings", []) if isinstance(item, dict)}
+    if codes & {"provider_degraded_source_only", "web_render_degraded_source_only"}:
+        return ["本次仅交付保留原文版本，未完成翻译与伴读。请检查模型调用或渲染错误后重试。"]
+    return []
 
 
 def execute(project: str, job_id: str, generation: int | None = None):

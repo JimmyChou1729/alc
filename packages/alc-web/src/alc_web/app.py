@@ -24,7 +24,7 @@ from .metrics import summarize
 from .models import ControlInput, JobInput, ProviderInput, ResourceInput, OCRInput
 from .providers import (
     SecretVault,
-    cli_profiles,
+    CLIProfileCache,
     present_profile,
     resolve_profile,
     runtime_profile,
@@ -64,7 +64,7 @@ def create_app(
     store = Store(project)
     vault = SecretVault(store.project)
     cookie_name = "alc_session_" + hashlib.sha256(origin.encode()).hexdigest()[:12]
-    profiles = cli_profiles() if discovered is None else discovered
+    profiles = CLIProfileCache(discovered)
     scheduler = Scheduler(store, vault)
     from alc_render.tts_engine import TTSManager
     tts_manager = TTSManager()
@@ -164,7 +164,7 @@ def create_app(
         return response
 
     @app.get("/api/settings")
-    def settings():
+    def settings(refresh_models: bool = False):
         custom = [
             {
                 **present_profile(p),
@@ -177,7 +177,7 @@ def create_app(
             for p in store.setting("providers", {}).values()
         ]
         return {
-            "providers": profiles + custom,
+            "providers": profiles.get(force=refresh_models) + custom,
             "resources": {
                 **ResourceInput().model_dump(),
                 **store.setting("resources", {}),
@@ -294,7 +294,7 @@ def create_app(
         if value.ocr_proofread and (value.pdf_mode != "mineru" or spec["ocr"] is None or not may_be_pdf):
             raise HTTPException(400, "OCR proofreading requires a PDF source and configured MinerU.")
         if value.output != "source" or value.ocr_proofread:
-            profile = resolve_profile(store, value.provider_id, profiles)
+            profile = resolve_profile(store, value.provider_id, profiles.get())
             if profile["protocol"] == "cli":
                 spec["model"] = (
                     value.model or profile.get("default_model") or profile["model"]

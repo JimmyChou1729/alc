@@ -9,6 +9,7 @@ import { createRoot } from "react-dom/client";
 import { createPortal } from "react-dom";
 import {
   ArrowRight,
+  RefreshCw,
   Terminal,
   Cable,
   Pencil,
@@ -62,7 +63,7 @@ type Provider = {
     default_reasoning_effort?: string | null;
     provider_default?: boolean;
   }>;
-  model_catalog_status?: "available" | "configured" | "unavailable";
+  model_catalog_status?: "available" | "configured" | "unavailable" | "stale";
   model_catalog_message?: string | null;
   available?: boolean;
   compatible?: boolean;
@@ -186,7 +187,7 @@ function taskPhaseLabel(job: { phase: string; detail?: Record<string, any> }) {
       publication: "生成阅读文档",
       completed: "准备交付",
     };
-    return labels[job.detail?.progress?.phase] || "准备翻译与伴读";
+    return labels[job.detail?.progress?.phase] || "准备原文";
   }
   return phases[job.phase] || job.phase;
 }
@@ -729,8 +730,11 @@ function App() {
       loading.current = false;
     }
   }
-  async function refreshSettings() {
-    setSettings(await api<Settings>("/settings"));
+  async function refreshSettings(force = false) {
+    const next = await api<Settings>(
+      force ? "/settings?refresh_models=true" : "/settings",
+    );
+    setSettings(next);
   }
   useEffect(() => {
     let alive = true;
@@ -765,6 +769,7 @@ function App() {
   useEffect(() => {
     if (!sessionReady) return;
     if (view === "new" || view === "settings" || view === "tts-lab") {
+      void refreshSettings().catch((e) => setError((e as Error).message));
       setJob(null);
       return;
     }
@@ -967,6 +972,7 @@ function App() {
         )}
         {view === "new" && (
           <NewJob
+            onRefreshModels={() => refreshSettings(true)}
             settings={settings}
             onError={setError}
             onOpenSettings={() => navigate("settings")}
@@ -981,6 +987,7 @@ function App() {
         )}
         {view === "settings" && (
           <SettingsPage
+            onRefreshModels={() => refreshSettings(true)}
             settings={settings}
             onSaved={async () => {
               await refreshSettings();
@@ -993,33 +1000,52 @@ function App() {
           <div className="page detail-page">
             <div className="eyebrow">来自 Agent 插件</div>
             <h1>{job.display_title}</h1>
-            <div className="actions task-management">
-              <button
-                className="text-button"
-                disabled={busy}
-                onClick={() =>
-                  setTaskDialog({
-                    kind: "rename",
-                    id: job.id,
-                    title: job.display_title || job.spec.title,
-                  })
-                }
-              >
-                <Pencil size={15} /> 重命名
-              </button>
-              <button
-                className="text-button"
-                disabled={busy}
-                onClick={() =>
-                  setTaskDialog({
-                    kind: "delete",
-                    id: job.id,
-                    title: job.display_title || job.spec.title,
-                  })
-                }
-              >
-                <Trash2 size={15} color="#c64d4d" /> 删除任务
-              </button>
+            <div className="detail-meta-row">
+              <p>
+                {job.spec.target_language}
+                {job.spec.source_url &&
+                  /^https?:\/\//i.test(job.spec.source_url) && (
+                    <>
+                      {job.spec.target_language && <span>·</span>}
+                      <a
+                        className="source-tag"
+                        href={job.spec.source_url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {job.spec.source_url}
+                      </a>
+                    </>
+                  )}
+              </p>
+              <div className="actions task-management">
+                <button
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() =>
+                    setTaskDialog({
+                      kind: "rename",
+                      id: job.id,
+                      title: job.display_title || job.spec.title,
+                    })
+                  }
+                >
+                  <Pencil size={15} /> 重命名
+                </button>
+                <button
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() =>
+                    setTaskDialog({
+                      kind: "delete",
+                      id: job.id,
+                      title: job.display_title || job.spec.title,
+                    })
+                  }
+                >
+                  <Trash2 size={15} color="#c64d4d" /> 删除任务
+                </button>
+              </div>
             </div>
             <section className="card">
               <p>任务状态：{states[job.state]}</p>
@@ -1578,19 +1604,30 @@ function OcrNotices({ jobId }: { jobId: string }) {
           ))}
           {Boolean(data.unapplied_items?.length) && (
             <section>
-              <h3>未能应用的修订（{data.unapplied_items.length} 项）</h3>
+              <h3>未完成的校对项（{data.unapplied_items.length} 项）</h3>
               <p className="muted">
                 以下内容保留了原识别结果，可对照 PDF
-                查看。它们是未完成的修改，不是模型无法判断的歧义。
+                查看。下方按未应用修订、数学内容、脚注和标点等类型列出。
               </p>
               {data.unapplied_items.map((item: any, index: number) => (
                 <section className="ocr-notice-item" key={index}>
-                  <h3>第 {item.page} 页</h3>
+                  <h3>
+                    第 {item.page} 页 · {item.category_label || "修订未应用"}
+                  </h3>
                   {item.excerpt && <blockquote>{item.excerpt}</blockquote>}
                   <p>
                     {item.display_reason ||
                       "此项修订未能应用，已保留原识别结果，请对照原 PDF 核对。"}
                   </p>
+                  {item.after != null && (
+                    <details>
+                      <summary>查看模型建议</summary>
+                      <p className="muted">
+                        建议尚未应用，不代表已经确认正确。
+                      </p>
+                      <blockquote>{item.after || "（建议删除）"}</blockquote>
+                    </details>
+                  )}
                 </section>
               ))}
             </section>
@@ -1601,13 +1638,43 @@ function OcrNotices({ jobId }: { jobId: string }) {
   );
 }
 
+function ModelRefresh({ onRefresh }: { onRefresh: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  return (
+    <button
+      type="button"
+      className="model-refresh-icon"
+      aria-label={busy ? "正在刷新模型列表" : "刷新模型列表"}
+      title={message || (busy ? "正在刷新模型列表" : "刷新模型列表")}
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        setMessage("");
+        try {
+          await onRefresh();
+          setMessage("已更新调用方式与模型信息");
+        } catch {
+          setMessage("刷新失败，请稍后重试；当前选择已保留。");
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {busy ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}
+    </button>
+  );
+}
+
 function NewJob({
+  onRefreshModels,
   settings,
   onCreated,
   onError,
   onOpenSettings,
 }: {
   settings: Settings | null;
+  onRefreshModels: () => Promise<void>;
   onCreated: (job: Job) => void;
   onError: (error: string) => void;
   onOpenSettings: () => void;
@@ -1630,6 +1697,7 @@ function NewJob({
     )?.id || "custom";
   const [provider, setProvider] = useState("codex");
   const [model, setModel] = useState("");
+  const [manualModel, setManualModel] = useState(false);
   const [effort, setEffort] = useState("");
   const [intent, setIntent] = useState("");
   const [pdfMode, setPdfMode] = useState<"mineru" | "text_only">("mineru");
@@ -2046,9 +2114,10 @@ function NewJob({
         </section>
         {(output !== "source" || ocrProofread) && (
           <section className="card">
-            <div className="section-title">
+            <div className="section-title" style={{ flexWrap: "wrap" }}>
               <span className="step">03</span>
               <h2>模型设置</h2>
+              <ModelRefresh onRefresh={onRefreshModels} />
             </div>
             <div className="form-grid model-settings-grid">
               <label>
@@ -2058,6 +2127,7 @@ function NewJob({
                   value={provider}
                   onChange={(e) => {
                     setProvider(e.target.value);
+                    setManualModel(false);
                     setModel("");
                     setEffort("");
                   }}
@@ -2083,12 +2153,15 @@ function NewJob({
               </label>
               <label>
                 模型（model）
-                {models.length ? (
+                {models.length && !manualModel ? (
                   <StyledSelect
                     aria-label="模型（model）"
                     value={model}
                     onChange={(e) => {
-                      setModel(e.target.value);
+                      if (e.target.value === "__custom_model__") {
+                        setManualModel(true);
+                        setModel("");
+                      } else setModel(e.target.value);
                       setEffort("");
                     }}
                   >
@@ -2105,6 +2178,9 @@ function NewJob({
                           {item.name}
                         </option>
                       ))}
+                    {selected?.id === "claude" && (
+                      <option value="__custom_model__">自定义模型…</option>
+                    )}
                   </StyledSelect>
                 ) : (
                   <input
@@ -2161,11 +2237,7 @@ function NewJob({
                     rows={3}
                     value={intent}
                     onChange={(e) => setIntent(e.target.value)}
-                    placeholder={
-                      output === "companion"
-                        ? "例如：假设我了解本科物理，重点解释观测方法和省略的推导。"
-                        : "例如：保留领域惯用术语，行文正式简洁。"
-                    }
+                    placeholder="例如：保留领域惯用术语，行文正式简洁。"
                   />
                   <span className="field-note">
                     {output === "companion"
@@ -2474,11 +2546,13 @@ function OcrSettingsCard({
 }
 
 function SettingsPage({
+  onRefreshModels,
   settings,
   onSaved,
   onError,
 }: {
   settings: Settings | null;
+  onRefreshModels: () => Promise<void>;
   onSaved: () => Promise<void>;
   onError: (value: string) => void;
 }) {
@@ -2613,6 +2687,7 @@ function SettingsPage({
         <div className="section-title">
           <Settings2 size={19} />
           <h2>当前可用调用方式</h2>
+          <ModelRefresh onRefresh={onRefreshModels} />
         </div>
         <div className="provider-list">
           {settings?.providers.map((p) => (
@@ -2665,7 +2740,7 @@ function SettingsPage({
           ))}
         </div>
       </section>
-      <form ref={editForm} onSubmit={save} className="card">
+      <form ref={editForm} onSubmit={save} className="card api-connection-form">
         <div className="section-title">
           <Plus size={19} />
           <h2>{editingId ? "编辑 API 连接" : "添加 API 连接"}</h2>
