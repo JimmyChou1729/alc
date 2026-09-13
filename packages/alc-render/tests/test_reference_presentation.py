@@ -60,5 +60,5 @@ def test_reference_locations_render_and_export_without_rewriting_ids():
     console.log('reference presentation verified');
 }());
 '''
-    result = subprocess.run([node,'-e',script],capture_output=True,text=True)
+    result = subprocess.run([node,'-'],input=script,capture_output=True,text=True)
     assert result.returncode == 0, result.stdout+result.stderr
