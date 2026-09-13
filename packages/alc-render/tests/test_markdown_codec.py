@@ -176,3 +176,37 @@ def test_markdown_citation_extractor_is_ordered_unique_and_literal() -> None:
         "second:part",
         "third",
     )
+
+
+@pytest.mark.parametrize("literal", [
+    "```text\nExample [@example]\n```",
+    "~~~~text\nExample [@example]\n~~~~",
+    "````text\n``` [@example]\n````",
+    "    Example [@example]",
+    "`[@example]`",
+    "``code ` [@example]``",
+    r"\[@example]",
+    "<div>[@example]</div>",
+])
+def test_literal_citation_markers_do_not_bind_bibliography(literal):
+    assert extract_markdown_citation_ids(literal + "\n\nActual [@source].") == ("source",)
+
+
+def test_citations_in_prose_links_and_blockquotes_keep_order():
+    markdown = (
+        "> Actual [@first].\n\n"
+        "- Another **[@second]** and [linked [@third]](https://example.com).\n\n"
+        "[destination](https://example.com/[@not-a-citation]) [@first]\n"
+        r"\\[@fourth]"
+    )
+    assert extract_markdown_citation_ids(markdown) == ("first", "second", "third", "fourth")
+
+
+def test_retained_control_character_candidate_has_no_live_citations():
+    markdown = (
+        "待核对：此内容未通过自动验收，已保留供编辑。 / Retained for review and editing.\n\n"
+        "```text\n"
+        r"前文已经得到 $\u001dDelta_N\to0$，因此误差消失。[@1]"
+        "\n```"
+    )
+    assert extract_markdown_citation_ids(markdown) == ()
