@@ -100,7 +100,9 @@ from .editorial_review import (
     unavailable_editorial_review,
 )
 from .content_recovery import recover_chapter_guide
+from .late_delivery import completed_chapters, publish_fallback
 from .guide_repair import repair_guide_candidate
+from .reference_preparation import prepare_guide_references
 from .generation_validation import (
     CompanionContentError,
     validate_author_identity,
@@ -108,6 +110,7 @@ from .generation_validation import (
     validate_chapter_guide_review_audit,
 )
 from .host_broker import CompanionSourceHostBroker
+from .research_host import ResearchHost, ResearchBroker
 from .chapter_evidence import ChapterEvidenceError, evidence_instruction, evidence_policy, preload_chapter
 from .llm_runtime import (
     CompanionLLMError,
@@ -263,6 +266,7 @@ class CompanionBuildHandler:
                 host_broker=self._source_host_broker,
             )
         self.task_service = BudgetedTaskService(task_service or LLMTaskService(), execution.workers)
+        self._research_host = ResearchHost(self.llm_options.runtime_environment)
         self.translation_adapter = translation_adapter or AlcTranslateAdapter(
             self.task_service,
             document_cache_root=self.execution.document_cache_root,
@@ -311,6 +315,22 @@ class CompanionBuildHandler:
         self._preload_evidence = evidence_policy(
             context, self.execution.preload_chapter_evidence,
         )
+        delivery_state = None
+
+        def fail(error):
+            if delivery_state is not None and not (
+                (error.code.endswith("_mismatch") and error.code not in {
+                    "chapter_join_mismatch", "chapter_guide_replay_mismatch",
+                }) or error.code.startswith("translation_")
+            ):
+                try:
+                    recovered = self._recover_delivery(context, reason=error.code, **delivery_state)
+                    if recovered is not None:
+                        return recovered
+                except (KeyError, TypeError, ValueError) as fallback_error:
+                    context.events.emit("delivery_fallback_unavailable", {"type": type(fallback_error).__name__})
+            return Failed(error)
+
         try:
             resume_input = outer_resume_input(context)
             prepared_source = self._prepare_source(context, resume_input)
@@ -461,6 +481,10 @@ class CompanionBuildHandler:
                 glossary = _empty_glossary(source)
             self._freeze_glossary_ready(context, glossary)
 
+            delivery_state = dict(source=source, chapters=chapters, title=title,
+                authors=authors, language=language, reader_labels=reader_labels,
+                translation_required=translation_required, glossary=glossary)
+
             chapters_outcome = self._chapter_lanes(
                 context,
                 resume_input,
@@ -473,6 +497,10 @@ class CompanionBuildHandler:
                 model_inputs=document_inputs,
             )
             if isinstance(chapters_outcome, (Paused, Failed)):
+                if isinstance(chapters_outcome, Failed):
+                    recovered = fail(chapters_outcome.error)
+                    if isinstance(recovered, Succeeded):
+                        return recovered
                 source_only = self._provider_source_only(
                     context,
                     source,
@@ -492,6 +520,7 @@ class CompanionBuildHandler:
                     context.events.emit("partial_reader_unavailable", {"type": type(exc).__name__})
                 return chapters_outcome
 
+            delivery_state["accepted"] = chapters_outcome
             editorial_report = None
             if (
                 self.recipe.review_rounds > 0
@@ -505,6 +534,10 @@ class CompanionBuildHandler:
                     source_inputs=document_inputs,
                 )
                 if isinstance(editorial_outcome, (Paused, Failed)):
+                    if isinstance(editorial_outcome, Failed):
+                        recovered = fail(editorial_outcome.error)
+                        if isinstance(recovered, Succeeded):
+                            return recovered
                     source_only = self._provider_source_only(
                         context,
                         source,
@@ -579,13 +612,13 @@ class CompanionBuildHandler:
             )
             return Succeeded(result_ref)
         except ChapterEvidenceError as exc:
-            return Failed(RunError(exc.code, str(exc)))
+            return fail(RunError(exc.code, str(exc)))
         except CompanionContentError as exc:
-            return Failed(RunError(exc.code, str(exc)))
+            return fail(RunError(exc.code, str(exc)))
         except CompanionPublicationError as exc:
-            return Failed(RunError("companion_publication_invalid", str(exc)))
+            return fail(RunError("companion_publication_invalid", str(exc)))
         except EditorialReviewError as exc:
-            return Failed(RunError("companion_editorial_review_invalid", str(exc)))
+            return fail(RunError("companion_editorial_review_invalid", str(exc)))
         except CachedDocumentError as exc:
             return Failed(
                 RunError(
@@ -594,11 +627,36 @@ class CompanionBuildHandler:
                 )
             )
         except RichTextError as exc:
-            return Failed(RunError("learning_markdown_invalid", str(exc)))
+            return fail(RunError("learning_markdown_invalid", str(exc)))
         except CompanionLLMError as exc:
-            return Failed(RunError(exc.code, str(exc)))
+            return fail(RunError(exc.code, str(exc)))
         except (KeyError, TypeError, ValueError) as exc:
-            return Failed(RunError("companion_content_invalid", str(exc)))
+            return fail(RunError("companion_content_invalid", str(exc)))
+
+    def _recover_delivery(self, context, *, source, chapters, title, authors,
+                          language, reader_labels, translation_required, reason, glossary, accepted=()):
+        values = completed_chapters(context, chapters, source, self.request.target_language,
+                                    translation_required, accepted)
+        if values is None:
+            return None
+        glossary_contracts = _glossary_contracts(glossary, source) if translation_required else ()
+        def references(values):
+            guided = tuple(chapter for chapter in chapters if any(
+                item["chapter_id"] == chapter.chapter_id and item["learning_units"] for item in values))
+            bibliography = _chapter_reference_contracts(context, guided,
+                cited_ids=_first_visible_citation_ids(values))
+            return _canonicalize_references(values, bibliography)
+        published = publish_fallback(context, publisher=publish_companion,
+            reference_resolver=references, values=values, reason=reason,
+            source=source, title=title, authors=authors,
+            source_language=str(language["language_tag"]), target_language=self.request.target_language,
+            translation_mode="enabled" if translation_required else "skipped",
+            reader_labels=reader_labels, glossary=glossary_contracts,
+            glossary_unanchored_ids=_unanchored_glossary_ids(glossary, glossary_contracts),
+            glossary_fallback_summary=glossary.get("fallback_summary"),
+            reviewed_supplements=self.request.reviewed_supplements,
+            document_cache_root=self.execution.document_cache_root)
+        return Succeeded(context.artifacts.publish_json(_RESULT_ARTIFACT, build_result_document(published)))
 
     def _provider_source_only(
         self,
@@ -1546,6 +1604,7 @@ class CompanionBuildHandler:
                 empty_guide = validate_chapter_guide(
                     program_candidate,
                     chapter_id=chapter.chapter_id,
+                    chapter_title=chapter.title,
                     block_ids=chapter.block_ids,
                     chapter_anchor_block_id=(
                         chapter.display_anchor_block_id
@@ -1600,6 +1659,22 @@ class CompanionBuildHandler:
                     "for output anchors and checked numbers. Numbers printed in source "
                     "text or frozen translation headings are not batch-local anchors."
                 )
+            if self.recipe.chapter_guide_prompt == "alc.companion.chapter-learning-prompt.v24":
+                input_ids = {item.input_id for item in model_inputs}
+                if translation_indexes is not None:
+                    input_ids.add(_chapter_translation_input_id(owner_id))
+                prepared = prepare_guide_references(
+                    self.task_service, context, guide_context=guide_context,
+                    model=self.recipe.model,
+                    inputs=tuple(item for item in guide_model_inputs if item.input_id in input_ids),
+                    options=_guide_llm_options(self.llm_options, self.recipe.model, self._research_host),
+                    resume_input=resume_input,
+                )
+                if isinstance(prepared, Paused):
+                    return prepared
+                if isinstance(prepared, LLMFailed):
+                    return Failed(run_error_from_failure(prepared))
+                guide_context["prepared_references"] = prepared.value
             guide_contexts[chapter.chapter_id] = guide_context
             guide_loops.append(
                 LoopSpec(
@@ -1652,6 +1727,13 @@ class CompanionBuildHandler:
                 )
             )
 
+        context.events.emit("guide_progress_plan", {
+            "recovery_epoch": context.recovery_epoch,
+            "execution_scope": execution_scope,
+            "owners": {loop.loop_id: guide_owners[loop.loop_id]
+                       for loop in guide_loops},
+        })
+
         if existing_guide_batch is not None and context.recovery_epoch:
             prior_ids = {loop.loop_id for loop in decode_batch_result(read_json(
                 context, existing_guide_batch, "prior guide topology"
@@ -1682,7 +1764,7 @@ class CompanionBuildHandler:
                     options=ProposerReviewerExecutionOptions(
                         max_concurrent_loops=self.execution.workers,
                         max_concurrent_workers=1,
-                        llm=self.llm_options,
+                        llm=_guide_llm_options(self.llm_options, self.recipe.model, self._research_host),
                     ),
                 )
                 if isinstance(guide_outcome, (Paused, Failed)):
@@ -1713,6 +1795,7 @@ class CompanionBuildHandler:
                             )
                         accepted = recover_chapter_guide(
                             proposal, chapter_id=chapter_id, block_ids=chapter.block_ids,
+                            chapter_title=chapter.title,
                             chapter_anchor_block_id=chapter.display_anchor_block_id,
                             section_block_ids=chapter.section_block_ids,
                         )
@@ -1843,6 +1926,7 @@ class CompanionBuildHandler:
                         accepted_guide = validate_chapter_guide(
                             candidate,
                             chapter_id=chapter_id,
+                            chapter_title=chapter.title,
                             block_ids=chapter.block_ids,
                             chapter_anchor_block_id=(
                                 chapter.display_anchor_block_id
@@ -1854,6 +1938,7 @@ class CompanionBuildHandler:
                             return validate_chapter_guide(
                                 normalize_batch_numbers(raw, chapter, parent),
                                 chapter_id=chapter_id, block_ids=chapter.block_ids,
+                                chapter_title=chapter.title,
                                 chapter_anchor_block_id=chapter.display_anchor_block_id,
                                 section_block_ids=chapter.section_block_ids,
                             )
@@ -1871,6 +1956,8 @@ class CompanionBuildHandler:
                         accepted_guide = accept_repair(repaired) if repaired is not None else recover_chapter_guide(
                             candidate, chapter_id=chapter_id,
                             block_ids=chapter.block_ids,
+                            source_review_unconfirmed=exc.code == "chapter_guide_review_audit_invalid",
+                            chapter_title=chapter.title,
                             chapter_anchor_block_id=chapter.display_anchor_block_id,
                             section_block_ids=chapter.section_block_ids,
                         )
@@ -1899,6 +1986,7 @@ class CompanionBuildHandler:
                     candidate = loop_results[chapter_id].final_proposals.get("guide-proposer")
                     accepted_guide = recover_chapter_guide(
                         candidate, chapter_id=chapter_id, block_ids=chapter.block_ids,
+                        chapter_title=chapter.title,
                         chapter_anchor_block_id=chapter.display_anchor_block_id,
                         section_block_ids=chapter.section_block_ids,
                     )
@@ -2183,6 +2271,7 @@ class CompanionBuildHandler:
                      or self.llm_options.profile is LLMExecutionProfile.LOCAL_APP)):
             evidence = preload_chapter(context, self._source_host_broker, chapter.chapter_id, source_commands)
         result = {
+            **({"research_tools": self._research_host.instructions} if self._research_host.instructions else {}),
             **({"verified_chapter_evidence": evidence} if evidence is not None else {}),
             "target_language": self.request.target_language,
             "language_result": dict(language_identity),
@@ -3192,6 +3281,16 @@ def _llm_input(
 
 def _chapter_translation_input_id(chapter_id: str) -> str:
     return f"companion-translation-index-{chapter_id}"
+
+
+def _guide_llm_options(options, model, research_host=None):
+    if research_host is not None and research_host.instructions and options.host_broker is not None:
+        options = replace(options, host_broker=ResearchBroker(options.host_broker, research_host))
+    # Native search is available to guide workers; translation and OCR retain
+    # the caller's existing network policy.
+    if options.profile is LLMExecutionProfile.LOCAL_APP and model.provider in {"codex", "auto"}:
+        return replace(options, internet=True)
+    return options
 
 
 def _companion_llm_options(

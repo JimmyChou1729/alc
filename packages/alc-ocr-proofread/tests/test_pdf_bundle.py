@@ -201,6 +201,8 @@ def test_native_candidate_preserves_source_assets_and_requires_review(tmp_path):
             profile=LLMExecutionProfile.LOCAL_APP, internet=True
         ),
     )
+    assert "Resolve every occurrence against the unmodified original page" in tasks.requests[0].prompt
+    assert "Apply edits\nsequentially" not in tasks.requests[0].prompt
     assert result["status"] == "reviewable"
     assert result["proofread"] is False
     assert result["approval_required"] is True
@@ -877,3 +879,333 @@ def test_bundle_cli_reasoning_effort_reaches_page_requests(tmp_path, monkeypatch
     ]) == 0, capsys.readouterr().out
     assert len(tasks.requests) == 2
     assert all(request.model.reasoning_effort == "high" for request in tasks.requests)
+
+
+def test_batch_occurrences_use_original_page(tmp_path):
+    from alc_ocr_proofread.pdf_bundle import _apply_edits
+    path = bundle(tmp_path)
+    manifest = json.loads(path.read_text())
+    source = (path.parent / "source.html").read_text()
+    edits = [{"target": "text", "before": "Helo", "after": "Hello", "occurrence": n} for n in (1, 2)]
+    corrected, accepted, rejected = _apply_edits(source, manifest, 1, edits)
+    assert "Hello Hello" in corrected
+    assert len(accepted) == 2 and not rejected
+    reverse, _, _ = _apply_edits(source, manifest, 1, list(reversed(edits)))
+    assert reverse == corrected
+
+
+def test_batch_conflicts_and_combined_empty_nodes_are_not_applied(tmp_path):
+    from alc_ocr_proofread.pdf_bundle import _apply_edits
+    path = bundle(tmp_path, pages=['<p id="p1">ab</p>'])
+    manifest = json.loads(path.read_text())
+    source = (path.parent / "source.html").read_text()
+    edits = [{"target": "text", "before": x, "after": "", "occurrence": 1} for x in ('a', 'b')]
+    corrected, accepted, rejected = _apply_edits(source, manifest, 1, edits)
+    assert corrected == source and not accepted
+    assert {d['code'] for d in rejected} == {'edit_empty_node'}
+    edits = [{"target": "text", "before": x, "after": "x", "occurrence": 1} for x in ('a', 'ab')]
+    corrected, accepted, rejected = _apply_edits(source, manifest, 1, edits)
+    assert corrected == source and not accepted
+    assert {d['code'] for d in rejected} == {'edit_overlap'}
+
+
+def test_duplicate_edits_apply_once_but_different_replacements_conflict(tmp_path):
+    from alc_ocr_proofread.pdf_bundle import _apply_edits
+    path = bundle(tmp_path)
+    manifest = json.loads(path.read_text()); source = (path.parent / 'source.html').read_text()
+    edit = dict(target='text', before='Helo', after='Hello', occurrence=1)
+    result, accepted, rejected = _apply_edits(source, manifest, 1, [edit, {**edit, 'reason': 'duplicate'}])
+    assert len(accepted) == 1 and not rejected and 'Hello Helo' in result
+    result, accepted, rejected = _apply_edits(source, manifest, 1, [edit, {**edit, 'after': 'Hi'}])
+    assert result == source and not accepted and len(rejected) == 2
+    result, accepted, rejected = _apply_edits(source, manifest, 1, [edit, edit], compatible=False)
+    assert result == source and not accepted and len(rejected) == 2
+
+
+@pytest.mark.parametrize('prefix', ['', '<math alttext="prefix x &amp; y"></math>'])
+def test_entity_compatibility_requires_unique_whole_math_node(tmp_path, prefix):
+    from alc_ocr_proofread.pdf_bundle import _apply_edits
+    path = bundle(tmp_path, pages=[f'<p id="p1">{prefix}<math alttext="x &amp; y"></math></p>'])
+    manifest = json.loads(path.read_text()); source = (path.parent / 'source.html').read_text()
+    edit = dict(target='math_alttext', before='x &amp; y', after='x & z', occurrence=1)
+    result, accepted, rejected = _apply_edits(source, manifest, 1, [edit])
+    if prefix:
+        assert not accepted and rejected and result == source
+    else:
+        assert len(accepted) == 1 and not rejected and 'x &amp; z' in result
+        assert accepted[0]['proposed_before'] == edit['before']
+        assert accepted[0]['before'] == 'x & y'
+
+
+@pytest.mark.parametrize("verification", ["approve", "reject", "failure", "duplicate"])
+def test_inline_structure_independent_verification_is_bounded(tmp_path, verification):
+    manifest = bundle(
+        tmp_path, pages=['<p id="p1">Helo <math alttext="P_n"></math>1 end.</p>']
+    )
+    proposal = {
+        "proposal_id": "a",
+        "anchor_id": "p1",
+        "before_html": '<math alttext="P_n"></math>1',
+        "after": [{"kind": "math", "value": "P_{n-1}"}],
+        "reason": "Subscript is printed together",
+    }
+
+    class InlineTasks(Tasks):
+        def execute_or_resume(self, context, request, **kwargs):
+            if "inline-verify" in request.task_id:
+                self.requests.append(request)
+                if verification == "failure":
+                    raise RuntimeError("Provider unavailable")
+                decisions = [
+                    {
+                        "proposal_id": "a",
+                        "approved": verification != "reject",
+                        "reason": "Image comparison",
+                    }
+                ]
+                if verification == "duplicate":
+                    decisions *= 2
+                return LLMCompleted(
+                    {"decisions": decisions}, "test-vision", "test-model", None, None
+                )
+            return super().execute_or_resume(context, request, **kwargs)
+
+    tasks = InlineTasks(
+        {1: {**page_output(edit("Helo", "Hello")), "structure_proposals": [proposal]}}
+    )
+    service, snapshot, result = run(tmp_path, manifest, tasks)
+    assert "Hello" in result["corrected_html"]
+    assert len([r for r in tasks.requests if "inline-verify" in r.task_id]) == 1
+    assert bool(result["pages"][0]["structure_edits"]) is (verification == "approve")
+    assert ('alttext="P_{n-1}"' in result["corrected_html"]) is (
+        verification == "approve"
+    )
+    if verification == "approve":
+        from alc_ocr_proofread.pdf_bundle_edit import (
+            editable_candidate,
+            revise_candidate,
+        )
+        from alc_ocr_proofread.pdf_bundle_delivery import adopt_pdf_candidate
+
+        view = editable_candidate(manifest, result)
+        assert view["manual_editing_supported"] is False
+        assert all(s["original_text"] == "" for s in view["pages"][0]["segments"])
+        with pytest.raises(Exception, match="Reader"):
+            revise_candidate(manifest, result, edits={"1:0": "Changed"}, resolutions={})
+        adopted = adopt_pdf_candidate(
+            manifest,
+            result,
+            candidate_digest=result["candidate_digest"],
+            output_dir=tmp_path / "adopted",
+        )
+        assert (
+            verify_pdf_source_bundle(adopted["manifest"])["proofreading"]["review_mode"]
+            == "model"
+        )
+    # Durable successful page reuse must not repeat the independent verification.
+    service.resume(snapshot.run_id, task_service=tasks, renderer=Renderer())
+    assert len([r for r in tasks.requests if "inline-verify" in r.task_id]) == 1
+
+
+def test_historical_run_does_not_enable_inline_calls(tmp_path):
+    from ac_jobs import RunSpec
+
+    manifest = bundle(tmp_path, pages=['<p id="p1">Text</p>'])
+    service = PDFBundleProofreadService(tmp_path / "project")
+    prepared = service.prepare(manifest, provider="test-vision", model="test-model")
+    spec = service.repository.read_spec(prepared.run_id)
+    old = {
+        k: v for k, v in spec.semantic_input.items() if k != "inline_structure_policy"
+    }
+    legacy = service.repository.create(RunSpec("old-inline-policy", spec.handler, old))
+    tasks = Tasks({1: page_output()})
+    snapshot = service.execute(legacy.run_id, task_service=tasks, renderer=Renderer())
+    assert snapshot.status is RunStatus.SUCCEEDED
+    assert len(tasks.requests) == 1
+    assert "structure_proposals" not in tasks.requests[0].output.schema["properties"]
+
+
+def test_inline_verification_pause_is_preserved(tmp_path):
+    class PausingTasks(Tasks):
+        def execute_or_resume(self, context, request, **kwargs):
+            if "inline-verify" in request.task_id:
+                return LLMPaused(ResumeReason.EXECUTION_INTERRUPTED, "inline-retry")
+            return super().execute_or_resume(context, request, **kwargs)
+
+    manifest = bundle(tmp_path, pages=['<p id="p1">word</p>'])
+    service = PDFBundleProofreadService(tmp_path / "project")
+    prepared = service.prepare(manifest)
+    tasks = PausingTasks(
+        {
+            1: {
+                **page_output(),
+                "structure_proposals": [
+                    {
+                        "proposal_id": "a",
+                        "anchor_id": "p1",
+                        "before_html": "word",
+                        "after": [{"kind": "text", "value": "word."}],
+                        "reason": "Printed punctuation",
+                    }
+                ],
+            }
+        }
+    )
+    result = service.execute(prepared.run_id, task_service=tasks, renderer=Renderer())
+    assert result.status is RunStatus.PAUSED
+    assert result.awaiting.details["stage"] == "inline_verify"
+
+
+@pytest.mark.parametrize("failure", ["runtime", "parse"])
+def test_inline_failure_retains_ordinary_edits(tmp_path, monkeypatch, failure):
+    import sys
+
+    manifest = bundle(tmp_path, pages=['<p id="p1">Helo word</p>'])
+    proposal = {
+        "proposal_id": "a",
+        "anchor_id": "p1",
+        "before_html": "word",
+        "after": [{"kind": "math", "value": "D"}],
+        "reason": "Printed D",
+    }
+
+    class ApprovingTasks(Tasks):
+        def execute_or_resume(self, context, request, **kwargs):
+            if "inline-verify" in request.task_id:
+                return LLMCompleted(
+                    {
+                        "decisions": [
+                            {"proposal_id": "a", "approved": True, "reason": "Visible"}
+                        ]
+                    },
+                    "test",
+                    "vision",
+                    None,
+                    None,
+                )
+            return super().execute_or_resume(context, request, **kwargs)
+
+    if failure == "runtime":
+        monkeypatch.setitem(sys.modules, "ac_document.pdf_inline", None)
+    else:
+        validate = PDFBundleProofreadService._validate_corrected
+
+        def fail_structure(self, source, *args):
+            if '<math alttext="D">' in source:
+                raise ValueError("Parser rejects inline structure")
+            return validate(self, source, *args)
+
+        monkeypatch.setattr(
+            PDFBundleProofreadService, "_validate_corrected", fail_structure
+        )
+    tasks = ApprovingTasks(
+        {1: {**page_output(edit("Helo", "Hello")), "structure_proposals": [proposal]}}
+    )
+    _, _, result = run(tmp_path, manifest, tasks)
+    assert "Hello word" in result["corrected_html"]
+    assert not result.get("inline_repairs")
+    assert result["pages"][0]["diagnostics"]
+
+
+@pytest.mark.parametrize(
+    "code,reason,expected",
+    [
+        ("output_invalid", ResumeReason.SUPERVISION_REQUIRED, RunStatus.SUCCEEDED),
+        (
+            "output_formatting_failed",
+            ResumeReason.SUPERVISION_REQUIRED,
+            RunStatus.SUCCEEDED,
+        ),
+        ("auth_required", ResumeReason.INTERACTION_REQUIRED, RunStatus.PAUSED),
+        ("output_invalid", ResumeReason.EXECUTION_INTERRUPTED, RunStatus.PAUSED),
+        ("stopped", None, RunStatus.PAUSED),
+    ],
+)
+def test_inline_optional_content_failure_preserves_control(
+    tmp_path, code, reason, expected
+):
+    from ac_llm import LLMStopped
+
+    proposal = {
+        "proposal_id": "a",
+        "anchor_id": "p1",
+        "before_html": "word",
+        "after": [{"kind": "text", "value": "word."}],
+        "reason": "Printed punctuation",
+    }
+
+    class ControlTasks(Tasks):
+        def execute_or_resume(self, context, request, **kwargs):
+            if "inline-verify" in request.task_id:
+                return (
+                    LLMStopped()
+                    if code == "stopped"
+                    else LLMPaused(reason, "control", {"code": code})
+                )
+            return super().execute_or_resume(context, request, **kwargs)
+
+    manifest = bundle(tmp_path, pages=['<p id="p1">Helo word</p>'])
+    service = PDFBundleProofreadService(tmp_path / "project")
+    prepared = service.prepare(manifest)
+    tasks = ControlTasks(
+        {1: {**page_output(edit("Helo", "Hello")), "structure_proposals": [proposal]}}
+    )
+    result = service.execute(prepared.run_id, task_service=tasks, renderer=Renderer())
+    assert result.status is expected
+    if expected is RunStatus.SUCCEEDED:
+        candidate = service.result(result.run_id)
+        assert "Hello word" in candidate["corrected_html"]
+        assert candidate["pages"][0]["diagnostics"]
+
+
+def test_duplicate_structure_anchor_rejects_all_before_verification(tmp_path):
+    proposals = [
+        {
+            "proposal_id": str(i),
+            "anchor_id": "p1",
+            "before_html": before,
+            "after": [{"kind": "text", "value": after}],
+            "reason": "Printed",
+        }
+        for i, (before, after) in enumerate([("a", "ab"), ("ab", "Z")])
+    ]
+    tasks = Tasks({1: {**page_output(), "structure_proposals": proposals}})
+    _, _, result = run(tmp_path, bundle(tmp_path, pages=['<p id="p1">ab</p>']), tasks)
+    assert '<p id="p1">ab</p>' in result["corrected_html"]
+    assert len(tasks.requests) == 1
+    assert len(result["pages"][0]["diagnostics"]) == 2
+
+
+@pytest.mark.parametrize("attack", ["script", "empty"])
+def test_structured_candidate_baseline_tampering_rejected(tmp_path, attack):
+    from alc_ocr_proofread.pdf_bundle_edit import validate_candidate
+
+    manifest = bundle(tmp_path, pages=['<p id="p1">Text</p>', '<p id="p2">Keep</p>'])
+    _, _, result = run(tmp_path, manifest, Tasks({1: page_output(), 2: page_output()}))
+    baseline = result["corrected_html"]
+    if attack == "script":
+        baseline = baseline.replace("</head>", "<script>evil()</script></head>")
+    else:
+        baseline = baseline.replace(">Keep</p>", "> </p>")
+    proposal = {
+        "proposal_id": "a",
+        "anchor_id": "p1",
+        "before_html": "Text",
+        "after": [{"kind": "sup", "value": "1"}],
+        "reason": "Printed",
+    }
+    from ac_document.pdf_inline import apply_inline_repair
+
+    result["inline_baseline_html"] = baseline
+    result["inline_repairs"] = [
+        {"page_number": 1, "proposal": proposal, "verified": True}
+    ]
+    result["corrected_html"] = apply_inline_repair(
+        baseline, verify_pdf_source_bundle(manifest), 1, proposal
+    )
+    result["corrected_sha256"] = hashlib.sha256(
+        result["corrected_html"].encode()
+    ).hexdigest()
+    result["candidate_digest"] = candidate_digest(result)
+    with pytest.raises(ValueError):
+        validate_candidate(manifest, result)

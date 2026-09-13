@@ -121,8 +121,10 @@ def _captionless_table_cell_note_source(tmp_path: Path):
     return RichDocumentParserService(service.repository).parse_source(artifact)
 
 
+@pytest.mark.parametrize("guide_text", ["新增背景。", "Keep $\x00Omega$ intact."])
+@pytest.mark.parametrize("bad_neighbor", [False, True])
 def test_publication_uses_atomic_overlays_and_materializes_directly(
-    tmp_path: Path,
+    tmp_path: Path, guide_text: str, bad_neighbor: bool,
 ) -> None:
     source = _source(tmp_path)
     repository = RunRepository(tmp_path / "jobs")
@@ -146,12 +148,17 @@ def test_publication_uses_atomic_overlays_and_materializes_directly(
                     "title": "说明",
                     "anchor_block_ids": [source.blocks[1].block_id],
                     "purpose": "companion",
-                    "content_markdown": "新增背景。",
+                    "content_markdown": guide_text,
                     "citations": [],
                 }
             ],
         }
     ]
+    if bad_neighbor:
+        chapters[0]["learning_units"].append({
+            "unit_id": "invalid", "title": "Invalid neighbor", "purpose": "companion",
+            "anchor_block_ids": [], "content_markdown": "Do not lose the valid neighbor.", "citations": [],
+        })
     published = publish_companion(
         context,
         source=source,
@@ -187,6 +194,7 @@ def test_publication_uses_atomic_overlays_and_materializes_directly(
         document_cache_root=tmp_path / "paper",
     )
     result = build_result_document(published)
+    assert chapters[0]["learning_units"][0]["content_markdown"] == guide_text
     assert result["schema_version"] == "alc.companion.build_result.v2"
     assert len(published.publication.layers) == 2
     editorial = published.publication.reader_profile["editorial_review"]
@@ -1419,3 +1427,134 @@ def test_translation_selection_preserves_and_validates_source_notes(tmp_path, fa
         assert len(selected.revisions) == len(source.blocks) + 1
         assert selected.revisions[-1].markdown_body == "脚注译文\n"
         assert all("脚注译文" not in r["text"] for r in selected.view_records)
+
+
+@pytest.mark.parametrize("keep_good", [True, False])
+def test_invalid_guide_units_are_omitted_without_losing_siblings(tmp_path, keep_good):
+    source = _source(tmp_path)
+    repository = RunRepository(tmp_path / "jobs")
+    context = RunContext(repository, repository.create(RunSpec("run", "handler", {})), resume_input=None)
+    good = {"unit_id": "good", "title": "Good", "purpose": "companion",
+            "anchor_block_ids": [source.blocks[1].block_id], "citations": [],
+            "content_markdown": "Keep this valid companion."}
+    bad = {**good, "unit_id": "bad", "anchor_block_ids": []}
+    chapter = {"chapter_id": "chapter", "title": "Title",
+        "block_ids": [b.block_id for b in source.blocks], "display_anchor_block_id": source.blocks[0].block_id,
+        "section_block_ids": [], "section_titles": [], "section_levels": [], "guide_expected": True,
+        "translation_result": None, "learning_units": [bad, "malformed unit", good] if keep_good else [bad]}
+    result = publish_companion(context, source=source, title="Title", authors=(),
+        source_language="en", target_language="en", translation_mode="skipped", reader_labels={},
+        chapters=[chapter], glossary=(), bibliography=())
+    ledger = result.publication.reader_profile["delivery_ledger"]
+    assert ledger["delivery_grade"] == "degraded"
+    stage = next(item for item in ledger["stages"] if item["stage"] == "guides")
+    assert stage["produced"] == int(keep_good)
+    assert len(chapter["learning_units"]) == (3 if keep_good else 1)
+
+
+@pytest.mark.parametrize("already_clean", [False, True])
+def test_ansi_normalization_covers_old_accepted_guides_and_keeps_diagnostic(tmp_path, already_clean):
+    source = _source(tmp_path)
+    repository = RunRepository(tmp_path / "jobs")
+    context = RunContext(repository, repository.create(RunSpec("run", "handler", {})), resume_input=None)
+    original = "Formula $x$." if already_clean else "Formula $\x1b[1mx\\u001b[0m$."
+    unit = {"unit_id": "ansi", "title": "Math", "purpose": "companion",
+            "anchor_block_ids": [source.blocks[1].block_id], "citations": [],
+            "content_markdown": original}
+    if already_clean:
+        unit["normalization_diagnostics"] = {"ansi_sgr_removed": 2}
+    chapter = {"chapter_id": "chapter", "title": "Title",
+        "block_ids": [b.block_id for b in source.blocks], "display_anchor_block_id": source.blocks[0].block_id,
+        "section_block_ids": [], "section_titles": [], "section_levels": [], "guide_expected": True,
+        "translation_result": None, "learning_units": [unit]}
+    result = publish_companion(context, source=source, title="Title", authors=(),
+        source_language="en", target_language="en", translation_mode="skipped", reader_labels={},
+        chapters=[chapter], glossary=(), bibliography=())
+    ledger = result.publication.reader_profile["delivery_ledger"]
+    assert any(i["fallback"] == "ansi_sgr_removed" and "removed 2" in i["evidence"] for i in ledger["issues"])
+    assert unit["content_markdown"] == original
+    from alc_render import read_publication_workspace_state
+    publication_path = materialize_published_companion(
+        ImmutableArtifactStore(repository.run_directory("run"), repository_root=repository.root),
+        result, tmp_path / "publication",
+    )
+    state = read_publication_workspace_state(publication_path)
+    assert any(r.markdown_body.strip() == "Formula $x$." for r in state.selected_revisions)
+
+
+@pytest.mark.parametrize("legacy_control", [False, True])
+def test_unit_recovery_warning_is_metadata_not_authored_prose(tmp_path, legacy_control):
+    from alc_render import read_publication_workspace_state
+    source = _source(tmp_path)
+    repository = RunRepository(tmp_path / "jobs")
+    context = RunContext(repository, repository.create(RunSpec("run", "handler", {})), resume_input=None)
+    unit = {"unit_id": "bad", "title": "Math", "purpose": "companion",
+            "anchor_block_ids": [source.blocks[1].block_id], "citations": [],
+            "content_markdown": "Keep $\x00Omega$." if legacy_control else "```text\nBad $$\n```"}
+    if not legacy_control:
+        unit["recovery_diagnostic"] = {"schema_version": "alc.companion.recovery_diagnostic.v1", "issues": ["markdown_literal"]}
+    good = {**unit, "unit_id": "good", "content_markdown": "Valid content."}
+    good.pop("recovery_diagnostic", None)
+    chapter = {"chapter_id": "chapter", "title": "Title", "block_ids": [b.block_id for b in source.blocks],
+        "display_anchor_block_id": source.blocks[0].block_id, "section_block_ids": [], "section_titles": [],
+        "section_levels": [], "guide_expected": True, "translation_result": None, "learning_units": [unit, good]}
+    result = publish_companion(context, source=source, title="Title", authors=(), source_language="en", target_language="en",
+        translation_mode="skipped", reader_labels={}, chapters=[chapter], glossary=(), bibliography=())
+    warnings = [i for i in result.publication.reader_profile["delivery_ledger"]["issues"] if i["category"] == "guide_content_warning"]
+    assert len(warnings) == 1 and warnings[0]["scope"] == "bad"
+    expected_issue = "unreadable_character" if legacy_control else "markdown_literal"
+    assert warnings[0]["evidence"] == expected_issue
+    path = materialize_published_companion(ImmutableArtifactStore(repository.run_directory("run"), repository_root=repository.root), result, tmp_path / "publication")
+    state = read_publication_workspace_state(path)
+    revisions = {r.provenance.get("unit_id"): r for r in state.selected_revisions}
+    assert tuple(revisions["bad"].provenance["recovery_diagnostic"]["issues"]) == (expected_issue,)
+    assert "recovery_diagnostic" not in revisions["good"].provenance
+    assert "Retained for review" not in revisions["bad"].markdown_body
+    render_publication_html(path, tmp_path / "reader.html")
+
+
+@pytest.mark.parametrize('marker', [False, True])
+def test_reference_diagnostics_are_audited_not_published_as_guides(tmp_path, marker):
+    from alc_render import read_publication_workspace_state
+    source = _source(tmp_path)
+    repo = RunRepository(tmp_path/'jobs')
+    context = RunContext(repo, repo.create(RunSpec('run','test',{})), resume_input=None)
+    unit = {'unit_id':'audit', 'title':'待核对参考来源 / References to review', 'purpose':'chapter',
+        'anchor_block_ids':[source.blocks[0].block_id], 'citations':[],
+        'content_markdown':'```text\n[{"title":"Book","source":"alc-source:private-locator"}]\n```',
+        'recovery_diagnostic':{'issues':['reference_unresolved'] + (['audit_only'] if marker else [])}}
+    good = {**unit, 'unit_id':'good', 'title':'Actual guide', 'content_markdown':'Useful guide.'}
+    good.pop('recovery_diagnostic')
+    chapter={'chapter_id':'chapter','title':'Title','block_ids':[b.block_id for b in source.blocks],
+        'display_anchor_block_id':source.blocks[0].block_id,'section_block_ids':[], 'section_titles':[], 'section_levels':[],
+        'guide_expected':True,'translation_result':None,'learning_units':[unit,good]}
+    result=publish_companion(context,source=source,title='Title',authors=(),source_language='en',target_language='en',
+        translation_mode='skipped',reader_labels={},chapters=[chapter],glossary=(),bibliography=(),
+        delivery_issues=[{'issue_id':'guide-content-chapter','category':'guide_content_recovered','scope':'chapter',
+            'fallback':'retained_candidate','affected_count':1,'source_preserved':True,
+            'retry':'bounded_content_recovery','evidence':'chapter_reference_coverage_invalid'},
+            {'issue_id':'foreign','category':'guide_content_recovered','scope':'other-chapter',
+            'fallback':'retained_candidate','affected_count':1,'source_preserved':True,
+            'retry':'bounded_content_recovery','evidence':'chapter_reference_coverage_invalid'}])
+    assert len(result.publication.reader_profile['delivery_ledger']['issues']) == 2
+    assert any(i['issue_id']=='foreign' for i in result.publication.reader_profile['delivery_ledger']['issues'])
+    assert sum(i['category']=='guide_reference_unlinked' for i in result.publication.reader_profile['delivery_ledger']['issues'])==1
+    path=materialize_published_companion(ImmutableArtifactStore(repo.run_directory('run'),repository_root=repo.root),result,tmp_path/'publication')
+    selected=read_publication_workspace_state(path).selected_revisions
+    assert [r.title for r in selected if r.role=='guide']==['Actual guide']
+
+
+@pytest.mark.parametrize('resolved', [False, True])
+def test_delivery_ledger_projects_real_translation_diagnostic(tmp_path, resolved):
+    from types import SimpleNamespace
+    source = _source(tmp_path)
+    revision = SimpleNamespace(fragment_id='translation-test',
+        anchor=SimpleNamespace(target_id=source.blocks[0].block_id),
+        provenance={'translation_quality': {'schema_version':'alc.translate.quality_diagnostic.v1',
+                                          'message':'citation groups differ'},
+                    'translation_quality_resolved': resolved})
+    ledger = publication_module._delivery_ledger_document(source=source,
+        translation_mode='enabled', translation_revisions=[revision], chapters=[{'block_ids':[source.blocks[0].block_id]}],
+        glossary=[], glossary_unanchored_ids=[], glossary_fallback_summary=None,
+        resources_expected=0, resources_produced=0, editorial_review=None, explicit_issues=[])
+    assert any(i['category']=='translation_quality_warning' for i in ledger['issues']) == (not resolved)

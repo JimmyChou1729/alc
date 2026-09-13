@@ -625,6 +625,7 @@
       continueEditing: "继续编辑",
       saveFailedInEditor: "未能完成保存。修改仍保留在编辑区，请检查页面提示后重试。",
       editContent: "编辑这段 Markdown",
+      partialSourceFallback: "本段部分文字保留了原文，其余译文已保留。可编辑补充。",
       sourceFallback: "生成时此段保留了原文。可双击正文补充译文；手动修改不会自动重新审查。",
       reviewSkipped: "此段翻译尚未完成审查",
       translationWarning: "已保留译文。此段公式或引用与原文存在差异，请结合原文核对；可双击修改。",
@@ -803,6 +804,7 @@
       continueEditing: "Continue editing",
       saveFailedInEditor: "The save could not be completed. Changes remain in the editor; check the page status and try again.",
       editContent: "Edit this Markdown",
+      partialSourceFallback: "Some text in this paragraph remains in the source language; the rest is translated. You can edit it.",
       sourceFallback: "Original text was retained during generation. Double-click to edit; manual changes are not automatically reviewed.",
       reviewSkipped: "Translation review incomplete",
       translationWarning: "Translation retained. A formula or citation differs from the source; please check this passage.",
@@ -3173,25 +3175,102 @@
   }
 
   function activeDeliveryIssues(ledger) {
-    return ledger.issues.filter(function (issue) {
-      if (!issue || ["translation_source_text", "translation_review_skipped"].indexOf(issue.category) < 0) return true;
-      // The header renders before distant translation chunks are hydrated.
-      var publication = state.payload && state.payload.publication;
-      var blocks = publication && publication.source_document && publication.source_document.blocks || [];
+    var publication = state.payload && state.payload.publication;
+    var blocks = publication && publication.source_document && publication.source_document.blocks || [];
+    var needsGuides = ledger.issues.some(function (issue) {
+      return issue && ["guide_content_recovered", "guide_content_warning", "translation_provider_failure"].indexOf(issue.category) >= 0;
+    });
+    if (needsGuides && state.payloadVersion === "v2") {
+      loadAllPayload(false);
+      state.fragmentGroups = groupedFragments(publication.source_document);
+    }
+    function resolvedBlock(issue) {
       var index = blocks.findIndex(function (block) { return block.block_id === issue.scope; });
       if (index >= 0) {
         loadPayloadForBlockRange(index, index + 1);
         if (state.payloadVersion === "v2") state.fragmentGroups = groupedFragments(publication.source_document);
       }
-      var revisions = state.selected ? Array.from(state.selected.values()) : [];
-      return !revisions.some(function (fragment) {
+      return Array.from(state.selected ? state.selected.values() : []).some(function (fragment) {
         if (fragment.role !== "translation" || fragment.priority > 100 || !translationQualityResolved(fragment)) return false;
         var anchor = fragment.anchor || {};
         return anchor.target_id === issue.scope || (anchor.related_blocks || []).some(function (block) {
           return block.block_id === issue.scope;
         });
       });
+    }
+    return ledger.issues.filter(function (issue) {
+      if (!issue) return true;
+      if (["translation_source_text", "translation_review_skipped", "translation_partial_source_text", "translation_quality_warning"].indexOf(issue.category) >= 0) return !resolvedBlock(issue);
+      var fragments = Array.from(state.selected ? state.selected.values() : []);
+      if (issue.category === "guide_content_normalized") return false;
+      if (issue.category === "guide_content_warning") {
+        var units = fragments.filter(function (fragment) { return (fragment.provenance || {}).unit_id === issue.scope; });
+        return !units.length || units.some(function (fragment) {
+          var provenance = fragment.provenance || {};
+          return !fragment.deleted && provenance.content_quality_resolved !== true &&
+            (!provenance.recovery_diagnostic || recoveryDiagnosticIssues(fragment).length > 0);
+        });
+      }
+      if (issue.category === "guide_content_recovered") {
+        var chapterUnits = fragments.filter(function (fragment) {
+          return (fragment.provenance || {}).chapter_id === issue.scope && !fragment.deleted;
+        });
+        var inspectableReason = ["learning_markdown_invalid", "chapter_reference_coverage_invalid", "chapter_reference_invalid"].indexOf(issue.evidence) >= 0;
+        return !chapterUnits.length || chapterUnits.some(function (fragment) {
+          if ((fragment.provenance || {}).content_quality_resolved === true) return false;
+          // Missing review evidence cannot be inferred from clean-looking text.
+          if (!inspectableReason) return true;
+          return (fragment.provenance || {}).content_quality_resolved !== true &&
+            (/待核对：此内容未通过自动验收|Retained for review and editing\./.test(fragment.markdown_body || "") ||
+             /待核对参考来源|References to review/.test(fragment.title || ""));
+        });
+      }
+      if (issue.category === "glossary_omitted") {
+        return !(publication && (publication.glossary || []).some(function (entry) {
+          var translated = entry && entry[glossaryTranslatedKey(entry)];
+          return entry && entry.entry_id === issue.scope && typeof translated === "string" && translated.trim() &&
+            typeof entry.definition === "string" && entry.definition.trim() &&
+            !glossaryDefinitionHasForbiddenControl(translated) && !glossaryDefinitionHasForbiddenControl(entry.definition);
+        }));
+      }
+      if (issue.category === "translation_provider_failure") {
+        // A window-wide provider incident is historical only after every affected
+        // source/pre-review fallback has been explicitly resolved.
+        var category = issue.fallback === "pre_review_translation" ? "translation_review_skipped" :
+          ["source_text_current_window", "source_text_remaining_windows"].indexOf(issue.fallback) >= 0 ? "translation_source_text" : null;
+        if (!category) return true;
+        var fallbacks = ledger.issues.filter(function (item) { return item && item.category === category; });
+        var unresolved = fragments.some(function (fragment) {
+          var fallback = (fragment.provenance || {}).translation_fallback;
+          return fragment.role === "translation" && fallback && !translationQualityResolved(fragment) && !fragment.deleted;
+        });
+        return !fallbacks.length || unresolved || !fallbacks.every(resolvedBlock);
+      }
+      return true;
     });
+  }
+
+  function recoveryDiagnosticIssues(fragment) {
+    var provenance = fragment.provenance || {};
+    if (provenance.content_quality_resolved === true) return [];
+    var diagnostic = provenance.recovery_diagnostic;
+    if (!diagnostic) return [];
+    if (diagnostic.schema_version !== "alc.companion.recovery_diagnostic.v1" || !Array.isArray(diagnostic.issues)) return ["unknown_recovery_diagnostic"];
+    return diagnostic.issues;
+  }
+
+  function recoveryDiagnosticText(fragment) {
+    var chinese = targetLanguage().toLowerCase().indexOf("zh") === 0;
+    var reasons = {
+      review_unconfirmed: chinese ? "原文审核未确认，内容已保留供核对。" : "Source review could not be confirmed; the content is preserved for checking.",
+      unreadable_character: chinese ? "局部字符损坏，已标记缺失位置；其余内容保留，原始内容仍在审计记录中。" : "Damaged characters are marked locally; surrounding content and the original audit record are preserved.",
+      markdown_literal: chinese ? "这段格式无法正常解析，已按原样保留，可编辑修正。" : "This passage could not be formatted and is preserved literally for editing.",
+      reference_unresolved: chinese ? "这段的部分参考来源未能确认，已保留文字，请核对引用。" : "Some references in this passage could not be confirmed; their text is preserved for review.",
+      source_location_unconfirmed: chinese ? "这段对应的原文位置未能确认，暂放在章节开头。" : "The source location of this passage could not be confirmed; it is placed at the chapter start."
+    };
+    return recoveryDiagnosticIssues(fragment).map(function (code) {
+      return reasons[code] || (chinese ? "这段有未处理的内容提示，请核对。" : "This passage has an unresolved content notice for review.");
+    }).join(" ");
   }
 
   function renderDeliverySummary() {
@@ -3200,7 +3279,23 @@
       deliverySummaryIsDismissed() || !ledger || ledger.delivery_grade === "complete" ||
       document.body.dataset.alcExportSnapshot === "true"
     ) return null;
-    var issues = activeDeliveryIssues(ledger);
+    var importantCategories = new Set([
+      "translation_source_text", "translation_partial_source_text",
+      "translation_review_skipped", "translation_quality_warning",
+      "guide_reference_unlinked"
+    ]);
+    var issues = activeDeliveryIssues(ledger).map(function (issue) {
+      if (issue && issue.category === "guide_content_warning") {
+        var unresolved = Array.from(state.selected ? state.selected.values() : []).some(function (fragment) {
+          return (fragment.provenance || {}).unit_id === issue.scope && !fragment.deleted &&
+            recoveryDiagnosticIssues(fragment).indexOf("reference_unresolved") >= 0;
+        });
+        if (unresolved) return Object.assign({}, issue, {category: "guide_reference_unlinked"});
+      }
+      return issue;
+    }).filter(function (issue) {
+      return issue && importantCategories.has(issue.category);
+    });
     if (!issues.length) return null;
     var chinese = targetLanguage().toLowerCase().indexOf("zh") === 0;
     var counts = new Map();
@@ -3235,28 +3330,17 @@
         "部分内容采用了安全降级；原文和完整审计记录均已保留。" :
         "Some content used a safe fallback; source and the complete audit record are preserved."
     ));
-    var categoryLabels = new Map([
-      ["translation_source_text", chinese ? "处保留原文" : "source-text fallbacks"],
-      ["translation_review_skipped", chinese ? "处使用审阅前译文" : "pre-review translations"],
-      ["glossary_omitted", chinese ? "个术语未显示" : "omitted glossary terms"],
-      ["glossary_recovered", chinese ? "个术语使用恢复内容" : "recovered glossary entries"],
-      ["guide_evaluated_omitted", chinese ? "个章节未生成伴读" : "chapters without guides"]
-    ]);
+    var categories = [
+      [["translation_source_text"], chinese ? "处保留原文" : "source-text fallbacks"],
+      [["translation_review_skipped"], chinese ? "处未完成审查" : "incomplete reviews"],
+      [["translation_partial_source_text", "translation_quality_warning"], chinese ? "处译文待校对" : "translations to review"],
+      [["guide_reference_unlinked"], chinese ? "项来源提醒" : "source notices"]
+    ];
     var list = element("ul", "alc-delivery-summary-list");
-    var known = 0;
-    categoryLabels.forEach(function (label, category) {
-      var count = counts.get(category) || 0;
-      if (!count) return;
-      known += count;
-      list.appendChild(element("li", "", String(count) + " " + label));
+    categories.forEach(function (entry) {
+      var count = entry[0].reduce(function (total, category) { return total + (counts.get(category) || 0); }, 0);
+      if (count) list.appendChild(element("li", "", String(count) + " " + entry[1]));
     });
-    var other = issues.length - known;
-    if (other > 0) {
-      list.appendChild(element(
-        "li", "", String(other) + " " +
-          (chinese ? "项其他降级" : "other fallback items")
-      ));
-    }
     panel.appendChild(list);
     return panel;
   }
@@ -3289,7 +3373,7 @@
     var original = (state.revisions.get(fragment.fragment_id) || []).find(function (revision) {
       var origin = revision.provenance || {};
       return revision.revision < fragment.revision && origin.last_editor !== "alc-render-browser" &&
-        (origin.translation_fallback || origin.translation_quality);
+        (origin.translation_fallback || origin.translation_quality || origin.partial_source_text_slot_ids);
     });
     return !!(original && normalizeMarkdown(original.markdown_body) !== normalizeMarkdown(fragment.markdown_body));
   }
@@ -3448,6 +3532,13 @@
     var initialChunk = initialRenderChunk();
     state.hydrationOrder = hydrationOrderFrom(initialChunk);
     updateRenderComplete();
+  }
+
+  function validClassificationSeparator(relation) {
+    return (relation.separator === ": " &&
+      relation.separator_source === "latexml_ar5iv_classification_after") ||
+      (relation.separator === " " &&
+        relation.separator_source === "latexml_keywords_inline");
   }
 
   function primaryTitlePromotion(documentValue) {
@@ -5695,9 +5786,8 @@
           "classification_id,composition,heading_block_id,locator,separator," +
           "separator_source,value_block_ids" ||
         !/^classification-[0-9a-f]{24}$/.test(relation.classification_id) ||
-        relation.composition !== "inline" || relation.separator !== ": " ||
-        relation.separator_source !==
-          "latexml_ar5iv_classification_after" ||
+        relation.composition !== "inline" ||
+        !validClassificationSeparator(relation) ||
         !Array.isArray(relation.value_block_ids) ||
         !relation.value_block_ids.length ||
         !validateSourcePresentationLocator(
@@ -7205,8 +7295,17 @@
     }
     var header = element("header", "alc-fragment-header");
     var title = visual.title ?
-      element("h4", "", plainFragmentTitle(visual.title)) : element("span");
+      element("h4") : element("span");
+    if (visual.title) {
+      if (/\$[^$\n]+\$|\\\([^\n]+\\\)/.test(visual.title)) {
+        title.innerHTML = fragmentTitleMarkup(visual.title);
+        removeVisibleHtmlTags(title);
+      } else {
+        title.textContent = visual.title;
+      }
+    }
     decorateGlossary(title, "target");
+    typeset(title);
     header.appendChild(title);
     var actions = element("div", "alc-fragment-actions");
     actions.appendChild(element(
@@ -7229,8 +7328,9 @@
     card.appendChild(header);
     var fallback = (fragment.provenance || {}).translation_fallback;
     var diagnostic = (fragment.provenance || {}).translation_quality;
-    if (!translationQualityResolved(fragment) && ((fallback && fallback.schema_version === "alc.translate.fallback.v1") || diagnostic)) {
-      var warning = diagnostic ? labels().translationWarning :
+    var partialSource = (fragment.provenance || {}).partial_source_text_slot_ids;
+    if (!translationQualityResolved(fragment) && ((fallback && fallback.schema_version === "alc.translate.fallback.v1") || diagnostic || (partialSource && partialSource.length))) {
+      var warning = partialSource && partialSource.length ? labels().partialSourceFallback : diagnostic ? labels().translationWarning :
         fallback.kind === "source_text" ? labels().sourceFallback :
         fallback.kind === "review_skipped" ? labels().reviewSkipped : null;
       if (warning) {
@@ -7241,6 +7341,15 @@
         qualityNotice.addEventListener("click", function () { qualityNotice.focus(); });
         if (!editing) card.appendChild(qualityNotice);
       }
+    }
+    var recoveryText = recoveryDiagnosticText(fragment);
+    if (recoveryText && !editing) {
+      var recoveryNotice = element("button", "alc-translation-quality", "ⓘ");
+      recoveryNotice.type = "button";
+      recoveryNotice.setAttribute("aria-label", recoveryText);
+      recoveryNotice.dataset.qualityTooltip = recoveryText;
+      recoveryNotice.addEventListener("click", function () { recoveryNotice.focus(); });
+      card.appendChild(recoveryNotice);
     }
     var saved = element("div", "alc-fragment-saved-content");
     var rendered = renderMarkdown(fragment.markdown_body, fragment);
@@ -9082,6 +9191,10 @@
     ].filter(Boolean).join("\n"));
   }
 
+  function fragmentTitleMarkup(value) {
+    return state.md.renderInline(normalizeMarkdown(String(value || "")));
+  }
+
   function plainFragmentTitle(value) {
     return String(value || "")
       .replace(/(?<!\\)\$(?!\$)([^$\n]+?)(?<!\\)\$(?!\$)/g, "$1")
@@ -9889,6 +10002,117 @@
     return cell;
   }
 
+  function referenceTitle(value) {
+    return String(value || "").trim().replace(/^#+\s*/, "")
+      .replace(/^供稿原文\s*[:：]\s*/, "")
+      .replace(/[（(](?:原始文档|供给的原始文档)[^）)]*[）)]\s*$/, "")
+      .replace(/^《([\s\S]*)》$/, "$1").trim();
+  }
+
+  function originalReferencePresentation(entry) {
+    var source = String(entry.source || "").trim();
+    if ((entry.dois || []).length || (entry.arxiv_ids || []).length ||
+        /https?:\/\//i.test(source) || entry.url) return null;
+    var structured = source.indexOf("alc-source:") === 0;
+    var legacy = /^(?:供(?:稿原文|[^；;]*原始文档)|所给原始文档|原始文档|supplied original[- ]document\b|《[^》]+》[，,]\s*原文第)/i.test(source);
+    if (!structured && !legacy) return null;
+    var documentValue = state.payload.publication.source_document || {};
+    var blocks = documentValue.blocks || [];
+    var byId = new Map(blocks.map(function (block) { return [block.block_id, block]; }));
+    var title = referenceTitle(entry.title);
+    var selectedIds = [], anchor = "";
+    if (structured) {
+      try {
+        var locator = JSON.parse(source.slice("alc-source:".length));
+        if (locator && locator.version === 1 && Object.keys(locator).sort().join(",") === "anchor,blocks,version" &&
+            typeof locator.anchor === "string" && byId.has(locator.anchor) && Array.isArray(locator.blocks) &&
+            locator.blocks.every(function (id) { return typeof id === "string" && byId.has(id); })) {
+          anchor = locator.anchor;
+          selectedIds = locator.blocks;
+        }
+      } catch (_invalidLocator) { /* Unlocated sources remain readable. */ }
+    } else {
+      var key = function (text) { return referenceTitle(text).normalize("NFC").replace(/\s+/g, " ").toLowerCase(); };
+      var matches = (documentValue.sections || []).filter(function (section) {
+        return key(section.title) === key(title);
+      });
+      if (!matches.length && state.selected) {
+        (documentValue.sections || []).forEach(function (section) {
+          loadPayloadForBlockRange(section.block_start, section.block_start + 1);
+        });
+        var translatedIds = new Set(Array.from(state.selected.values()).filter(function (revision) {
+          return revision.role === "translation" && !revision.deleted &&
+            byId.has((revision.anchor || {}).target_id) &&
+            byId.get(revision.anchor.target_id).kind === "heading" && key(revision.markdown_body) === key(title);
+        }).map(function (revision) { return revision.anchor.target_id; }));
+        matches = (documentValue.sections || []).filter(function (section) {
+          return blocks[section.block_start] && translatedIds.has(blocks[section.block_start].block_id);
+        });
+      }
+      if (matches.length === 1) {
+        var section = matches[0];
+        title = section.title;
+        anchor = blocks[section.block_start] ? blocks[section.block_start].block_id : "";
+        // Legacy part numbers may be batch-local; never infer page ranges from them.
+      }
+    }
+    if (anchor && byId.get(anchor).kind === "heading") title = (byId.get(anchor).payload || {}).text || title;
+    var selected = new Set(selectedIds);
+    var pages = Array.from(new Set((documentValue.page_map || []).filter(function (item) {
+      return selected.has(item.block_id) && Number.isInteger(item.page_number) && item.page_number > 0;
+    }).map(function (item) { return item.page_number; }))).sort(function (a, b) { return a - b; });
+    // A missing page binding must not turn a partial location into a claimed range.
+    if (selectedIds.some(function (id) { return !(documentValue.page_map || []).some(function (item) { return item.block_id === id; }); })) pages = [];
+    var ranges = [];
+    pages.forEach(function (page) {
+      var last = ranges[ranges.length - 1];
+      if (last && page === last[1] + 1) last[1] = page;
+      else ranges.push([page, page]);
+    });
+    var pageText = ranges.map(function (range) { return range[0] === range[1] ? String(range[0]) : range[0] + "–" + range[1]; }).join(", ");
+    var chinese = targetLanguage().toLowerCase().indexOf("zh") === 0;
+    var text = [chinese ? "原文" : "Original", title || (chinese ? "源文档" : "Source document")];
+    if (legacy) {
+      var equations = /(?:式|equations?|eqs?\.?)\s*[（(]?(\d+(?:\.\d+)+(?:[a-z])?)[）)]?(?:\s*[–—-]\s*[（(]?(\d+(?:\.\d+)+(?:[a-z])?)[）)]?)?/i.exec(source);
+      if (equations) text.push((chinese ? "式 " : "Eq. ") + "(" + equations[1] + ")" +
+        (equations[2] ? "–(" + equations[2] + ")" : ""));
+    }
+    if (pageText) text.push(chinese ? "PDF 第 " + pageText + " 页" : "PDF pp. " + pageText);
+    var firstSelected = blocks.find(function (block) { return selected.has(block.block_id); });
+    return {text: text.join(" · "), targetId: firstSelected ? firstSelected.block_id : anchor};
+  }
+
+  function externalReferencePresentation(entry) {
+    var source = String(entry.source || entry.url || "").trim();
+    var arxivPattern = /^(?:arxiv:\s*)?((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?)$/i;
+    var candidates = (entry.arxiv_ids || []).slice();
+    var url;
+    try { url = new URL(source); } catch (_error) { url = null; }
+    if (url && /^(?:www\.)?arxiv\.org$/i.test(url.hostname)) {
+      candidates.push(url.pathname.replace(/^\/(?:abs|html|pdf)\//, "").replace(/\.pdf$/, "").replace(/\/$/, ""));
+    }
+    candidates.push(source);
+    for (var i = 0; i < candidates.length; i += 1) {
+      var match = arxivPattern.exec(String(candidates[i]).trim());
+      if (match) return {label: "arXiv:" + match[1], href: "https://arxiv.org/abs/" + match[1]};
+    }
+    var dois = (entry.dois || []).slice();
+    if (url && /^(?:dx\.)?doi\.org$/i.test(url.hostname)) {
+      dois.push(url.pathname.slice(1));
+    }
+    dois.push(source);
+    for (var j = 0; j < dois.length; j += 1) {
+      var doi = String(dois[j]).trim().replace(/^(?:doi:\s*|https?:\/\/(?:dx\.)?doi\.org\/)/i, "");
+      if (/^10\.\d{4,9}\/\S+$/i.test(doi)) {
+        return {label: "DOI:" + doi, href: "https://doi.org/" + doi};
+      }
+    }
+    if (url && /^(?:http|https):$/.test(url.protocol)) {
+      return {label: url.hostname, href: source};
+    }
+    return {label: source, href: ""};
+  }
+
   function renderBibliography(main, bibliography, strings) {
     if (!bibliography.length) return;
     var section = element("section", "alc-appendix");
@@ -9900,34 +10124,27 @@
       var item = element("li");
       var id = group.targetId;
       if (id) item.id = "reference-" + id;
+      var original = originalReferencePresentation(entry);
+      if (original) {
+        var originalNode = element(original.targetId ? "a" : "span");
+        appendTocTitle(originalNode, original.text);
+        if (original.targetId) originalNode.href = "#block-" + safeToken(original.targetId);
+        item.appendChild(originalNode);
+        list.appendChild(item);
+        return;
+      }
       var title = entry.title || entry.source || id;
-      var source = entry.source || entry.url || "";
-      if (/^https?:\/\//i.test(source)) {
-        var link = element("a");
-        appendTocTitle(link, title);
-        link.href = source;
-        link.rel = "noopener noreferrer";
-        item.appendChild(link);
-      } else {
-        var titleNode = element("strong");
-        appendTocTitle(titleNode, title);
-        item.appendChild(titleNode);
+      var presentation = externalReferencePresentation(entry);
+      var titleNode = element(presentation.href ? "a" : "strong");
+      appendTocTitle(titleNode, title);
+      if (presentation.href) {
+        titleNode.href = presentation.href;
+        titleNode.rel = "noopener noreferrer";
       }
-      if (source && source !== title) {
-        var sourceNode = element("span");
-        if (/^https?:\/\//i.test(source)) {
-          sourceNode.textContent = " — " + source;
-        } else {
-          appendTocTitle(sourceNode, " — " + source);
-        }
-        item.appendChild(sourceNode);
+      item.appendChild(titleNode);
+      if (presentation.label && presentation.label !== title) {
+        item.appendChild(document.createTextNode(" — " + presentation.label));
       }
-      (entry.dois || []).forEach(function (doi) {
-        item.appendChild(document.createTextNode(" DOI: " + doi));
-      });
-      (entry.arxiv_ids || []).forEach(function (identifier) {
-        item.appendChild(document.createTextNode(" arXiv: " + identifier));
-      });
       list.appendChild(item);
     });
     section.appendChild(list);
@@ -10167,7 +10384,12 @@
   }
 
   function repairRepeatedSuperscripts(value) {
-    var tex = String(value || "");
+    var tex = String(value || "").replace(
+      /(^|[^\\A-Za-z])([A-Za-z])\s*\^\s*\{\s*\\prime\s*\}\s*\^\s*(\{\s*\d+\s*\}|\d)/g,
+      function (_match, prefix, base, power) {
+        return prefix + "{" + base + "^{\\prime}}^" + power;
+      }
+    );
     var repeated = /((?:\\[A-Za-z]+|[A-Za-z0-9])(?:_(?:\{[^{}]*\}|\\[A-Za-z]+|.))?)(\^(?:\{[^{}]*\}|\\[A-Za-z]+|.))(\^(?:\{[^{}]*\}|\\[A-Za-z]+|.)|')/g;
     return tex.replace(repeated, function (_match, base, first, second) {
       return "{" + base + first + "}" + second;
@@ -12135,7 +12357,10 @@
       var markers = group.ids.map(function (id) { return "[@" + id + "]"; })
         .join(", ");
       var content = "";
-      if (/^https?:\/\//i.test(source)) {
+      var original = originalReferencePresentation(entry);
+      if (original) {
+        content = escapeMarkdownInlineText(original.text);
+      } else if (/^https?:\/\//i.test(source)) {
         content = "[" + escapeMarkdownLinkLabel(title || source) + "](" +
           markdownLinkDestination(source) + ")";
       } else {

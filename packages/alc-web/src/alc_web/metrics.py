@@ -81,7 +81,7 @@ def _summarize(store: Any, job: dict, projection: Projection) -> dict:
         value = max(value, estimate({**job, "phase": phase}, projection.seen,
             projection.stage_seconds.get(phase, 0), projection.stage_evidence.get(phase, {}), pages,
             len(projection.ocr_pages)))
-    projection.smooth_percent = max(projection.smooth_percent, value)
+    projection.smooth_percent = value
     document["progress"].update(percent=projection.smooth_percent, mode="overall", estimated=job["state"] != "completed")
     if job["phase"] == "ocr_proofread" and job["state"] != "completed":
         done = len(projection.ocr_pages)
@@ -91,7 +91,7 @@ def _summarize(store: Any, job: dict, projection: Projection) -> dict:
         if pages and done >= pages:
             document["progress"]["label"] += "，正在汇总校对结果"
     elif job["phase"] in {"acquisition", "ocr"} and job["state"] != "completed":
-        document["progress"].update(eta_seconds=None, label="正在获取并识别文档 · 进度按阶段耗时估算")
+        document["progress"].update(eta_seconds=None, label="正在获取并识别文档 · 等待阶段完成")
     if job["state"] == "completed":
         from alc_render import publication_translation_quality
 
@@ -145,9 +145,9 @@ def _fold(projection: Projection, event: dict) -> None:
         if "progress" in data.get("detail", {}):
             projection.current_progress = data["detail"]["progress"]
             evidence = projection.current_progress
-            phase = evidence.get("phase", projection.stage)
+            phase = projection.stage
             old = projection.stage_evidence.get(phase, {})
-            if (evidence.get("completed_units") or 0) >= (old.get("completed_units") or 0):
+            if percentage(phase, evidence, "") >= percentage(phase, old, ""):
                 projection.stage_evidence[phase] = evidence
         projection.percent = max(projection.percent, percentage(projection.stage, projection.current_progress, ""))
     if event["kind"] == "job.started":

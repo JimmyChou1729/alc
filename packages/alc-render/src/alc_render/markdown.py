@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from ac_document import RichBlock, RichBlockKind
+from markdown_it import MarkdownIt
+from markdown_it.rules_inline import StateInline
 
 from ._json import canonical_json_bytes, strict_json_loads
 from .contracts import (
@@ -40,16 +42,39 @@ def normalize_markdown(markdown: str) -> str:
 
 
 def extract_markdown_citation_ids(markdown: str) -> tuple[str, ...]:
-    """Return ordered, unique ALC citation IDs declared in Markdown.
+    """Return ordered, unique citations from authored Markdown prose.
 
-    ALC citations use the literal ``[@citation-id]`` form.  This deliberately
-    extracts syntax rather than interpreting Markdown so producers, reviewers,
-    and render validation share one stable citation contract without adding a
-    Markdown parser dependency.
+    Code and escaped markers are literal examples, not bibliography links.
+    Recognize citations as inline syntax before Markdown links, matching the
+    reader's citation rule without inspecting link destinations or raw HTML.
     """
 
-    normalized = normalize_markdown(markdown)
-    return tuple(dict.fromkeys(_CITATION_RE.findall(normalized)))
+    parser = MarkdownIt("commonmark", {"html": True})
+    parser.inline.ruler.before("text", "alc_citation", _citation_token)
+    tokens = parser.parse(normalize_markdown(markdown))
+    return tuple(dict.fromkeys(
+        child.content
+        for token in tokens
+        for child in token.children or ()
+        if child.type == "alc_citation"
+    ))
+
+
+def _legacy_markdown_citation_ids(markdown: str) -> tuple[str, ...]:
+    """Recognize immutable revisions written before semantic citation parsing."""
+
+    return tuple(dict.fromkeys(_CITATION_RE.findall(normalize_markdown(markdown))))
+
+
+def _citation_token(state: StateInline, silent: bool) -> bool:
+    match = _CITATION_RE.match(state.src, state.pos)
+    if match is None:
+        return False
+    if not silent:
+        token = state.push("alc_citation", "", 0)
+        token.content = match.group(1)
+    state.pos = match.end()
+    return True
 
 
 def block_text_to_markdown(block: RichBlock, text: str) -> str:

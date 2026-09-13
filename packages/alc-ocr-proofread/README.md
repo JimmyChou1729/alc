@@ -55,6 +55,17 @@ alc-ocr-proofread get-result-bundle --project-dir project --run-id RUN_ID
 effort. The selection is frozen with the run and reused on resume; omitting it
 keeps the provider default.
 
+New runs bind edit occurrences to the original page before applying the batch;
+earlier replacements cannot shift later occurrence numbers. Overlapping edits
+and combined edits that empty a node remain unapplied with diagnostics. Existing
+runs retain their saved application policy. Matching remains exact: whitespace
+differences or cross-node text are not silently treated as equivalent formulas.
+The v2 policy deduplicates identical replacements at the same resolved location.
+After exact matching fails, a single HTML-entity decoding of the proposed math
+source is allowed only when it identifies one complete formula node and resolves
+back to that node. The original proposed source is retained in the edit record;
+replacement text and LaTeX backslashes are not automatically decoded.
+
 The result is an unapproved candidate with original/corrected content, exact
 edits and uncertainties for every page, bound to the original PDF and source
 hashes. Review every page against the original PDF. Missing extraction coverage,
@@ -138,3 +149,20 @@ remain in the managed directory after failure; retrying reuses that environment.
 No user PDF is used for the installation probe. A failed probe leaves the previous
 project configuration intact. Supported wheels may be unavailable on some hosts;
 report that failure instead of compiling or modifying the host automatically.
+
+New native PDF runs persist `inline_structure_policy=anchored-typed.v1`.
+Within an existing, uniquely anchored paragraph, a model may propose an exact
+inline replacement containing only typed text, LaTeX math, or superscript text.
+An additional image verification request is made only when eligible proposals
+exist, at most once per page; only individually approved proposals are applied.
+Unverified, conflicting, unsupported-runtime, or parser-rejected proposals retain
+the original content and produce diagnostics without discarding valid ordinary
+corrections. Provider authentication and pause requests still pause the run.
+Older run specifications do not enable this additional model request on resume.
+
+Structural candidates retain the ordinary-correction baseline and replayable
+`inline_repairs` audit under the Foundation v3 review receipt. They can be viewed
+and adopted in OCR review; further manual text editing belongs in the Reader.
+The OCR review editor does not pretend that newly inserted inline nodes correspond
+to the original text slots. Repairs cannot introduce paragraphs, IDs, resources,
+links, arbitrary HTML, or cross-page changes.

@@ -3836,3 +3836,77 @@ def test_created_glossary_directory_round_trip_retains_deletion(tmp_path):
     assert len(history) == 2
     assert history[-1]['provenance']['deleted'] is True
     validate_standalone_html(_publication, output)
+
+
+@pytest.mark.parametrize(("body", "declared", "accepted"), [
+    ("```text\nRetained [@ref-1]\n```", ("ref-1",), True),
+    ("```text\nRetained [@ref-1]\n```", (), True),
+    ("Actual [@other].\n\n```text\nExample [@ref-1]\n```", ("other", "ref-1"), True),
+    ("Actual [@other].\n\n```text\nExample [@ref-1]\n```", ("ref-1",), False),
+    ("Actual [@other].", (), False),
+    ("```text\nExample [@ref-1]\n```", ("other",), False),
+])
+def test_render_preserves_legacy_literal_citation_metadata_without_loosening_prose(
+    tmp_path, body, declared, accepted,
+):
+    document = _rich_document()
+    revision = replace(_revision(document, body=body), citation_ids=declared)
+    path = write_fragment_revision(tmp_path, revision)
+    original_bytes = path.read_bytes()
+    layer = Layer(revision.source, "alc-translate", (
+        fragment_revision_ref(relative_fragment_path(tmp_path, path), revision),
+    ))
+    write_layer(tmp_path / "layers" / "translation.json", layer)
+    publication = Publication(document, layers=(layer.reference("layers/translation.json"),),
+        bibliography=tuple({"evidence_id": identity, "title": identity,
+                            "source": "https://example.test/" + identity}
+                           for identity in ("ref-1", "other")))
+    publication_path = tmp_path / "publication.json"
+    write_publication(publication_path, publication)
+    output = tmp_path / "reader.html"
+    if accepted:
+        render_publication_html(publication_path, output)
+        assert output.is_file()
+    else:
+        with pytest.raises(HTMLRenderError, match="Markdown citations"):
+            render_publication_html(publication_path, output)
+    assert path.read_bytes() == original_bytes
+
+
+def test_partial_source_slots_are_visible_in_current_quality(tmp_path):
+    from alc_render import publication_translation_quality
+    document = _rich_document()
+    revision = replace(_revision(document, body="部分译文 original remainder"), citation_ids=(),
+        provenance={"producer":"alc-translate","partial_source_text_slot_ids":["slot-1"]})
+    path = write_fragment_revision(tmp_path, revision)
+    layer = Layer(revision.source,"alc-translate",(fragment_revision_ref(relative_fragment_path(tmp_path,path),revision),))
+    write_layer(tmp_path/"translation.layer.json",layer)
+    publication=Publication(document,layers=(layer.reference("translation.layer.json"),))
+    write_publication(tmp_path/"publication.json",publication)
+    quality=publication_translation_quality(tmp_path/"publication.json")
+    assert quality["source_fallback_count"]==0
+    assert quality["translation_warning_count"]==1
+    assert "部分文字保留" in quality["translation_issues"][0]["reason"]
+
+
+def test_structural_targets_exclude_dedicated_note_aliases(monkeypatch):
+    import alc_render.html as renderer
+    document = _structural_document()
+    monkeypatch.setattr(renderer, '_source_note_aliases', lambda document: {'S4.F2'})
+    targets = renderer._legacy_structural_targets(document)
+    assert 'S4.F2' not in {item['alias'] for item in targets}
+    assert 'S2.E6' in {item['alias'] for item in targets}
+
+
+def test_internal_link_validation_rejects_cross_manifest_collision(monkeypatch):
+    import alc_render.html as renderer
+    monkeypatch.setattr(renderer, '_source_note_aliases', lambda document: {'footnotex4'})
+    with pytest.raises(renderer.HTMLRenderError, match='internal link aliases conflict'):
+        renderer._validate_internal_link_aliases(
+            {'legacy_structural_targets': [{'alias': 'footnotex4', 'block_id': 'block-other'}]},
+            _structural_document(),
+        )
+    renderer._validate_internal_link_aliases(
+        {'legacy_structural_targets': [{'alias': 'S4.F2', 'block_id': 'block-figure'}]},
+        _structural_document(),
+    )

@@ -48,6 +48,8 @@ from alc_render import (
 )
 
 from ._build_support import ref_document
+from .content_recovery import literal_markdown, readable_control_fallback, recovery_diagnostic, is_reference_audit_unit
+from .rich_text import strip_ansi_sgr, has_unsupported_controls, RichTextError, canonicalize_display_math, validate_rich_markdown
 from .editorial_review import EditorialReviewError, validate_editorial_report
 from .reviewed_supplements import (
     ReviewedCompanionSupplement,
@@ -115,11 +117,13 @@ def publish_companion(
     """Publish immutable overlay revisions, their layers, and one publication."""
 
     partial = build_state == "partial"
+    chapters = [dict(chapter) for chapter in chapters]
     blocks = {item.block_id: item for item in source.blocks}
     source_identity = Publication(source).source
     translation_revisions: list[FragmentRevision] = []
     companion_revisions: list[FragmentRevision] = []
     delivery_issue_values = [dict(item) for item in delivery_issues]
+    reference_audit_scopes: set[str] = set()
     supplements = tuple(reviewed_supplements)
     supplement_ids: set[str] = set()
     for supplement in supplements:
@@ -153,61 +157,139 @@ def publish_companion(
             raise CompanionPublicationError(
                 "a skipped translation must not contain a translation result"
             )
-        for raw in _mapping_list(
-            chapter.get("learning_units"), "learning units"
-        ):
-            anchors = _string_list(raw.get("anchor_block_ids"), "unit anchors")
-            block = _block(blocks, anchors[0])
-            purpose = _string(raw, "purpose")
-            unit_id = _string(raw, "unit_id")
-            title_value = _string(raw, "title")
-            content = normalize_markdown(_string(raw, "content_markdown"))
-            fragment_identity = json.dumps(
-                {
-                    "source": source_identity.rich_document_digest,
-                    "chapter_id": chapter_id,
-                    "unit_id": unit_id,
-                    "anchors": anchors,
-                    "purpose": purpose,
-                    "title": title_value,
-                    "content": content,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            companion_revisions.append(
-                FragmentRevision(
-                    source=source_identity,
-                    fragment_id=_fragment_id(
-                        "companion", fragment_identity
-                    ),
-                    revision=1,
-                    parent_semantic_digest=None,
-                    anchor=FragmentAnchor(
-                        AnchorKind.BLOCK,
-                        block.block_id,
-                        tuple(
-                            anchor_block_from_rich_block(_block(blocks, item))
-                            for item in anchors
-                        ),
-                    ),
-                    priority=101 if purpose in {"chapter", "section"} else 20,
-                    role="guide" if purpose in {"chapter", "section"} else "companion",
-                    language=target_language,
-                    title=title_value,
-                    citation_ids=tuple(
-                        _string_list(raw.get("citations"), "unit citations")
-                    ),
-                    provenance={
-                        "producer": "alc-companion",
+        valid_units = []
+        raw_units = chapter.get("learning_units", [])
+        if not isinstance(raw_units, (list, tuple)):
+            raw_units = [raw_units]
+        for unit_index, raw in enumerate(raw_units, 1):
+            try:
+                raw = _mapping(raw, "learning unit")
+                anchors = _string_list(raw.get("anchor_block_ids"), "unit anchors")
+                block = _block(blocks, anchors[0])
+                purpose = _string(raw, "purpose")
+                unit_id = _string(raw, "unit_id")
+                title_value = _string(raw, "title")
+                if is_reference_audit_unit(raw):
+                    reference_audit_scopes.add(chapter_id)
+                    if isinstance(raw.get("audit_scope"), str):
+                        reference_audit_scopes.add(raw["audit_scope"])
+                    delivery_issue_values.append({
+                        "issue_id": f"guide-reference-audit-{chapter_id}-{unit_id}",
+                        "category": "guide_reference_unlinked", "scope": unit_id,
+                        "fallback": "audit_only", "affected_count": 1,
+                        "source_preserved": True, "retry": "not_semantic_retry",
+                        "evidence": "Reference entries could not be linked to guide citations; raw entries remain in the accepted candidate audit.",
+                    })
+                    continue
+                raw_content = _string(raw, "content_markdown")
+                raw_content, sgr_count = strip_ansi_sgr(raw_content)
+                prior_diagnostic = raw.get("normalization_diagnostics", {})
+                prior_count = prior_diagnostic.get("ansi_sgr_removed", 0) if isinstance(prior_diagnostic, Mapping) else 0
+                prior_count = prior_count if isinstance(prior_count, int) and not isinstance(prior_count, bool) and prior_count > 0 else 0
+                if sgr_count or prior_count:
+                    delivery_issue_values.append({
+                        "issue_id": f"guide-ansi-{chapter_id}-{unit_id}",
+                        "category": "guide_content_normalized", "scope": chapter_id,
+                        "fallback": "ansi_sgr_removed", "affected_count": 1,
+                        "source_preserved": True, "retry": "not_semantic_retry",
+                        "evidence": f"guide {unit_id}: removed {sgr_count + prior_count} ANSI SGR sequences",
+                    })
+                diagnostic = raw.get("recovery_diagnostic", {})
+                issues = diagnostic.get("issues", []) if isinstance(diagnostic, Mapping) else []
+                issues = [item for item in issues if isinstance(item, str)] if isinstance(issues, list) else []
+                literal_content = "\x00" in raw_content or has_unsupported_controls(raw_content)
+                if literal_content:
+                    # Older accepted guides keep their immutable raw evidence.
+                    try:
+                        content = canonicalize_display_math(readable_control_fallback(raw_content))
+                        validate_rich_markdown(content, allowed_evidence_ids=tuple(raw.get("citations", ())))
+                    except RichTextError:
+                        content = normalize_markdown(literal_markdown(raw_content))
+                        issues.append("markdown_literal")
+                    else:
+                        content = normalize_markdown(content)
+                        literal_content = False
+                        issues.append("unreadable_character")
+                else:
+                    content = normalize_markdown(raw_content)
+                diagnostic = recovery_diagnostic(issues)
+                if diagnostic["issues"]:
+                    delivery_issue_values.append({
+                        "issue_id": f"guide-warning-{chapter_id}-{unit_id}",
+                        "category": "guide_content_warning", "scope": unit_id,
+                        "fallback": "retained_candidate", "affected_count": 1,
+                        "source_preserved": True, "retry": "not_semantic_retry",
+                        "evidence": ",".join(diagnostic["issues"]),
+                    })
+                fragment_identity = json.dumps(
+                    {
+                        "source": source_identity.rich_document_digest,
                         "chapter_id": chapter_id,
                         "unit_id": unit_id,
+                        "anchors": anchors,
                         "purpose": purpose,
+                        "title": title_value,
+                        "content": content,
                     },
-                    markdown_body=content,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
                 )
-            )
+                companion_revisions.append(
+                    FragmentRevision(
+                        source=source_identity,
+                        fragment_id=_fragment_id(
+                            "companion", fragment_identity
+                        ),
+                        revision=1,
+                        parent_semantic_digest=None,
+                        anchor=FragmentAnchor(
+                            AnchorKind.BLOCK,
+                            block.block_id,
+                            tuple(
+                                anchor_block_from_rich_block(_block(blocks, item))
+                                for item in anchors
+                            ),
+                        ),
+                        priority=101 if purpose in {"chapter", "section"} else 20,
+                        role="guide" if purpose in {"chapter", "section"} else "companion",
+                        language=target_language,
+                        title=title_value,
+                        citation_ids=() if literal_content else tuple(
+                            _string_list(raw.get("citations"), "unit citations")
+                        ),
+                        provenance={
+                            "producer": "alc-companion",
+                            "chapter_id": chapter_id,
+                            "unit_id": unit_id,
+                            "purpose": purpose,
+                            **({"recovery_diagnostic": diagnostic} if diagnostic["issues"] else {}),
+                        },
+                        markdown_body=content,
+                    )
+                )
+            except (KeyError, TypeError, ValueError, IndexError):
+                delivery_issue_values.append({
+                    "issue_id": f"guide-invalid-{chapter_id}-{unit_index}",
+                    "category": "guide_content_rejected",
+                    "scope": chapter_id,
+                    "fallback": "omit_invalid_unit",
+                    "affected_count": 1,
+                    "source_preserved": True,
+                    "retry": "not_semantic_retry",
+                    "evidence": f"learning unit {unit_index} failed publication validation",
+                })
+                continue
+            valid_units.append(raw)
+        chapter["learning_units"] = valid_units
+
+    if reference_audit_scopes:
+        delivery_issue_values = [issue for issue in delivery_issue_values if not (
+            issue.get("category") == "guide_content_recovered"
+            and issue.get("evidence") == "chapter_reference_coverage_invalid"
+            and issue.get("scope") in reference_audit_scopes
+        )]
+
 
     for supplement in supplements:
         for entry in supplement.entries:
@@ -745,6 +827,26 @@ def _delivery_ledger_document(
 
     issues: list[dict[str, Any]] = []
     for revision in translation_revisions:
+        warning = revision.provenance.get("translation_quality")
+        if warning and not revision.provenance.get("translation_quality_resolved"):
+            issues.append({
+                "issue_id": f"translation-warning-{revision.fragment_id}",
+                "category": "translation_quality_warning",
+                "scope": revision.anchor.target_id,
+                "fallback": "translation_retained", "affected_count": 1,
+                "source_preserved": True, "retry": "bounded_retry_exhausted",
+                "evidence": "translation_quality_diagnostic",
+            })
+        partial = revision.provenance.get("partial_source_text_slot_ids")
+        if partial:
+            issues.append({
+                "issue_id": f"partial-translation-{revision.fragment_id}",
+                "category": "translation_partial_source_text",
+                "scope": revision.anchor.target_id,
+                "fallback": "partial_source_text", "affected_count": 1,
+                "source_preserved": True, "retry": "bounded_retry_exhausted",
+                "evidence": "translation_partial_source_slots",
+            })
         fallback = revision.provenance.get("translation_fallback")
         if not isinstance(fallback, Mapping):
             continue
@@ -1064,6 +1166,7 @@ def _guide_delivery_issues(
         chapter_id = _string(chapter, "chapter_id")
         if any(
             str(item.get("category") or "").startswith("guide_")
+            and str(item.get("category") or "").endswith(("_omitted", "_source_only"))
             and item.get("scope") == chapter_id
             for item in existing_issues
         ):

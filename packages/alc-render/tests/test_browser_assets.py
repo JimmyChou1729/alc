@@ -48,7 +48,11 @@ def test_reader_uses_dismissible_floating_delivery_panel_without_inline_badges()
     assert "renderDeliveryBadge" not in javascript
     assert "Source preserved — not completed translation" not in javascript
     assert "Pre-review translation retained" not in javascript
-    assert "issue.evidence" not in javascript
+    summary_renderer = javascript[
+        javascript.index("  function renderDeliverySummary()"):javascript.index("  function deliveryIssueForBlock(")
+    ]
+    assert ".evidence" not in summary_renderer
+    assert '["evidence"]' not in summary_renderer
     stylesheet = _text("reader.css")
     assert ".alc-delivery-summary" in stylesheet
     assert "position: fixed" in stylesheet
@@ -2461,6 +2465,8 @@ define = undefined;
     katexTex: katexTex,
     tableCaptionPrecedesContent: tableCaptionPrecedesContent,
     plainFragmentTitle: plainFragmentTitle,
+    fragmentTitleMarkup: fragmentTitleMarkup,
+    validClassificationSeparator: validClassificationSeparator,
     syncVisibilityRoles: syncVisibilityRoles,
     validateIntegerJson: validateIntegerJson,
     validateRevisionMetadata: validateRevisionMetadata
@@ -2468,6 +2474,12 @@ define = undefined;
 }());
 var helpers = globalThis.__alcReaderTest;
 helpers.setupMarkdown();
+if (!helpers.validClassificationSeparator({separator: " ", separator_source: "latexml_keywords_inline"}) ||
+    helpers.validClassificationSeparator({separator: ": ", separator_source: "latexml_keywords_inline"})) {
+  throw new Error("keyword separator provenance mismatch");
+}
+if (!helpers.fragmentTitleMarkup("Why $L^2$?").includes('data-tex="L^2"')) throw new Error("title math lost");
+if (helpers.fragmentTitleMarkup("<img src=x onerror=alert(1)>").includes("<img")) throw new Error("unsafe title HTML");
 var nestedMathTex = String.raw`\\langle\\Psi^{-}|M|\\Psi^{-}\\rangle>\\mbox{$\\textstyle\\frac{1}{2}$}`;
 var nestedMathTokens = helpers.state.md.parseInline(
   "成立 $" + nestedMathTex + "$。", {}
@@ -2606,6 +2618,15 @@ if (
 ) {
   throw new Error("repeated TeX superscripts were not grouped for KaTeX");
 }
+var spacedPrimeSource = String.raw`y ^ { \\prime } ^ { 2 }`;
+var spacedPrimeCandidates = helpers.katexCandidates(spacedPrimeSource);
+if (spacedPrimeCandidates[0] !== spacedPrimeSource ||
+    !spacedPrimeCandidates.includes(String.raw`{y^{\\prime}}^{ 2 }`)) {
+  throw new Error("spaced OCR prime powers need a non-destructive render fallback");
+}
+if (helpers.katexCandidates(String.raw`x ^ { a } ^ { b }`).some(function (candidate) {
+  return candidate.includes(String.raw`{x^{a}}`);
+})) throw new Error("prime compatibility must not guess arbitrary spaced exponents");
 var groupedDelimiterCandidates = helpers.katexCandidates(
   String.raw`\\Big{|}x\\Big{|}^{2}+\\vphantom{\\Biggl{(}}`
 );
@@ -7468,7 +7489,7 @@ def test_reader_uses_generic_front_matter_heading_note_and_caption_surfaces() ->
     assert "function classificationValueEditorContext" in javascript
     assert "alc-classification-editor-prefix" in javascript
     assert "is-editing-classification-value" in javascript
-    assert 'relation.separator_source !==\n          "latexml_ar5iv_classification_after"' in javascript
+    assert "!validClassificationSeparator(relation)" in javascript
     assert "sourceCaptionPresentation" in javascript
     assert "sourceFigurePresentation" in javascript
     assert "applySourceCaptionPresentation" in javascript

@@ -113,6 +113,7 @@ class FakeGuideTasks:
         semantic_invalid_contract: str | None = None,
         semantic_invalid_calls: frozenset[int] = frozenset({1}),
         checked_part_numbers: tuple[int, ...] | None = None,
+        guide_text: str | None = None,
     ) -> None:
         self.guide_started = guide_started
         self.translation_started = translation_started
@@ -124,6 +125,7 @@ class FakeGuideTasks:
         self.semantic_invalid_contract = semantic_invalid_contract
         self.semantic_invalid_calls = semantic_invalid_calls
         self.checked_part_numbers = checked_part_numbers
+        self.guide_text = guide_text
         self.counts: Counter[str] = Counter()
         self.guide_glossaries: dict[str, list[dict]] = {}
         self.requests: list[tuple[str, str, str]] = []
@@ -162,7 +164,9 @@ class FakeGuideTasks:
                 "basis": "The fixture contains no confirmed author.",
                 "anchor_block_ids": [],
             }
-        elif contract == CHAPTER_GUIDE_PROMPT_VERSION:
+        elif contract == "alc.companion.reference-preparation.v1":
+            value = {"coverage_summary": "Fixture needs only supplied evidence.", "references": [], "explanations": []}
+        elif contract in {CHAPTER_GUIDE_PROMPT_VERSION, "alc.companion.chapter-learning-prompt.v24"}:
             self.guide_glossaries[request.task_id] = list(payload["glossary"])
             if self.guide_started is not None:
                 self.guide_started.set()
@@ -178,7 +182,7 @@ class FakeGuideTasks:
             value = {
                 "chapter_guide": {
                     "title": f"Guide to {payload['chapter']['title']}",
-                    "content_markdown": text,
+                    "content_markdown": self.guide_text or text,
                 },
                 "section_guides": [],
                 "companions": (
@@ -269,7 +273,7 @@ def _semantically_invalid_value(contract: str, value: dict) -> dict:
                 "anchor_block_ids": [],
             }
         )
-    elif contract == CHAPTER_GUIDE_PROMPT_VERSION:
+    elif contract in {CHAPTER_GUIDE_PROMPT_VERSION, "alc.companion.chapter-learning-prompt.v24"}:
         invalid["companions"] = [
             {
                 "after_part": 9999,
@@ -2017,7 +2021,7 @@ def test_resume_rebuilds_joined_chapter_after_guide_replay(
     def fail_publication_once(*args, **kwargs):
         nonlocal calls
         calls += 1
-        if calls == 1:
+        if calls <= 3:
             raise companion_build.CompanionPublicationError(
                 "fixture publication failure"
             )
@@ -2248,7 +2252,7 @@ def test_local_app_marks_missing_source_read_receipts_without_blocking_delivery(
     class ReadingTasks(FakeGuideTasks):
         def execute_or_resume(self, context, request, **kwargs):
             contract, payload = _request_payload(request.prompt)
-            if read_source and contract == CHAPTER_GUIDE_PROMPT_VERSION:
+            if read_source and contract in {CHAPTER_GUIDE_PROMPT_VERSION, "alc.companion.chapter-learning-prompt.v24"}:
                 options = kwargs["options"]
                 commands = payload["source_commands"]
                 for group in (commands["source"], commands["translation"]["parts"]):
@@ -2367,7 +2371,7 @@ def test_chapter_pipeline_starts_guide_before_other_translation_finishes(tmp_pat
             contract, payload = _request_payload(request.prompt)
             enter()
             try:
-                if contract == CHAPTER_GUIDE_PROMPT_VERSION:
+                if contract in {CHAPTER_GUIDE_PROMPT_VERSION, "alc.companion.chapter-learning-prompt.v24"}:
                     chapter = next(c for c in chapters if c.title == payload['chapter']['title'])
                     assert chapter.block_ids in translated
                     if chapter.chapter_id == chapters[0].chapter_id:
@@ -2641,7 +2645,7 @@ def test_guide_batch_resume_reuses_completed_batches(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('stage', ['chapters', 'editorial'])
-def test_late_provider_failure_keeps_bilingual_partial_reader(tmp_path, monkeypatch, stage):
+def test_late_provider_failure_delivers_bilingual_reader(tmp_path, monkeypatch, stage):
     from ac_jobs import Failed
     failure = Failed(RunError('provider_transport', 'Provider unavailable after translation'))
     method = '_chapter_lanes' if stage == 'chapters' else '_cross_chapter_editorial_review'
@@ -2656,13 +2660,15 @@ def test_late_provider_failure_keeps_bilingual_partial_reader(tmp_path, monkeypa
         recipe=CompanionGenerationRecipe(review_rounds=1),
         execution=CompanionExecutionOptions(pipeline_chapters=False, document_cache_root=tmp_path / 'paper'),
         task_service=FakeGuideTasks(reviewer_stop_round=1), translation_adapter=FakeTranslationAdapter(mode='enabled'))
-    assert result.status is RunStatus.FAILED
-    assert result.error.code == 'provider_transport'
-    reader = service.repository.run_directory(result.run_id) / 'partial-reader/companion.html'
+    assert result.status is RunStatus.SUCCEEDED
+    from alc_render import render_publication_html
+    publication = service.materialize_publication(result.run_id, tmp_path / 'reader')
+    reader = tmp_path / 'reader.html'
+    render_publication_html(publication, reader)
     html = reader.read_text()
     assert 'data-alc-source-only="true"' not in html
     assert 'alc-translate' in html
-    assert service.progress(result.run_id)['partial_reader_available']
+    assert service.publication(result.run_id).reader_profile['delivery_ledger']['delivery_grade'] == 'degraded'
 
 
 def test_guide_batches_count_command_metadata_not_only_evidence(tmp_path, monkeypatch):
@@ -2813,3 +2819,138 @@ def test_external_reviewer_pause_is_not_content_recovery(tmp_path, pipeline):
     assert result.status is RunStatus.PAUSED
     assert result.awaiting.reason is ResumeReason.EXTERNAL_CONDITION
     assert result.awaiting.details["llm_code"] == "provider_authentication"
+
+
+@pytest.mark.parametrize("pipeline", [False, True])
+def test_resume_legacy_nul_guides_delivers_without_overwriting_evidence(tmp_path, monkeypatch, pipeline):
+    import alc_companion.rich_text as rich_text
+    from alc_render import render_publication_html
+
+    document = _document(tmp_path)
+    tasks = FakeGuideTasks(guide_text="Keep $\x00Omega$ and surrounding text.")
+    service = CompanionService(tmp_path / "jobs")
+    execution = CompanionExecutionOptions(pipeline_chapters=pipeline, preload_chapter_evidence=False, workers=1)
+    original_parse = rich_text.parse_markdown
+    with monkeypatch.context() as legacy:
+        legacy.setattr(rich_text, "parse_markdown", lambda value: original_parse(value.replace("\x00", "")))
+        def fail_publication(*args, **kwargs):
+            raise companion_build.CompanionPublicationError("Markdown body cannot contain NUL")
+        legacy.setattr(companion_build, "publish_companion", fail_publication)
+        failed = service.build(CompanionBuildRequest(document, target_language="en"),
+            execution=execution, task_service=tasks,
+            translation_adapter=FakeTranslationAdapter(mode="skipped"))
+    assert failed.status is RunStatus.FAILED
+    store = ImmutableArtifactStore(service.repository.run_directory(failed.run_id), repository_root=service.repository.root)
+    chapter = plan_source_chapters(document)[0]
+    ref = store.find(f"chapters/{chapter.chapter_id}/guide-accepted")
+    assert ref is not None
+    evidence = store.read_bytes(ref)
+    assert b"\\u0000" in evidence
+    monkeypatch.setattr(companion_build, "repair_guide_candidate", lambda *args, **kwargs: None)
+    recovered = service.resume(failed.run_id, execution=execution, task_service=tasks,
+                              translation_adapter=FakeTranslationAdapter(mode="skipped"))
+    assert recovered.status is RunStatus.SUCCEEDED, recovered.error
+    assert store.read_bytes(ref) == evidence
+    path = service.materialize_publication(recovered.run_id, tmp_path / "reader")
+    html_path = tmp_path / "reader.html"
+    render_publication_html(path, html_path)
+    assert "surrounding text" in html_path.read_text()
+    assert "unreadable math" in html_path.read_text()
+
+
+@pytest.mark.parametrize("stage", ["chapters", "evidence", "editorial", "references", "publication"])
+def test_late_content_failure_delivers_existing_translation(tmp_path, monkeypatch, stage):
+    document = _document(tmp_path)
+    tasks = FakeGuideTasks()
+    service = CompanionService(tmp_path / "jobs")
+    if stage in {"chapters", "evidence", "editorial"}:
+        method = "_cross_chapter_editorial_review" if stage == "editorial" else "_chapter_lanes"
+        original = getattr(CompanionBuildHandler, method)
+        def fail_after_work(self, *args, **kwargs):
+            if stage in {"chapters", "evidence"}:
+                original(self, *args, **kwargs)
+            if stage == "editorial":
+                args[2][0]["delivery_issue"] = {
+                    "issue_id": "prior-guide-warning", "category": "guide_review_skipped",
+                    "scope": args[2][0]["chapter_id"], "fallback": "unreviewed_content",
+                    "affected_count": 1, "source_preserved": True,
+                    "retry": "not_semantic_retry", "evidence": "earlier guide warning",
+                }
+            if stage == "evidence":
+                raise companion_build.ChapterEvidenceError("chapter_evidence_too_large", "chapter", "fixture")
+            raise ValueError("invalid optional guide content")
+        monkeypatch.setattr(CompanionBuildHandler, method, fail_after_work)
+    elif stage == "references":
+        def broken_references(*args, **kwargs):
+            raise ValueError("invalid bibliography")
+        monkeypatch.setattr(companion_build, "_canonicalize_references", broken_references)
+    else:
+        original = companion_build.publish_companion
+        calls = 0
+        def partially_written_publication(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            result = original(*args, **kwargs)
+            if calls == 1:
+                raise ValueError("failed after writing publication artifacts")
+            return result
+        monkeypatch.setattr(companion_build, "publish_companion", partially_written_publication)
+    result = service.build(CompanionBuildRequest(document, target_language="zh-CN"),
+        recipe=CompanionGenerationRecipe(review_rounds=1),
+        execution=CompanionExecutionOptions(preload_chapter_evidence=False, workers=1),
+        task_service=tasks, translation_adapter=FakeTranslationAdapter(mode="enabled"))
+    assert result.status is RunStatus.SUCCEEDED, result.error
+    publication = service.publication(result.run_id)
+    assert publication.layers
+    assert publication.reader_profile["delivery_ledger"]["delivery_grade"] == "degraded"
+    if stage == "editorial":
+        assert any(issue["issue_id"] == "prior-guide-warning"
+                   for issue in publication.reader_profile["delivery_ledger"]["issues"])
+    from alc_render import render_publication_html
+    path = service.materialize_publication(result.run_id, tmp_path / "reader")
+    html = tmp_path / "reader.html"
+    render_publication_html(path, html)
+    assert "translated paragraph" in html.read_text()
+
+
+def test_historical_v24_reference_preparation_precedes_first_draft_without_review(tmp_path):
+    from alc_companion.reference_preparation import REFERENCE_PREPARATION_VERSION
+    tasks = FakeGuideTasks()
+    service = CompanionService(tmp_path/'jobs')
+    prepared = service.prepare(CompanionBuildRequest(_document(tmp_path), target_language='zh-CN'),
+                               recipe=CompanionGenerationRecipe(review_rounds=0, chapter_guide_prompt="alc.companion.chapter-learning-prompt.v24"))
+    outcome = service.execute(prepared.run_id, execution=CompanionExecutionOptions(workers=1),
+                              task_service=tasks, translation_adapter=FakeTranslationAdapter(mode='enabled'))
+    assert outcome.status is RunStatus.SUCCEEDED, outcome.error
+    assert tasks.counts[REFERENCE_PREPARATION_VERSION] > 0
+    assert tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 0
+    seen = set()
+    for contract, _, prompt in tasks.requests:
+        if contract == REFERENCE_PREPARATION_VERSION:
+            seen.add(_request_payload(prompt)[1]['chapter']['title'])
+        if contract == "alc.companion.chapter-learning-prompt.v24":
+            payload = _request_payload(prompt)[1]
+            assert payload['chapter']['title'] in seen
+            assert payload['prepared_references']['coverage_summary']
+    before = tasks.counts[REFERENCE_PREPARATION_VERSION]
+    service.resume(prepared.run_id, task_service=tasks, translation_adapter=FakeTranslationAdapter(mode='enabled'))
+    assert tasks.counts[REFERENCE_PREPARATION_VERSION] == before
+
+
+@pytest.mark.parametrize("review_rounds", [0, 1])
+def test_initial_generation_has_no_extra_evidence_or_review_call(tmp_path, review_rounds):
+    from alc_companion.reference_preparation import REFERENCE_PREPARATION_VERSION
+    tasks = FakeGuideTasks()
+    service = CompanionService(tmp_path/'jobs')
+    prepared = service.prepare(CompanionBuildRequest(_document(tmp_path), target_language='zh-CN'),
+                               recipe=CompanionGenerationRecipe(review_rounds=review_rounds))
+    outcome = service.execute(prepared.run_id, execution=CompanionExecutionOptions(workers=1),
+                              task_service=tasks, translation_adapter=FakeTranslationAdapter(mode='enabled'))
+    assert outcome.status is RunStatus.SUCCEEDED, outcome.error
+    assert tasks.counts[REFERENCE_PREPARATION_VERSION] == 0
+    assert bool(tasks.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION]) == bool(review_rounds)
+    assert tasks.counts[CHAPTER_GUIDE_PROMPT_VERSION] > 0
+    for contract, _, prompt in tasks.requests:
+        if contract == CHAPTER_GUIDE_PROMPT_VERSION:
+            assert 'prepared_references' not in _request_payload(prompt)[1]
+            assert 'External research is a required part' in prompt

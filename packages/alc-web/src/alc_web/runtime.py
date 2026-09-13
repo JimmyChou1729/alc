@@ -29,7 +29,7 @@ def runtime_identity() -> dict:
             raise RuntimeError(f"Required runtime package is unavailable: {name}")
         root = Path(next(iter(spec.submodule_search_locations)))
         digest = hashlib.sha256()
-        for path in sorted(root.rglob("*.py")):
+        for path in sorted([*root.rglob("*.py"), *(root / "host_adapters").glob("companion-*")]):
             digest.update(path.relative_to(root).as_posix().encode())
             digest.update(b"\0")
             digest.update(path.read_bytes())
@@ -56,3 +56,12 @@ def runtime_identity() -> dict:
         "packages": result,
         "libraries": libraries,
     }
+
+
+def research_host_environment(environment: dict[str, str]) -> dict[str, str]:
+    """Supply the bundled host adapter without requiring user configuration."""
+    result = dict(environment)
+    result.setdefault("ALC_COMPANION_RESEARCH_HOST", str(
+        Path(__file__).parent / "host_adapters" / "companion-research-host"
+    ))
+    return result

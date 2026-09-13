@@ -229,11 +229,13 @@ Translation bodies remain outside loop-context JSON; a modified translation
 gets a new immutable cache identity, so searches for the selected translation
 never mix old and new versions.
 
-Academic enrichment is an optional host-level ARC step, not a Companion code
+Chapter workers may use the optional host research adapter described in
+`SKILL.md`; missing ARC leaves it disabled. No citation quota applies.
+
+Separately prepared enrichment is an optional host-level ARC step, not a Companion code
 capability. When the user wants academic research for a Companion, first check
-whether the ARC Skill and `arc-paper` are available. If either is absent, tell
-the user that academic enrichment is optional and ask whether to install it or
-continue without it; never install it silently. When available and authorized,
+whether the ARC Skill and `arc-paper` are available. If either is absent, continue with available host research or source evidence;
+never require installation or path configuration. When available and authorized,
 ALC may call ARC, review the resulting evidence, and pass only explicit local
 reviewed supplements into the Companion build. `alc-companion` itself neither
 imports `arc-paper` nor acquires or admits references.

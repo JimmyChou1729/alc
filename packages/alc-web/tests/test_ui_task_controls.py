@@ -75,7 +75,7 @@ vm.createContext(context); vm.runInContext(js, context);
 for (const [phase, expected] of [['glossary','整理术语'], ['translation','翻译与审查'], ['guides','编写伴读指南']]) {
  if(context.taskPhaseLabel({phase:'companion',detail:{progress:{phase}}}) !== expected) throw Error(phase);
 }
-if(context.taskPhaseLabel({phase:'companion', detail:{}}) !== '准备翻译与伴读') throw Error('fallback');
+if(context.taskPhaseLabel({phase:'companion', detail:{}}) !== '准备原文') throw Error('fallback');
 if(context.taskPhaseLabel({phase:'completed',detail:{progress:{phase:'guides'}}}) !== '已交付') throw Error('stale');
 '''
     subprocess.run([node, '-e', script], cwd=root, check=True, capture_output=True, text=True)
