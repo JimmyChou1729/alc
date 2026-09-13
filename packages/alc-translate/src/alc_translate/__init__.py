@@ -1,6 +1,6 @@
 """Durable scientific translation workflows."""
 
-__version__ = "2.1.3"
+__version__ = "2.1.4"
 
 from .atoms import (
     PROTECTED_ATOM_PLAN_SCHEMA,
