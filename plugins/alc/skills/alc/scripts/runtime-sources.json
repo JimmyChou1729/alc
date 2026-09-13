@@ -5,7 +5,7 @@
     {
       "id": "foundation",
       "repository": "https://github.com/tririver/ac-foundation.git",
-      "commit": "75b10798742bf17b9c5e3c4125b1d5c202bf7691",
+      "commit": "92976af8a799a84bfe4e0bd0faffed9d1f057b28",
       "packages": [
         "ac-jobs",
         "ac-llm",
@@ -23,7 +23,7 @@
     {
       "id": "product",
       "repository": "https://github.com/tririver/alc.git",
-      "commit": "a3af6ae40c54532ef70a04e8464fb63366909058",
+      "commit": "71abc605f157d6341ad919c6061c0e29923dc18f",
       "packages": [
         "alc-catalog",
         "alc-companion",
