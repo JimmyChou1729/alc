@@ -2,4 +2,5 @@
 set -euo pipefail
 
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+export ALC_COMPANION_RESEARCH_HOST="${ALC_COMPANION_RESEARCH_HOST-$script_dir/../skills/alc/scripts/companion-research-host}"
 exec "$script_dir/../skills/alc/scripts/alc-runtime" alc-companion "$@"

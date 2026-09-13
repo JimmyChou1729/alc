@@ -440,11 +440,25 @@ remain readable and editable, with a review notice. Unrenderable Markdown is
 preserved as literal text, unresolved citations are not linked, and uncertain
 locations are attached to the enclosing chapter rather than an invented source
 position. The original candidate and recovery diagnostics remain in the run.
+NUL and unsupported control characters are rejected during guide acceptance and
+enter the same bounded repair path. If repair is unavailable, recovery marks
+damaged expressions locally, preserving readable neighboring prose, valid math,
+and resolved citations. It does not guess missing symbols. This also applies
+when publishing older accepted guides; stored evidence is not rewritten. If
+the remaining Markdown is still invalid, the literal fallback is retained.
 If a reviewer or a later proposal round pauses on invalid model output, the
 latest saved proposal from that execution scope is retained as unreviewed
 content. A different recovery epoch cannot supply a stale proposal.
 
 Local generated-output failures can therefore complete with a degraded Reader.
+After translation is complete, guide assembly, optional editorial review,
+reference processing, and publication content failures fall back to the verified
+translations and available guides. Invalid guide units are omitted individually;
+if guide publication still fails, the fallback omits the guide layer. It uses a
+separate artifact namespace so a partially written publication cannot block the
+fallback. Existing translation and guide diagnostics remain visible. Sources,
+translation bindings and storage integrity are still validated; missing or
+invalid translations are not marked complete by this fallback.
 User pauses, authorization requests, source identity mismatches, and storage or
 delivery integrity failures retain their existing handling. Translation retains
 its existing per-block repair and source-text fallback.
@@ -454,3 +468,81 @@ Audited publication replacements may explicitly set
 marks its previous quality warning resolved while retaining the original
 fallback declaration in revision history. The flag is omitted by default and
 cannot be used for other roles or title-only changes.
+
+
+New guide prompt contracts prioritize verifying a valuable extension with a
+concrete evidence gap before trimming it. Review feedback names the claim and
+reader benefit to preserve. If tools are unavailable, verification yields no
+usable support, or the addition has little value, the guide may narrow or omit
+it. There is no retrieval quota. Older prompt contracts remain unchanged for
+existing runs; this policy applies to new runs.
+
+New guide and review prompts require external references to support the specific
+explanation and to have a verifiable title and identifier or URL. They prefer
+arXiv IDs, then DOI IDs, with stable URLs for other sources, and require reading
+the relevant content before citation. Historical prompt contracts stay unchanged.
+
+New v26 guide prompts require focused external research during the initial
+proposal, regardless of review rounds. Workers must inspect and use suitable
+sources in substantive explanations with matching citations. Empty bibliographies
+require a concrete lookup/verification limitation in the guide; supplied-text
+sufficiency is not a reason to skip lookup. A failed route should fall back to
+another available authorized route within bounded attempts. No separate preparation
+or hidden review call is added. Historical v24/v25 contracts retain their flow.
+Tool execution and semantic source suitability remain model-mediated; prompt
+requirements alone are not a programmatic guarantee of compliance.
+
+There is no reference-count quota. Only sources cited by retained content appear in the bibliography.
+Before citation resolution, model output such as `[\@1]` is normalized to
+`[@1]` only when that bibliography position exists. Code, link destinations,
+escaped opening brackets, and unknown positions retain their literal text.
+New generation prompts omit original-document citation guidance and its special
+format. Historical prompt contracts and existing publication parsing remain
+compatible; completed publications are unchanged.
+
+Chapter workers can optionally use a host-owned research adapter. Set
+`ALC_COMPANION_RESEARCH_HOST` to its absolute executable path. The host calls
+`describe` once to obtain `{ "available": true, "instructions": "..." }`, then
+passes the JSON object following a model's `research ` request to `execute` on
+stdin. Responses must be JSON objects. This is trusted local configuration,
+never a path supplied by documents or model output. Missing adapters expose no
+research tools; failed requests leave source reading available. Only guide
+workers receive this broker.
+
+The Skill ships `scripts/companion-research-host`, an optional ARC adapter.
+It automatically checks `arc-paper` on PATH, enabled installed Codex/Claude user ARC
+plugins, and standalone ARC skills. Only ready, capable runtimes are used;
+it never installs ARC. `ALC_ARC_PAPER` is an optional advanced override.
+Local Web bundles the same adapter and enables discovery by default. Set
+`ALC_COMPANION_RESEARCH_HOST` to an empty string to disable the integration.
+INSPIRE metadata search is not general web search; native web search, when
+available, can discover other URLs for ARC to read.
+
+Original-document references use inspected chapter part numbers in the model
+proposal (`alc-original:1-14,20`). The program replaces their title with the
+chapter title and stores validated source block identities in an `alc-source:`
+reference. Invalid or unavailable locations retain the original-document title
+without claiming page or equation numbers. External references keep their own
+titles and sources. Existing v19 prompt contracts remain available for recovery.
+
+Recovery diagnostics attach to the affected learning unit, not every unit in a
+chapter. Literal Markdown, unresolved references, unconfirmed source
+locations, and incomplete review use `recovery_diagnostic` metadata carried into fragment provenance.
+Reader notices therefore do not become authored prose. Safe format repairs,
+including ANSI SGR removal, retain audit evidence without an unresolved warning.
+
+For LocalWeb Codex guide generation and review, native web search is enabled on
+those model tasks when useful for external references. Translation and OCR keep
+their existing network policy. Other tools, shell execution and multi-agent
+execution remain disabled in the local application profile. There is no required
+reference count or separate retrieval pipeline.
+
+Citation reconciliation runs on every generated guide, including when content review is disabled. Positional citations are resolved to stable source IDs before unused sources are removed from the accepted bibliography. Unused sources alone do not trigger model repair or a degraded-delivery warning; raw candidates retain the original source list for audit. Missing citation metadata still follows bounded recovery and is never invented or attached to unrelated prose. Unresolved reference diagnostics are kept out of guide prose and raw JSON cards; older reference-audit cards are recognized during republication.
+
+Bounded guide repair accepts an exact NUL-to-backslash restoration for the
+observed `sigma`, `Delta`, `mathcal`, and `mathbf` commands inside math
+delimiters. Prose, code spans, unknown commands, formula arguments, citation
+IDs, and anchors remain protected; the repaired candidate must still pass
+normal guide validation. Raw candidates remain unchanged for audit.
+
+Inline citation spacing such as `[ @1]` is normalized before source coverage checks; Markdown code and escaped literals remain unchanged.

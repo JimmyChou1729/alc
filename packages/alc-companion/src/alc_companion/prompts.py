@@ -7,10 +7,20 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-CHAPTER_GUIDE_PROMPT_VERSION = "alc.companion.chapter-learning-prompt.v18"
-CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = (
-    "alc.companion.chapter-learning-review-prompt.v18"
+CHAPTER_GUIDE_PROMPT_VERSION = "alc.companion.chapter-learning-prompt.v26"
+HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V25 = "alc.companion.chapter-learning-prompt.v25"
+HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V24 = "alc.companion.chapter-learning-prompt.v24"
+HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V23 = "alc.companion.chapter-learning-prompt.v23"
+HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V22 = "alc.companion.chapter-learning-prompt.v22"
+HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V21 = "alc.companion.chapter-learning-prompt.v21"
+HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V20 = "alc.companion.chapter-learning-prompt.v20"
+HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V19 = "alc.companion.chapter-learning-prompt.v19"
+HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V18 = (
+    "alc.companion.chapter-learning-prompt.v18"
 )
+CHAPTER_GUIDE_REVIEW_PROMPT_VERSION = "alc.companion.chapter-learning-review-prompt.v20"
+HISTORICAL_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V19 = "alc.companion.chapter-learning-review-prompt.v19"
+HISTORICAL_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V18 = "alc.companion.chapter-learning-review-prompt.v18"
 HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V17 = (
     "alc.companion.chapter-learning-prompt.v17"
 )
@@ -119,7 +129,7 @@ CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA = _closed(
 )
 
 
-_CHAPTER_GUIDE_INSTRUCTION = """
+_GUIDE_CONTENT_INSTRUCTION = """
 Write the Companion for the current source segment. The program owns chapter,
 section, block, learning-unit, and reference identities. Fill only the simple
 semantic template supplied in the loop context: one optional `chapter_guide`
@@ -261,9 +271,58 @@ Translate English excerpts or quotations into the target language while
 preserving and citing the source's English title and URL. English Wikipedia is
 an optional ordinary source; only `en.wikipedia.org` is allowed.
 
-Use only the verified document, frozen translation, and any reviewed
+"""
+
+_GUIDE_LEGACY_SOURCE_POLICY = """Use only the verified document, frozen translation, and any reviewed
 supplements supplied with this build. External academic research is an
-optional host-level workflow and is not performed by alc-companion itself.
+optional host-level workflow and is not performed by alc-companion itself."""
+
+_GUIDE_RESEARCH_POLICY = """Research when it materially improves the Companion. Prefer a source already
+available through the shared paper cache. External reference sources may be
+used when needed. There is no reference-count limit, and no minimum. If
+acquisition is required, use any currently available and authorized
+capability-matching tool; do not assume one exists or insist on
+authorization that was not granted."""
+
+_GUIDE_EXTERNAL_REFERENCE_POLICY = """
+
+Find external references that materially support the Companion's supplementary
+explanations. Use web search and cite only sources whose title and identifier
+or URL are supported by a reliable source. Prefer arXiv IDs, then DOI IDs;
+use a stable source URL when neither applies. Read the relevant content before
+citing it and confirm that it supports the specific explanation.
+"""
+
+_GUIDE_VERIFY_BEFORE_TRIMMING = """
+
+When a useful explanation extends beyond the supplied source and lacks support,
+first try to verify the specific claim with available authorized research tools.
+Do not discard a valuable explanation solely because it currently lacks a
+citation. Read relevant evidence, correct the claim and state its assumptions,
+then cite the inspected source nearby. This applies especially when review has
+identified a concrete evidence gap. A citation to the original document does
+not support an extension absent from that document.
+If tools are unavailable, an attempted search finds no usable support, or the
+extension adds little value, narrow or omit it and continue the full Companion.
+Do not retain unsupported claims, invent sources, repeat an unchanged failed
+search, or turn the chapter into a separate research task. No retrieval or
+reference quota applies.
+"""
+
+_GUIDE_REVIEW_VERIFY_BEFORE_TRIMMING = """
+
+For a valuable extension with a concrete evidence gap, first use available
+research tools to check it, or ask the next proposer to verify that specific
+claim before narrowing or omitting it. Name the missing support and the reader
+benefit to preserve; do not offer immediate deletion as an equal first choice
+merely because a citation is missing. Distinguish missing evidence from a
+false or low-value claim. After an unsuccessful verification attempt, or when
+no suitable tool is available, source-bounded wording or omission is appropriate.
+Do not demand research for content already adequately grounded, require a
+citation quota, or claim that an uninspected source supports the extension.
+"""
+
+_GUIDE_SOURCE_ACCESS_INSTRUCTION = """
 
 When `source_commands.availability` is `exact`, the source body is not embedded
 in the loop context: run the supplied commands for exact numbered parts,
@@ -292,13 +351,63 @@ who proposes a valuable addition at a new location must inspect and record
 that location first.
 """
 
-_CHAPTER_GUIDE_INSTRUCTION_V17 = _CHAPTER_GUIDE_INSTRUCTION
-_CHAPTER_GUIDE_INSTRUCTION += """
+_CHAPTER_GUIDE_INSTRUCTION_V17 = (
+    _GUIDE_CONTENT_INSTRUCTION
+    + _GUIDE_LEGACY_SOURCE_POLICY
+    + _GUIDE_SOURCE_ACCESS_INSTRUCTION
+)
+_GUIDE_MATH_INSTRUCTION = """
 
 Use `$...$` or `\\(...\\)` for inline math. For display math, put the opening
 and closing `$$` delimiters on separate lines with the TeX body between them.
 Never place display-math content on the same line as either `$$` delimiter.
 """
+
+
+_CHAPTER_GUIDE_INSTRUCTION_V18 = (
+    _CHAPTER_GUIDE_INSTRUCTION_V17 + _GUIDE_MATH_INSTRUCTION
+)
+_GUIDE_LEGACY_REFERENCE_INSTRUCTION = """
+
+Make the basis of substantive explanations traceable. References are not
+limited to external literature: for explanations grounded in the supplied
+original document, cite that document with its actual title and inspected
+section or numbered part range, using the same `[@n]` mechanism. Identify
+these entries as supplied original-document sources; do not invent an author,
+URL, edition, page number, or an external publication. A frozen translation
+is a reading aid, not an independent source of corroboration.
+For additions grounded in a reviewed supplement, cite the actual supplied
+source supporting the addition. Do not manufacture a bibliography from
+remembered titles or claim to have consulted sources that were not supplied
+or inspected. Keep only references actually cited by retained guide content.
+An empty reference list is allowed when there is no supported citation; lack
+of a reference must not prevent delivering the usable translation and guide.
+"""
+
+_CHAPTER_GUIDE_INSTRUCTION_V19 = (
+    _CHAPTER_GUIDE_INSTRUCTION_V18 + _GUIDE_LEGACY_REFERENCE_INSTRUCTION
+)
+_GUIDE_ORIGINAL_REFERENCE_FORMAT = """
+
+For a supplied-original reference, set `source` to exactly
+`alc-original:1-14,20`, replacing the example with the inspected one-based
+part numbers from the current chapter input. Use comma-separated numbers or
+inclusive ranges, not page numbers, equation numbers, titles, or prose.
+When no reliable inspected part location is available, use `alc-original:`.
+The caller supplies the displayed original-document title; your reference
+`title` field remains required but is replaced with that authoritative title.
+Never guess page numbers or claim an uninspected part supports an explanation.
+External references continue to use their actual title and source.
+"""
+
+
+_CHAPTER_GUIDE_INSTRUCTION = (
+    _GUIDE_CONTENT_INSTRUCTION
+    + _GUIDE_RESEARCH_POLICY
+    + _GUIDE_SOURCE_ACCESS_INSTRUCTION
+    + _GUIDE_MATH_INSTRUCTION
+    + _GUIDE_ORIGINAL_REFERENCE_FORMAT
+)
 
 
 _CHAPTER_GUIDE_REVIEW_INSTRUCTION = """
@@ -489,8 +598,102 @@ inspect each edited unit's exact source anchors before completing the audit.
 def chapter_guide_proposer_instructions(
     version: str = CHAPTER_GUIDE_PROMPT_VERSION,
 ) -> str:
-    if version == CHAPTER_GUIDE_PROMPT_VERSION:
+    if version in {CHAPTER_GUIDE_PROMPT_VERSION, HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V25, HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V24, HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V23}:
+        instruction = (
+            _GUIDE_CONTENT_INSTRUCTION
+            + _GUIDE_RESEARCH_POLICY
+            + _GUIDE_SOURCE_ACCESS_INSTRUCTION
+            + _GUIDE_MATH_INSTRUCTION
+            + _GUIDE_VERIFY_BEFORE_TRIMMING.replace(
+                " A citation to the original document does\n"
+                "not support an extension absent from that document.",
+                "",
+            )
+            + _GUIDE_EXTERNAL_REFERENCE_POLICY
+        )
+        if version == HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V24:
+            instruction += """
+
+Complete evidence use in this first draft; do not defer citations to a reviewer.
+The caller's prepared_references contains a generation-stage evidence plan.
+Use relevant verified support when writing supplementary explanations, keeping
+its limitations. For each retained externally supported explanation, add a nearby
+[@N] marker and its actual title/source in this proposal's references array;
+renumber markers to that array, not the source paper's bibliography or the plan.
+Do not present unresolved planned claims as verified facts. Verify further with
+available tools, derive them from supplied evidence, or omit unsupported additions.
+Before returning, check every external claim has supporting evidence, every
+citation has a matching reference, and every listed reference is used. An empty
+bibliography is valid when the retained explanations need no external support.
+"""
+        if version == HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V25:
+            instruction += """
+
+Write a useful supplementary Companion in this initial generation, including
+research and citations as part of writing it. A faithful paraphrase alone is
+not sufficient when the reader would benefit from missing background. Identify
+what the supplied text assumes rather than explains: definitions, omitted
+reasoning, conditions of validity, connections to established methods, or a
+comparison needed to understand the result. Choose additions for their teaching
+value and the user's intent, not merely because the supplied text already covers
+them. Familiarity with a topic does not establish that the source explains it.
+For those additions requiring external support, use available authorized research
+tools now, inspect the relevant content, and incorporate the supported explanation
+with a nearby [@N] citation and matching title/source in references. Existing
+bibliography entries are starting points for lookup, not evidence of having read
+their content. Prefer arXiv IDs, then DOI IDs, then stable source URLs.
+An empty result from one research provider does not establish that useful support
+is unavailable. Try a simpler focused query or available native web search before
+abandoning a useful addition; keep this lookup bounded and respect tool failures.
+Finish the explanation, research, and bibliography in this same proposal; do not
+leave missing background or sources for a later reviewer. If support cannot be
+verified, narrow or omit the unsupported claim without inventing a source.
+Use only references cited in retained explanations, with markers numbered against
+this proposal's references array. There is no citation quota: an empty bibliography
+is appropriate when useful additions genuinely require no external support.
+"""
+        if version == CHAPTER_GUIDE_PROMPT_VERSION:
+            instruction = instruction.replace(_GUIDE_RESEARCH_POLICY, "")
+            instruction += """
+
+External research is a required part of this initial Companion generation,
+independent of whether any later review is enabled. Before returning your first
+proposal, perform a focused search for reliable external sources relevant to the
+paper's concepts, methods, or interpretation using available authorized research
+or native web tools. Do not skip this search because the supplied paper seems
+self-contained, the topic is familiar, or you can paraphrase its explanations.
+Choose useful background the paper assumes, definitions, omitted derivations,
+conditions of validity, or comparisons that help the reader understand it.
+Inspect relevant source content and integrate the supported background into the
+Companion with nearby [@N] markers and matching title/source entries in references.
+Prefer arXiv IDs, then DOI IDs, then stable URLs. Existing bibliography entries
+are lookup candidates, not evidence that their content has been read.
+If one provider returns no results, simplify the query or use available native
+web search. Keep attempts bounded. Finish research and citation in this proposal;
+do not wait for reviewer feedback to request or add references.
+An empty references array is allowed only after unsuccessful lookup, no suitable
+relevant source was found, or supporting content could not be verified (including
+unavailable tools). In that case, briefly state the concrete limitation in the
+chapter guide, in the target language, without claiming unperformed tool use.
+Do not use "the original is sufficient" as a reason to omit the required search.
+Never fabricate references or pad the bibliography: include only verified sources
+actually used in substantive explanations. Number citations against this proposal's
+references array. The number of later review rounds must not change these duties.
+"""
+    elif version == HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V22:
+        instruction = (
+            _CHAPTER_GUIDE_INSTRUCTION
+            + _GUIDE_VERIFY_BEFORE_TRIMMING
+            + _GUIDE_EXTERNAL_REFERENCE_POLICY
+        )
+    elif version == HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V21:
+        instruction = _CHAPTER_GUIDE_INSTRUCTION + _GUIDE_VERIFY_BEFORE_TRIMMING
+    elif version == HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V20:
         instruction = _CHAPTER_GUIDE_INSTRUCTION
+    elif version == HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V19:
+        instruction = _CHAPTER_GUIDE_INSTRUCTION_V19
+    elif version == HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V18:
+        instruction = _CHAPTER_GUIDE_INSTRUCTION_V18
     elif version == HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V17:
         instruction = _CHAPTER_GUIDE_INSTRUCTION_V17
     elif version == HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V16:
@@ -507,6 +710,14 @@ def chapter_guide_reviewer_instructions(
     version: str = CHAPTER_GUIDE_REVIEW_PROMPT_VERSION,
 ) -> str:
     if version == CHAPTER_GUIDE_REVIEW_PROMPT_VERSION:
+        instruction = (
+            _CHAPTER_GUIDE_REVIEW_INSTRUCTION
+            + _GUIDE_REVIEW_VERIFY_BEFORE_TRIMMING
+            + _GUIDE_EXTERNAL_REFERENCE_POLICY
+        )
+    elif version == HISTORICAL_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V19:
+        instruction = _CHAPTER_GUIDE_REVIEW_INSTRUCTION + _GUIDE_REVIEW_VERIFY_BEFORE_TRIMMING
+    elif version == HISTORICAL_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V18:
         instruction = _CHAPTER_GUIDE_REVIEW_INSTRUCTION
     elif version == HISTORICAL_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V17:
         instruction = _CHAPTER_GUIDE_REVIEW_INSTRUCTION_V17
@@ -664,8 +875,18 @@ __all__ = [
     "EDITORIAL_REVIEWER_PROMPT_VERSION",
     "HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V16",
     "HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V17",
+    "HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V18",
+    "HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V19",
+    "HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V25",
+    "HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V24",
+    "HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V23",
+    "HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V22",
+    "HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V21",
+    "HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V20",
     "HISTORICAL_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V16",
     "HISTORICAL_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V17",
+    "HISTORICAL_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V19",
+    "HISTORICAL_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V18",
     "author_identity_prompt",
     "chapter_guide_proposer_instructions",
     "chapter_guide_reviewer_instructions",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -13,6 +14,7 @@ from ac_jobs import canonical_json_bytes
 from .rich_text import (
     RichTextError,
     canonicalize_display_math,
+    strip_ansi_sgr,
     validate_rich_markdown,
 )
 
@@ -84,6 +86,7 @@ def validate_chapter_guide(
     block_ids: Sequence[str] = (),
     chapter_anchor_block_id: str | None = None,
     section_block_ids: Sequence[str] = (),
+    chapter_title: str = "Original document",
 ) -> dict[str, Any]:
     """Normalize the minimal proposal into publication-ready units."""
     if chapter_id is None or not block_ids:
@@ -112,22 +115,38 @@ def validate_chapter_guide(
     sections = _mapping_list(result["section_guides"], "section guides")
     companions = _mapping_list(result["companions"], "companions")
     references = _minimal_references(result["references"])
+    references = [
+        _original_reference(item, block_ids, chapter_anchor_block_id, chapter_title)
+        for item in references
+    ]
     reference_ids, citation_map, unique_references = _published_reference_ids(
         references
     )
 
+    from .citation_normalization import (
+        citation_spans, normalize_citation_spacing, normalize_escaped_reference_markers,
+    )
+
+    normalization_counts: list[int] = []
+
     def normalize_markdown(value: Any, description: str) -> tuple[str, list[str]]:
+        cleaned, sgr_count = strip_ansi_sgr(_nonempty(value, description))
         markdown = _without_leading_heading(
-            _nonempty(value, description),
+            cleaned,
             description=description,
         )
-        for position, reference_id in citation_map.items():
-            markdown = markdown.replace(f"[@{position}]", f"[@{reference_id}]")
-        if re.search(r"\[@\d+\]", markdown):
-            raise CompanionContentError(
-                "chapter_reference_coverage_invalid",
-                "positional citation refers to a missing reference",
-            )
+        markdown = normalize_escaped_reference_markers(markdown, citation_map)
+        markdown = normalize_citation_spacing(markdown)
+        for start, end in sorted(citation_spans(markdown), reverse=True):
+            key = markdown[start + 2:end - 1]
+            if key.isdigit():
+                reference_id = citation_map.get(int(key))
+                if reference_id is None:
+                    raise CompanionContentError(
+                        "chapter_reference_coverage_invalid",
+                        "positional citation refers to a missing reference",
+                    )
+                markdown = markdown[:start] + f"[@{reference_id}]" + markdown[end:]
         try:
             markdown = canonicalize_display_math(markdown)
             citations = validate_rich_markdown(
@@ -138,6 +157,7 @@ def validate_chapter_guide(
             raise CompanionContentError(
                 "learning_markdown_invalid", str(exc)
             ) from exc
+        normalization_counts.append(sgr_count)
         return markdown, list(dict.fromkeys(citations))
 
     units: list[dict[str, Any]] = []
@@ -222,11 +242,15 @@ def validate_chapter_guide(
         for item in units
         for citation in item["citations"]
     }
-    if cited != set(reference_ids):
+    if not cited.issubset(reference_ids):
         raise CompanionContentError(
             "chapter_reference_coverage_invalid",
-            "chapter references must be exactly the references cited by generated text",
+            "chapter citations must resolve to supplied references",
         )
+    for unit, count in zip(units, normalization_counts, strict=True):
+        if count:
+            unit["normalization_diagnostics"] = {"ansi_sgr_removed": count}
+
     normalized_references = [
         {
             "reference_id": reference_id,
@@ -240,6 +264,9 @@ def validate_chapter_guide(
         for reference_id, item in zip(
             reference_ids, unique_references, strict=True
         )
+        # Resolve positional citations before filtering so removing an unused
+        # source cannot redirect a citation to a different bibliography entry.
+        if reference_id in cited
     ]
     return {
         "chapter_id": chapter_id,
@@ -361,6 +388,35 @@ def _located_guide(
         "title": _plain_title(result["title"], f"{description} title"),
         "content_markdown": result["content_markdown"],
     }
+
+
+def _original_reference(item, block_ids, anchor, title):
+    source = item["source"].strip()
+    scheme, separator, selector = source.partition(":")
+    if not separator or scheme.casefold() not in {"alc-original", "alc-source"}:
+        return item
+    # Internal block identities are caller-owned, never a model input contract.
+    if scheme.casefold() == "alc-source":
+        selector = ""
+    selected = set()
+    valid = bool(selector)
+    for part in selector.split(","):
+        match = re.fullmatch(r"([0-9]+)(?:-([0-9]+))?", part.strip())
+        if match is None:
+            valid = False
+            break
+        if len(match[1]) > 12 or len(match[2] or "") > 12:
+            valid = False
+            break
+        first, last = int(match[1]), int(match[2] or match[1])
+        if not 1 <= first <= last <= len(block_ids):
+            valid = False
+            break
+        selected.update(block_ids[first - 1:last])
+    payload = {"version": 1, "anchor": anchor,
+               "blocks": sorted(selected) if valid else []}
+    return {"title": title.strip() or "Original document",
+            "source": "alc-source:" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}
 
 
 def _minimal_references(value: Any) -> list[dict[str, str]]:
@@ -527,12 +583,6 @@ def _plain_title(value: Any, description: str) -> str:
     """Keep structured titles readable without making them Markdown blocks."""
 
     title = _nonempty(value, description)
-    title = re.sub(
-        r"(?<!\\)\$(?!\$)([^$\n]+?)(?<!\\)\$(?!\$)",
-        r"\1",
-        title,
-    )
-    title = re.sub(r"\\\((.+?)\\\)", r"\1", title)
     return " ".join(title.split())
 
 

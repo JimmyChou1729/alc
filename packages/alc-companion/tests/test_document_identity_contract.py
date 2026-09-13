@@ -72,9 +72,9 @@ def test_current_request_and_recipe_round_trip_only(tmp_path: Path) -> None:
         "model": {"provider": "auto", "model": None, "tier": "medium"},
         "approx_term_count": 50,
         "author_identity_prompt": "alc.companion.author-identity-prompt.v4",
-        "chapter_guide_prompt": "alc.companion.chapter-learning-prompt.v18",
+        "chapter_guide_prompt": "alc.companion.chapter-learning-prompt.v26",
         "chapter_guide_review_prompt": (
-            "alc.companion.chapter-learning-review-prompt.v18"
+            "alc.companion.chapter-learning-review-prompt.v20"
         ),
         "chapter_guide_max_rounds": 3,
         "chapter_guide_review_final_round": False,
@@ -233,3 +233,22 @@ def test_old_request_and_recipe_schemas_are_rejected(tmp_path: Path) -> None:
         recipe["schema_version"] = f"alc.companion.generation_recipe.{version}"
         with pytest.raises(ValueError, match="unsupported"):
             decode_generation_recipe(recipe)
+
+
+def test_current_guide_allows_available_external_research_without_new_pipeline():
+    from alc_companion.prompts import chapter_guide_proposer_instructions
+    instruction = chapter_guide_proposer_instructions()
+    assert 'External research is a required part' in instruction
+    assert 'available authorized research' in instruction
+    assert 'Use only the verified document, frozen translation' not in instruction
+    assert 'alc-external' not in instruction
+
+
+def test_historical_guide_keeps_its_original_prompt_contract():
+    from alc_companion.prompts import (
+        chapter_guide_proposer_instructions,
+        HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V19,
+    )
+    assert 'Use only the verified document, frozen translation' in (
+        chapter_guide_proposer_instructions(HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V19)
+    )

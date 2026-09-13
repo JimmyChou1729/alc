@@ -99,6 +99,8 @@ class _GuideTasks:
                 "basis": "No author is confirmed by this fixture.",
                 "anchor_block_ids": [],
             }
+        elif "reference-preparation" in contract:
+            value = {"coverage_summary": "The fixture needs only source evidence.", "references": [], "explanations": []}
         elif "chapter-learning-review-prompt" in contract:
             value = {
                 "schema_version": "ac.proposer_reviewer.review.v1",

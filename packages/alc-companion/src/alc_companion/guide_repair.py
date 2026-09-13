@@ -106,12 +106,30 @@ def repair_guide_candidate(
     return dict(raw)
 
 
+def _restore_math_command_escapes(text: str) -> str:
+    """Allow only NUL replacing a known command's slash inside math delimiters."""
+    import re
+    from .rich_text import _visible_markdown
+
+    visible = _visible_markdown(text)
+    commands = {"sigma", "Delta", "mathcal", "mathbf"}
+    math = re.compile(r"(?<!\\)\$\$[\s\S]*?(?<!\\)\$\$|(?<![\\$])\$(?!\$)[^\n$]*?(?<!\\)\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]")
+    positions = set()
+    for span in math.finditer(visible):
+        for command in re.finditer(r"\x00([A-Za-z]+)", span[0]):
+            if command[1] in commands:
+                positions.add(span.start() + command.start())
+    return "".join("\\" if index in positions else char
+                   for index, char in enumerate(text))
+
+
 def _preserves_content(original: Mapping[str, Any], repaired: Mapping[str, Any]) -> bool:
     """Only formatting may change; source placement and neighboring text stay fixed."""
     from .rich_text import RichTextError, canonicalize_display_math
 
     def same(left, right, key=None):
         if key == "content_markdown" and isinstance(left, str) and isinstance(right, str):
+            left = _restore_math_command_escapes(left)
             try:
                 return canonicalize_display_math(left) == canonicalize_display_math(right)
             except RichTextError:
