@@ -3845,6 +3845,8 @@ globalThis.window = globalThis;
     state: state,
     renderFragment: renderFragment,
     renderSourceRow: renderSourceRow,
+    buildSpeechQueue: buildSpeechQueue,
+    replaceTableMirror: function (callback) { var previous = mirrorSourceTable; mirrorSourceTable = callback; return previous; },
     renderContents: renderContents,
     renderDeliverySummary: renderDeliverySummary,
     resetQualitySession: function () { deliverySummaryDismissed = false; },
@@ -3870,6 +3872,7 @@ globalThis.window = globalThis;
     installDraftSpies: function (calls, render) {
       renderMarkdown = render;
       renderSourceBlock = function () { return new FakeNode("div"); };
+      sourceEditorMarkdown = function (block) { return block.kind === "table" ? block.payload.rows.map(function (row) { return row.join(" | "); }).join(" ") : "![image](assets/image.png)"; };
       renderCardActions = function () { return new FakeNode("div"); };
       decorateGlossary = function () {};
       typeset = function () {};
@@ -4256,6 +4259,49 @@ assert(
   helpers.state.payload.publication.layers = [];
   assert(helpers.renderSourceRow(captionlessFigure, []).querySelector(".alc-lanes")
     .children.length === 1, "source-only reading must not duplicate figures");
+  var captionlessTable = {
+    block_id: "captionless-table", kind: "table",
+    payload: {caption: "", headers: [], rows: [["Logical Progression"], ["Step 1"]]}
+  };
+  assert(helpers.renderSourceRow(captionlessTable, []).querySelector(".alc-lanes")
+    .children.length === 1, "source-only reading must not duplicate tables");
+  helpers.state.payload.publication.layers = [{producer: "alc-translate"}];
+  var tableLanes = helpers.renderSourceRow(captionlessTable, []).querySelector(".alc-lanes");
+  assert(tableLanes.children.length === 2 &&
+    tableLanes.children[1].dataset.role === "translation" &&
+    tableLanes.children[1].classList.contains("alc-translation-table-card"),
+    "captionless tables must have an editable translated-side mirror");
+  helpers.state.selected.set("deleted-table-mirror", {
+    fragment_id: "deleted-table-mirror", role: "translation", priority: 50, deleted: true,
+    anchor: anchor("captionless-table")
+  });
+  assert(helpers.renderSourceRow(captionlessTable, []).querySelector(".alc-lanes")
+    .children.length === 1, "deleted translated table must stay deleted");
+  helpers.state.selected.delete("deleted-table-mirror");
+  var originalBlocks = helpers.state.payload.publication.source_document.blocks;
+  helpers.state.payload.publication.source_document.blocks = [captionlessTable];
+  var speech = helpers.buildSpeechQueue(new Set(["translation"]));
+  assert(speech.length === 1 && speech[0].fragmentId === "translation-mirror-captionless-table" &&
+    speech[0].fragment.markdown_body.includes("Logical Progression"),
+    "captionless table copy is missing from the speech queue: " + JSON.stringify(speech));
+  helpers.state.selected.set("table-as-prose", {
+    fragment_id: "table-as-prose", role: "source", priority: 50,
+    anchor: anchor("captionless-table"), markdown_body: "Now ordinary prose.",
+    provenance: {source_edit: {schema_version: "alc.render.source_edit.v1", operation: "replace"}}
+  });
+  assert(helpers.renderSourceRow(captionlessTable, []).querySelector(".alc-lanes").children.length === 1,
+    "table replaced by prose must not regain an old table mirror");
+  assert(helpers.buildSpeechQueue(new Set(["translation"])).length === 0,
+    "suppressed table copy must not remain in the speech queue");
+  helpers.state.selected.delete("table-as-prose");
+  var previousMirror = helpers.replaceTableMirror(function () { throw new Error("saved table edit overwritten"); });
+  var savedTable = Object.assign({}, parallelTranslation, {
+    fragment_id: "translation-mirror-captionless-table", anchor: anchor("captionless-table"),
+    markdown_body: "| Header |\\n| --- |\\n| User edited cell |\\n"
+  });
+  helpers.renderSourceRow(captionlessTable, [savedTable]);
+  helpers.replaceTableMirror(previousMirror);
+  helpers.state.payload.publication.source_document.blocks = originalBlocks;
   helpers.state.payload.publication.layers = savedLayers;
   helpers.state.payload.selected_heading_fragments = [titleTranslation];
   helpers.state.selected.set(titleTranslation.fragment_id, Object.assign(
@@ -7818,4 +7864,100 @@ assert(
         capture_output=True,
         text=True,
     )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_mirrored_figure_deletion_targets_only_translation() -> None:
+    assert 'renderFragment(mirroredMediaFragment(block))' in _text('reader.js')
+    assert '.alc-fragment:hover > .alc-card-actions' in _text('reader.css')
+    assert '.alc-fragment:focus-within > .alc-card-actions' in _text('reader.css')
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('Node is unavailable')
+    javascript = _text('reader.js')
+    startup = javascript.rfind('\n  if (document.readyState')
+    script = 'globalThis.window = globalThis;\n' + javascript[:startup] + r'''
+  (async function () {
+    const block = {block_id: 'figure-one', kind: 'figure', payload: {caption: ''}};
+    let saved;
+    let connected = false;
+    labels = () => ({deleteConfirm: 'Delete?'});
+    prepareForDraftSwitch = () => true;
+    confirmReaderAction = async () => true;
+    connectDirectory = async () => connected;
+    anchorBlock = () => ({block_id: block.block_id});
+    appearanceForGroup = () => null;
+    sourceReplacement = () => {throw new Error('must not target the source');};
+    persistEditor = async (_, deleted) => {
+      if (!deleted) throw new Error('expected deletion');
+      saved = state.activeDraft;
+      state.selected.set('deleted-mirror', {
+        role: saved.role, priority: saved.priority, deleted: true, anchor: saved.anchor
+      });
+    };
+    await removeReaderContent(block, null, true);
+    if (saved || state.activeDraft) throw new Error('cancelled connection left a draft');
+    connected = true;
+    state.directory = {};
+    await removeReaderContent(block, null, true);
+    if (!saved || saved.role !== 'translation' || saved.anchor.target_id !== block.block_id || saved.base !== null)
+      throw new Error('incorrect mirrored-image deletion target');
+    if (!translationWasDeleted(block.block_id) || state.activeDraft)
+      throw new Error('deletion did not suppress the mirror or clean up draft');
+  })().catch(error => {console.error(error); process.exitCode = 1;});
+}());
+'''
+    subprocess.run([node, '-'], input=script, check=True, capture_output=True, text=True)
+
+
+def test_mirrored_figure_editor_creates_translation_revision() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    startup = javascript.rfind("\n  if (document.readyState")
+    script = "globalThis.window=globalThis;\n" + javascript[:startup] + r'''
+    prepareForDraftSwitch = () => true;
+    sourceEditorMarkdown = () => '![one](assets/one.png)';
+    anchorBlock = () => ({block_id: 'one'});
+    appearanceForGroup = () => null;
+    focusInlineEditor = () => {};
+    let refreshed = false;
+    globalThis.document = {querySelector: () => ({replaceWith: () => {refreshed = true;}})};
+    renderFragment = () => ({});
+    editableDraftState = () => ({});
+    const fragment = mirroredMediaFragment({block_id: 'one'});
+    beginInlineEdit(fragment);
+    if (sourceInlineDraft({block_id: 'one'})) throw new Error('translation draft appeared in source lane');
+    if (!refreshed || state.editorBase || state.activeDraft.base ||
+        state.activeDraft.role !== 'translation' ||
+        state.activeDraft.markdown_body !== '![one](assets/one.png)' ||
+        state.activeDraft.inlineFragmentId !== fragment.fragment_id)
+      throw new Error('mirror must edit as a new translation, not a fabricated saved revision');
+}());
+'''
+    subprocess.run([node, '-'], input=script, check=True, capture_output=True, text=True)
+
+
+def test_captionless_table_editor_does_not_require_caption_presentation() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable")
+    javascript = _text("reader.js")
+    start = javascript.index("  function exportSourceTableMarkdown(")
+    end = javascript.index("\n  function ", start + 1)
+    script = javascript[start:end] + r'''
+    function sourcePresentationField() { return null; }
+    function exportTableCell(value) { return String(value); }
+    function rewriteMarkdownResourceTargets(value) { return value; }
+    function sourceCaptionPresentation() { throw new Error("caption absent"); }
+    const markdown = exportSourceTableMarkdown(
+      {block_id: "captionless"}, {},
+      {caption: "", headers: [], rows: [["Logical Progression"], ["Step 1"]]}, new Map()
+    );
+    if (!markdown.includes("| Logical Progression |") || !markdown.includes("| Step 1 |")) {
+      throw new Error("table editor lost source cells");
+    }
+    '''
+    completed = subprocess.run([node, "-"], input=script, capture_output=True, text=True)
     assert completed.returncode == 0, completed.stderr

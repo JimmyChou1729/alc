@@ -4850,7 +4850,7 @@
           "alc-source-classification-heading-fragment", blockIndex === 0
         );
         if (block.kind === "figure") mirrorSourceFigure(source, card, block);
-        if (block.kind === "table") mirrorSourceTable(source, card, block);
+        if (block.kind === "table" && !isSavedMediaMirror(fragment) && !tableSourceReplacedWithProse(block)) mirrorSourceTable(source, card, block);
         decorateListOwnedFragment(card, block);
         target.appendChild(card);
       });
@@ -5028,6 +5028,37 @@
     openAdvancedEditor(null, role === "source" ? "添加对应原文" : "添加对应译文");
   }
 
+  function tableSourceReplacedWithProse(block) {
+    if (block.kind !== "table") return false;
+    var replacement = sourceReplacement(block.block_id);
+    return Boolean(replacement && !replacement.deleted &&
+      !sourceReplacementUsesOriginalLayout(block, replacement) &&
+      !renderMarkdown(replacement.markdown_body, replacement).querySelector("table"));
+  }
+
+  function shouldMirrorUncaptionedMedia(block, fragments) {
+    return (block.kind === "figure" || block.kind === "table") &&
+      !String((block.payload || {}).caption || "").trim() &&
+      !tableSourceReplacedWithProse(block) &&
+      !translationWasDeleted(block.block_id) &&
+      !fragments.some(function (item) { return item.role === "translation" && item.priority <= 100; }) &&
+      (state.payload.publication.layers || []).some(function (layer) { return layer.producer === "alc-translate"; });
+  }
+
+  function isSavedMediaMirror(fragment) {
+    return String(fragment.fragment_id || "").indexOf("translation-mirror-") === 0;
+  }
+
+  function mirroredMediaFragment(block) {
+    return {
+      fragment_id: "translation-mirror-" + block.block_id, revision: 0,
+      role: "translation", priority: 50, title: null,
+      anchor: {kind: "block", target_id: block.block_id, related_blocks: [anchorBlock(block)]},
+      markdown_body: sourceEditorMarkdown(block), provenance: {},
+      _mirroredMediaBlock: block
+    };
+  }
+
   function translationWasDeleted(blockId) {
     return Array.from(state.selected.values()).some(function (revision) {
       return revision.role === "translation" && revision.priority <= 100 &&
@@ -5094,7 +5125,7 @@
 
   function sourceInlineDraft(block) {
     var draft = state.activeDraft;
-    if (!draft || !draft.inlineFragmentId || draft.anchor.target_id !== block.block_id ||
+    if (!draft || draft.role !== "source" || !draft.inlineFragmentId || draft.anchor.target_id !== block.block_id ||
         sourceEditOperation(draft.base) === "insert" || draft.sourceEdit && draft.sourceEdit.operation === "insert") return null;
     return {
       fragment_id: draft.inlineFragmentId, revision: draft.base ? draft.base.revision : 0,
@@ -5105,18 +5136,21 @@
     };
   }
 
-  async function removeReaderContent(block, fragment) {
+  async function removeReaderContent(block, fragment, mirroredTranslation) {
+    if (fragment && fragment._mirroredMediaBlock) {
+      return removeReaderContent(fragment._mirroredMediaBlock, null, true);
+    }
     if (state.saveInProgress || state.exportInProgress || state.directorySelectionInProgress || !prepareForDraftSwitch()) return;
     if (fragment && fragment.deleted) return;
-    if (!fragment && sourceReplacement(block.block_id) && sourceReplacement(block.block_id).deleted) return;
+    if (!fragment && !mirroredTranslation && sourceReplacement(block.block_id) && sourceReplacement(block.block_id).deleted) return;
     if (!await confirmReaderAction(labels().deleteConfirm)) return;
     if (state.saveInProgress || !prepareForDraftSwitch()) return;
     // Choose storage before creating the temporary deletion draft: cancellation
     // or a connection failure must not leave an invisible editor locking the UI.
-    var previous = fragment || sourceReplacement(block.block_id);
+    var previous = mirroredTranslation ? null : fragment || sourceReplacement(block.block_id);
     if (!state.directory && !await connectDirectory()) return;
     if (state.saveInProgress || state.exportInProgress || !prepareForDraftSwitch()) return;
-    var current = fragment ? state.selected.get(fragment.fragment_id) : sourceReplacement(block.block_id);
+    var current = mirroredTranslation ? null : fragment ? state.selected.get(fragment.fragment_id) : sourceReplacement(block.block_id);
     if ((previous && previous.semantic_digest) !== (current && current.semantic_digest)) {
       setStatus(labels().sourceChangedBeforeDelete, "error");
       return;
@@ -5127,6 +5161,17 @@
       state.editorBase = fragment;
       state.editorHistorical = fragment;
       state.editorAnchor = fragment.anchor;
+    } else if (mirroredTranslation) {
+      if (translationWasDeleted(block.block_id)) return;
+      state.editorKind = "fragment";
+      state.activeDraft = {
+        base: null, anchor: {kind: "block", target_id: block.block_id, related_blocks: [anchorBlock(block)]},
+        title: null, role: "translation", priority: 50, markdown_body: "",
+        appearance: appearanceForGroup("translation", 50)
+      };
+      state.editorBase = null;
+      state.editorHistorical = null;
+      state.editorAnchor = state.activeDraft.anchor;
     } else if (!prepareSourceDraft(block, false)) return;
     var deletionDraft = state.activeDraft;
     try {
@@ -5262,7 +5307,8 @@
         originalFigure.appendChild(renderSourceBlock(block));
         mirrorSourceFigure(originalFigure, card, block);
       }
-      if (block.kind === "table" && item.role === "translation") {
+      if (block.kind === "table" && item.role === "translation" &&
+        !isSavedMediaMirror(item) && !tableSourceReplacedWithProse(block)) {
         var originalTable = element("section");
         originalTable.appendChild(renderSourceBlock(block));
         mirrorSourceTable(originalTable, card, block);
@@ -5270,16 +5316,16 @@
       decorateListOwnedFragment(card, block);
       lanes.appendChild(card);
     });
-    var mirrorUncaptionedFigure = block.kind === "figure" &&
-      !String((block.payload || {}).caption || "").trim() &&
-      !translationWasDeleted(block.block_id) &&
-      !fragments.some(function (item) { return item.role === "translation" && item.priority <= 100; }) &&
-      (state.payload.publication.layers || []).some(function (layer) { return layer.producer === "alc-translate"; });
-    if (mirrorUncaptionedFigure) {
+    var mirrorUncaptionedMedia = shouldMirrorUncaptionedMedia(block, fragments);
+    if (mirrorUncaptionedMedia) {
       lanes.classList.add("has-parallel-translation");
-      var imageCard = element("section", "alc-fragment-card alc-translation-figure-card");
-      imageCard.dataset.role = "translation";
-      imageCard.appendChild(renderSourceBlock(block));
+      var imageCard = renderFragment(mirroredMediaFragment(block));
+      imageCard.classList.add(block.kind === "table" ? "alc-translation-table-card" : "alc-translation-figure-card");
+      if (block.kind === "table") {
+        var tableSource = element("section");
+        tableSource.appendChild(renderSourceBlock(block));
+        mirrorSourceTable(tableSource, imageCard, block);
+      }
       lanes.appendChild(imageCard);
     }
     row.appendChild(lanes);
@@ -9285,6 +9331,14 @@
           fragmentId: fragment.fragment_id
         });
       });
+      if (roles.has("translation") && shouldMirrorUncaptionedMedia(
+        block, state.fragmentGroups.get(block.block_id) || []
+      )) {
+        var mirror = mirroredMediaFragment(block);
+        queue.push({text: null, fragment: mirror, role: "translation",
+          language: speechLanguage("translation", mirror), blockId: block.block_id,
+          blockIndex: blockIndex, fragmentId: mirror.fragment_id});
+      }
       parallelGroups(block.block_id).forEach(function (group) {
         ["source", "translation"].forEach(function (role) {
           var fragment = group[role];
@@ -12192,9 +12246,9 @@
       rewriteMarkdownResourceTargets(
         String(payload.caption || "").trim(), resourcePaths
       );
-    var captionPresentation = sourceCaptionPresentation(
+    var captionPresentation = caption ? sourceCaptionPresentation(
       documentValue, block.block_id
-    );
+    ) : null;
     if (caption && captionPresentation &&
       captionPresentation.placement === "before_content") {
       lines.unshift("", "Table: " + caption, "");
@@ -14801,10 +14855,22 @@
     }
     state.editorKind = "fragment";
     state.activeDraft = draftFromFragment(fragment);
-    state.editorBase = fragment;
-    state.editorAnchor = fragment.anchor;
-    state.editorHistorical = fragment;
-    replaceFragmentCard(fragment.fragment_id, fragment.anchor);
+    if (fragment._mirroredMediaBlock) {
+      state.activeDraft.base = null;
+      state.activeDraft.inlineFragmentId = fragment.fragment_id;
+      state.activeDraft.mirroredMediaId = fragment.fragment_id;
+      state.activeDraft.initialEditableState = editableDraftState(state.activeDraft);
+      state.editorBase = null;
+      state.editorHistorical = null;
+      state.editorAnchor = fragment.anchor;
+      var mirrorCard = document.querySelector('.alc-fragment[data-fragment-id="' + cssString(fragment.fragment_id) + '"]');
+      if (mirrorCard) mirrorCard.replaceWith(renderFragment(fragment));
+    } else {
+      state.editorBase = fragment;
+      state.editorAnchor = fragment.anchor;
+      state.editorHistorical = fragment;
+      replaceFragmentCard(fragment.fragment_id, fragment.anchor);
+    }
     focusInlineEditor(fragment.fragment_id);
   }
 
@@ -15112,6 +15178,13 @@
 
   function replaceFragmentCard(fragmentId, anchor) {
     var current = state.selected.get(fragmentId);
+    if (!current && fragmentId.indexOf("translation-mirror-") === 0) {
+      var mirrorBlockId = fragmentId.slice("translation-mirror-".length);
+      var mirrorBlock = state.payload.publication.source_document.blocks.find(function (item) {
+        return item.block_id === mirrorBlockId && (item.kind === "figure" || item.kind === "table");
+      });
+      if (mirrorBlock && !translationWasDeleted(mirrorBlockId)) current = mirroredMediaFragment(mirrorBlock);
+    }
     var card = document.querySelector(
       '.alc-fragment[data-fragment-id="' + cssString(fragmentId) + '"]'
     );
@@ -15768,6 +15841,10 @@
       if (base) assertEditorBaseCurrent(base);
       var metadata = base ? metadataOnly(base) : newNoteMetadata(editorAnchor);
       metadata.schema_version = FRAGMENT_SCHEMA;
+      if (!base && draft.mirroredMediaId) {
+        metadata.fragment_id = draft.mirroredMediaId;
+        if (state.revisions.has(metadata.fragment_id)) throw new Error(labels().historyChanged);
+      }
       if (draft.sourceEdit) {
         metadata.provenance.source_edit = draft.sourceEdit;
         metadata.language = (state.payload.publication.reader_profile || {}).source_language || "und";

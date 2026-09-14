@@ -593,6 +593,11 @@ def _standard_delivery_ledger(
             stage.update(status="complete", expected=1, produced=1, accounted=1)
             continue
         actual = produced[name]
+        if name == "translation" and actual > stage["expected"]:
+            # Reader edits may add translations for previously structural blocks.
+            # Extend the output count without clearing existing delivery issues.
+            stage["expected"] = actual
+            stage["accounted"] = actual
         stage["produced"] = actual
         if stage["expected"] == 0:
             stage["status"] = "skipped"
