@@ -44,6 +44,7 @@ from ac_jobs import (
     Failed,
     FailureMode,
     GroupResult,
+    ImmutableArtifactStore,
     Paused,
     RunContext,
     RunError,
@@ -63,6 +64,7 @@ from ac_llm import (
     LLMTaskService,
 )
 from ac_proposer_reviewer.artifacts import proposal_artifact_id, read_json_artifact
+from ac_proposer_reviewer.protocol import decode_batch_request
 from ac_proposer_reviewer import (
     BATCH_SCHEMA_VERSION,
     BatchFailurePolicy,
@@ -98,6 +100,7 @@ from .editorial_review import (
     freeze_editorial_inventory,
     resolve_editorial_review,
     unavailable_editorial_review,
+    validate_editorial_report,
 )
 from .content_recovery import recover_chapter_guide
 from .late_delivery import completed_chapters, publish_fallback
@@ -1574,6 +1577,18 @@ class CompanionBuildHandler:
             if any(loop.error is not None for loop in prior_batch.loops):
                 existing_guide_batch = None
         replay_guide_batch = existing_guide_batch is not None
+        request_scope = execution_scope
+        if context.recovery_epoch:
+            request_scope = context.execution_id(request_scope or "proposer-reviewer")
+        request_key = ("proposer-reviewer/request" if request_scope is None
+                       else f"proposer-reviewer/scopes/{request_scope}/request")
+        prior_request_ref = context.artifacts.find(request_key)
+        prior_contexts = {} if prior_request_ref is None else {
+            loop.loop_id: loop.context
+            for loop in decode_batch_request(read_json(
+                context, prior_request_ref, "prior guide request"
+            )).loops
+        }
         guide_chapters = list(chapters)
         guide_owners = {c.chapter_id: c.chapter_id for c in chapters}
         guide_by_id = dict(by_chapter)
@@ -1658,6 +1673,10 @@ class CompanionBuildHandler:
                     "Use only batch-local chapter.parts.part_number and section_number "
                     "for output anchors and checked numbers. Numbers printed in source "
                     "text or frozen translation headings are not batch-local anchors."
+                )
+            if chapter.chapter_id in prior_contexts:
+                guide_context = _replay_research_context(
+                    guide_context, prior_contexts[chapter.chapter_id]
                 )
             if self.recipe.chapter_guide_prompt == "alc.companion.chapter-learning-prompt.v24":
                 input_ids = {item.input_id for item in model_inputs}
@@ -2076,6 +2095,47 @@ class CompanionBuildHandler:
             raise EditorialReviewError(
                 "frozen editorial full-text view differs from the current guides"
             )
+
+        # Locate the first completed immutable pair before find() can materialize
+        # operator-editable working artifacts into the current recovery epoch.
+        saved = ImmutableArtifactStore(context.run_directory)
+        saved_pair = None
+        for epoch in range(context.recovery_epoch + 1):
+            prefix = f"recovery-{epoch}/" if epoch else ""
+            pair = (
+                saved.find(prefix + _EDITORIAL_RESOLVED_ARTIFACT),
+                saved.find(prefix + _EDITORIAL_REPORT_ARTIFACT),
+            )
+            if all(ref is not None for ref in pair):
+                saved_pair = pair
+                break
+        if saved_pair is not None:
+            resolved_ref = context.artifacts.find(_EDITORIAL_RESOLVED_ARTIFACT)
+            report_ref = context.artifacts.find(_EDITORIAL_REPORT_ARTIFACT)
+            for current, original in zip((resolved_ref, report_ref), saved_pair):
+                if current is None or (
+                    context.artifacts.read_bytes(current) != saved.read_bytes(original)
+                ):
+                    raise EditorialReviewError(
+                        "saved editorial resolution differs from its completed artifacts"
+                    )
+            report = read_json(context, report_ref, "saved editorial report")
+            validate_editorial_report(report)
+            if report["inventory_digest"] != inventory.inventory_digest:
+                raise EditorialReviewError(
+                    "saved editorial report differs from the frozen inventory"
+                )
+            resolved = mapping_list(
+                json.loads(context.artifacts.read_bytes(resolved_ref)),
+                "saved editorial guides",
+            )
+            if [item.get("chapter_id") for item in resolved] != [
+                item.get("chapter_id") for item in accepted_chapters
+            ]:
+                raise EditorialReviewError(
+                    "saved editorial guides differ from the frozen chapters"
+                )
+            return tuple(resolved), report
 
         if not inventory.applicable:
             resolution = resolve_editorial_review(
@@ -3497,3 +3557,16 @@ __all__ = [
     "CompanionBuildHandler",
     "validate_build_diagnostics",
 ]
+
+
+def _replay_research_context(
+    current: Mapping[str, Any], persisted: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep optional tool discovery from changing an existing model request."""
+    result = dict(current)
+    # Availability is probed per process; execution still uses the live broker.
+    if "research_tools" in persisted:
+        result["research_tools"] = persisted["research_tools"]
+    else:
+        result.pop("research_tools", None)
+    return result

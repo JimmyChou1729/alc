@@ -269,6 +269,14 @@ while its translated caption remains in the authored caption position. A
 caption-only historical Table translation still receives the authoritative
 source Table geometry instead of dropping the Table; shared caption typography,
 margin, and lane padding keep equivalent source/translation Tables aligned.
+When a translation layer is enabled, captionless tables and figures also get a
+translated-side copy with the standard action toolbar and inline editor. These
+copies preserve source content; they do not claim translated text. A source
+replacement that changes a table into prose also suppresses table mirroring
+for its translation. Export accounting includes newly added translations while
+preserving existing quality issues. Saved edits to a mirrored table retain
+the edited cells, and unsaved table copies participate in the speech queue.
+Deleting a copy does not delete its source, and source-only reading does not add copies.
 For an older source without presentation metadata, the Reader infers only the
 direct caption-before-Table DOM relationship and applies the same height
 alignment; it does not infer semantic caption placement from text.
