@@ -1195,8 +1195,9 @@ def test_publication_omits_one_persisted_malformed_translation(
     )
 
 
+@pytest.mark.parametrize("event_count", [1, 3])
 def test_publication_records_sanitized_provider_failure(
-    tmp_path: Path,
+    tmp_path: Path, event_count: int,
 ) -> None:
     source = _source(tmp_path)
     chapter = plan_source_chapters(source)[0]
@@ -1222,6 +1223,14 @@ def test_publication_records_sanitized_provider_failure(
             "remaining_windows_skipped": 3,
         },
     )
+
+    first_event = context.events.read_all()[-1]
+    for _ in range(event_count - 1):
+        context.events.emit("translation_provider_fallback", dict(first_event["data"]))
+    before = publication_module._translation_provider_delivery_issues(context)
+    assert len(before) == event_count
+    assert len({item["issue_id"] for item in before}) == event_count
+    assert publication_module._translation_provider_delivery_issues(context) == before
 
     published = publish_companion(
         context,

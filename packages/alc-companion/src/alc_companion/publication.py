@@ -1003,6 +1003,7 @@ def _translation_provider_delivery_issues(
     context: RunContext,
 ) -> tuple[dict[str, Any], ...]:
     issues: list[dict[str, Any]] = []
+    occurrences: dict[str, int] = {}
     for event in context.events.read_all():
         if not isinstance(event, Mapping) or event.get("event") != (
             "translation_provider_fallback"
@@ -1028,9 +1029,15 @@ def _translation_provider_delivery_issues(
         detail_code = str(data.get("detail_code") or "unknown")
         reason_code = str(data.get("reason_code") or detail_code)
         global_fallback = data.get("global_fallback_triggered") is True
+        # Window ordinals restart for each chapter. Preserve every event in
+        # append-only log order instead of merging independent failures.
+        base_id = f"translation-provider-{stage}-{ordinal}"
+        occurrence = occurrences.get(base_id, 0) + 1
+        occurrences[base_id] = occurrence
+        issue_id = base_id if occurrence == 1 else f"{base_id}-{occurrence}"
         issues.append(
             {
-                "issue_id": f"translation-provider-{stage}-{ordinal}",
+                "issue_id": issue_id,
                 "category": "translation_provider_failure",
                 "scope": f"window:{ordinal}",
                 "fallback": (

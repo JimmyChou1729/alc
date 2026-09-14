@@ -459,6 +459,10 @@ separate artifact namespace so a partially written publication cannot block the
 fallback. Existing translation and guide diagnostics remain visible. Sources,
 translation bindings and storage integrity are still validated; missing or
 invalid translations are not marked complete by this fallback.
+A completed cross-chapter editorial resolution is reused after downstream
+failure, once its frozen input inventory and report binding are verified.
+Delivery diagnostics preserve separate provider failures even when chapter-local
+window ordinals repeat.
 User pauses, authorization requests, source identity mismatches, and storage or
 delivery integrity failures retain their existing handling. Translation retains
 its existing per-block repair and source-text fallback.
@@ -507,7 +511,10 @@ passes the JSON object following a model's `research ` request to `execute` on
 stdin. Responses must be JSON objects. This is trusted local configuration,
 never a path supplied by documents or model output. Missing adapters expose no
 research tools; failed requests leave source reading available. Only guide
-workers receive this broker.
+workers receive this broker. Once a guide request is saved, resume retains its
+research-tool instructions even if discovery availability changes. The live
+broker still checks each call and can report unavailability; source, translation,
+and other request fields continue to use strict replay validation.
 
 The Skill ships `scripts/companion-research-host`, an optional ARC adapter.
 It automatically checks `arc-paper` on PATH, enabled installed Codex/Claude user ARC

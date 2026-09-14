@@ -2393,7 +2393,17 @@ def test_chapter_pipeline_starts_guide_before_other_translation_finishes(tmp_pat
 
 
 @pytest.mark.parametrize("review_rounds", [None, 0, 1, 2])
-def test_pipeline_stop_resume_preserves_completed_chapter_and_policy(tmp_path, monkeypatch, review_rounds):
+@pytest.mark.parametrize("research_transition", [("research available", None), (None, "research available"), ("old tools", "new tools")])
+def test_pipeline_stop_resume_preserves_completed_chapter_and_policy(tmp_path, monkeypatch, review_rounds, research_transition):
+    live_tools = [research_transition[0]]
+    original_context = CompanionBuildHandler._chapter_model_context
+    def changing_context(self, *args, **kwargs):
+        value = original_context(self, *args, **kwargs)
+        value.pop("research_tools", None)
+        if live_tools[0] is not None:
+            value["research_tools"] = live_tools[0]
+        return value
+    monkeypatch.setattr(CompanionBuildHandler, "_chapter_model_context", changing_context)
     monkeypatch.setattr(CompanionBuildHandler, "_cross_chapter_editorial_review",
                         lambda self, context, chapters, accepted, **kw: (accepted, None))
     from ac_llm import LLMStopped
@@ -2422,6 +2432,7 @@ def test_pipeline_stop_resume_preserves_completed_chapter_and_policy(tmp_path, m
     assert stopped.status is RunStatus.PAUSED
     assert service.progress(stopped.run_id)['completed_chapters']==1
     tasks.requests.clear()
+    live_tools[0] = research_transition[1]
     # Runtime defaults may differ on resume; the persisted policy wins.
     resumed=service.resume(prepared.run_id,execution=CompanionExecutionOptions(workers=2,document_cache_root=tmp_path/'paper'),task_service=tasks,translation_adapter=adapter)
     assert resumed.status is RunStatus.SUCCEEDED
@@ -2954,3 +2965,58 @@ def test_initial_generation_has_no_extra_evidence_or_review_call(tmp_path, revie
         if contract == CHAPTER_GUIDE_PROMPT_VERSION:
             assert 'prepared_references' not in _request_payload(prompt)[1]
             assert 'External research is a required part' in prompt
+
+
+@pytest.mark.parametrize('pipeline', [False, True])
+@pytest.mark.parametrize('prompt', [CHAPTER_GUIDE_PROMPT_VERSION, 'alc.companion.chapter-learning-prompt.v24'])
+def test_failed_recovery_then_pause_preserves_research_request(tmp_path, monkeypatch, pipeline, prompt):
+    from ac_llm import LLMStopped
+    monkeypatch.setattr(CompanionBuildHandler, '_cross_chapter_editorial_review',
+                        lambda self, context, chapters, accepted, **kw: (accepted, None))
+    original_batch = CompanionBuildHandler._chapter_batch
+    fail = [True]
+    def fail_before_request(self, *args, **kwargs):
+        if fail[0]:
+            raise RuntimeError('failure before guide request')
+        return original_batch(self, *args, **kwargs)
+    monkeypatch.setattr(CompanionBuildHandler, '_chapter_batch', fail_before_request)
+    tools = ['available tools']
+    original_context = CompanionBuildHandler._chapter_model_context
+    def model_context(self, *args, **kwargs):
+        value = original_context(self, *args, **kwargs)
+        value.pop('research_tools', None)
+        if tools[0] is not None:
+            value['research_tools'] = tools[0]
+        return value
+    monkeypatch.setattr(CompanionBuildHandler, '_chapter_model_context', model_context)
+    class StopOnce(FakeGuideTasks):
+        stopped = False
+        def execute_or_resume(self, context, request, **kwargs):
+            contract, payload = _request_payload(request.prompt)
+            if contract == prompt and not self.stopped:
+                self.stopped = True
+                context.repository.request_stop(context.run_id, reason='pause after recovery')
+                return LLMStopped()
+            return super().execute_or_resume(context, request, **kwargs)
+    service = CompanionService(tmp_path/'jobs')
+    prepared = service.prepare(CompanionBuildRequest(_document(tmp_path), target_language='zh-CN'),
+                               recipe=CompanionGenerationRecipe(review_rounds=0, chapter_guide_prompt=prompt))
+    tasks = StopOnce()
+    adapter = FakeTranslationAdapter(mode='enabled')
+    options = CompanionExecutionOptions(workers=1, pipeline_chapters=pipeline, document_cache_root=tmp_path/'paper')
+    args = dict(execution=options, task_service=tasks, translation_adapter=adapter)
+    failed = service.execute(prepared.run_id, **args)
+    assert failed.status is RunStatus.FAILED
+    fail[0] = False
+    paused = service.resume(prepared.run_id, **args)
+    assert paused.status is RunStatus.PAUSED
+    assert paused.recovery_epoch == 1
+    from alc_companion.reference_preparation import REFERENCE_PREPARATION_VERSION
+    preparations = tasks.counts[REFERENCE_PREPARATION_VERSION]
+    tools[0] = None
+    resumed = service.resume(prepared.run_id, **args)
+    assert resumed.status is RunStatus.SUCCEEDED, resumed.error
+    assert resumed.recovery_epoch == 1
+    # One remaining chapter may need its first preparation, but the paused
+    # chapter must keep its existing preparation and proposer request.
+    assert tasks.counts[REFERENCE_PREPARATION_VERSION] <= preparations + 1
