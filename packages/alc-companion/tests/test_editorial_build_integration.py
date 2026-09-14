@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from types import SimpleNamespace
 from dataclasses import replace
 
@@ -211,6 +213,43 @@ def test_scoped_editorial_batch_applies_only_reviewed_edit(
     assert context.artifacts.find("editorial/resolved-guides") is not None
     assert context.artifacts.find("editorial/report") is not None
     assert context.artifacts.find("chapters/chapter-a/guide-accepted") is not None
+
+    context = RunContext(
+        context.repository,
+        replace(context.repository.inspect(context.run_id).snapshot, recovery_epoch=1),
+        resume_input=None,
+    )
+    replayed, replay_report = build_module.CompanionBuildHandler._cross_chapter_editorial_review(
+        _handler(), context, source_chapters, accepted, source_inputs=(),
+    )
+    assert replayed == resolved
+    assert replay_report == report
+    assert len(calls) == 1
+
+    changed = [dict(item) for item in accepted]
+    changed[0]["learning_units"] = [_unit("unit-a", "chapter-a", "Changed.")]
+    with pytest.raises(build_module.EditorialReviewError, match="frozen editorial index"):
+        build_module.CompanionBuildHandler._cross_chapter_editorial_review(
+            _handler(), context, source_chapters, changed, source_inputs=(),
+        )
+
+    # Working artifacts are editable; even a later retry must reject an
+    # unreviewed body rather than blessing its newly materialized manifest.
+    path = context.working.artifacts_directory / "editorial/resolved-guides"
+    altered = json.loads(path.read_text())
+    altered[0]["learning_units"][0]["content_markdown"] = "Unreviewed replacement."
+    path.write_text(json.dumps(altered))
+    for epoch in (2, 3):
+        retry = RunContext(
+            context.repository,
+            replace(context.repository.inspect(context.run_id).snapshot, recovery_epoch=epoch),
+            resume_input=None,
+        )
+        with pytest.raises(build_module.EditorialReviewError, match="completed artifacts"):
+            build_module.CompanionBuildHandler._cross_chapter_editorial_review(
+                _handler(), retry, source_chapters, accepted, source_inputs=(),
+            )
+    assert len(calls) == 1
 
 
 def test_editorial_model_failure_preserves_guides_and_publishes_warning(

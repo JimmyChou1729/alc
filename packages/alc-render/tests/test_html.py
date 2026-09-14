@@ -1162,6 +1162,17 @@ def test_delivery_ledger_rejects_silent_or_unaccounted_delivery(
         "unaccounted_source_units": 0,
     }
     assert validate_delivery_ledger(ledger, source_unit_count=source_count) == ledger
+    import alc_render.html as html_module
+    expanded = html_module._standard_delivery_ledger(
+        replace(publication, glossary=(), reader_profile={"delivery_ledger": ledger}),
+        selected=(replace(_revision, role="translation"),), resources=(),
+    )
+    translated = next(item for item in expanded["stages"] if item["stage"] == "translation")
+    assert translated == {
+        "stage": "translation", "status": "complete",
+        "expected": 1, "produced": 1, "accounted": 1,
+    }
+    assert ledger["stages"][1]["expected"] == 0
     with pytest.raises(DeliveryLedgerError, match="unaccounted"):
         validate_delivery_ledger(
             {**ledger, "unaccounted_source_units": 1},
