@@ -3,7 +3,7 @@ import json
 
 import httpx
 
-from alc_render.tts_host import ReaderHosts
+from alc_render.tts_host import ReaderHosts, refresh_reader_runtime
 
 
 class FakeSpeech:
@@ -24,7 +24,8 @@ def test_audio_capability_is_separate_from_task_and_install_apis(tmp_path):
     try:
         saved_titles, saved_translated_titles = [], []
         url = hosts.open(
-            path, hashlib.sha256(original).hexdigest(), title='Original title',
+            path, hashlib.sha256(original).hexdigest(),
+            title='Original </script><script>evil()</script> title',
             on_title_change=lambda title: saved_titles.append(title) or title,
             translated_title='译文标题',
             on_translated_title_change=lambda title: saved_translated_titles.append(title) or title,
@@ -43,6 +44,8 @@ def test_audio_capability_is_separate_from_task_and_install_apis(tmp_path):
             assert url + '/translated-title' in reader.headers['content-security-policy']
             assert b'"title_endpoint": "/' in reader.content
             assert b'"translated_title_endpoint": "/' in reader.content
+            assert b'</script><script>evil()</script>' not in reader.content
+            assert b'Original \\u003c/script\\u003e\\u003cscript\\u003eevil()' in reader.content
             assert "media-src data: blob:" in reader.headers['content-security-policy']
             assert path.read_bytes() == original
             assert client.get(url + '/tts/status').json()['installed']
@@ -76,6 +79,15 @@ def test_audio_capability_is_separate_from_task_and_install_apis(tmp_path):
             assert client.post(url + '/tts/speech', content='text=hello', headers=headers).status_code == 415
     finally:
         hosts.close()
+
+
+def test_runtime_refresh_replaces_existing_mathlive_bundle_once():
+    html = b'''<html><head><script id="alc-mathlive-runtime" defer>old mathlive</script></head>
+      <body><script>function renderSourceRow(){} function setupEditor(){}</script></body></html>'''
+    refreshed = refresh_reader_runtime(html)
+    assert refreshed.count(b'id="alc-mathlive-runtime"') == 1
+    assert b'old mathlive' not in refreshed
+    assert b'convertLatexToSpeakableText' in refreshed
 
 
 def test_disconnected_request_cancels_only_its_synthesis(tmp_path):

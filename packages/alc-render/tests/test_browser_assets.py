@@ -44,9 +44,9 @@ def test_reader_vendors_pinned_mathlive_speech_converter() -> None:
     license_text = _text("mathlive/LICENSE.txt")
 
     assert mathlive.startswith("/** MathLive 0.110.0 */")
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == (
-        "32e6f80a8bf4e1ad15e8ce19529d24fd9ea25f48a598a63db2dfd8f34287a6d3"
-    )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest == "32e6f80a8bf4e1ad15e8ce19529d24fd9ea25f48a598a63db2dfd8f34287a6d3"
+    assert f"Vendored SHA-256: `{digest}`" in notice
     assert "convertLatexToSpeakableText" in mathlive
     assert "MathLive 0.110.0" in notice
     assert "Permission is hereby granted, free of charge" in license_text

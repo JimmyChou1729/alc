@@ -27,7 +27,7 @@ def refresh_reader_runtime(content: bytes) -> bytes:
     html = html[:match.start(2)] + runtime + html[match.end(2):]
     mathlive = files('alc_render').joinpath('web_assets/mathlive/mathlive.min.js').read_text(encoding='utf-8')
     html = re.sub(
-        r'<script id="alc-mathlive-runtime">[\s\S]*?</script>', '', html,
+        r'<script\b(?=[^>]*\bid=["\']alc-mathlive-runtime["\'])[^>]*>[\s\S]*?</script>', '', html,
         flags=re.I,
     )
     mathlive = re.sub(r'</script', r'<\\/script', mathlive, flags=re.I)
@@ -55,7 +55,9 @@ def _reader_audio_html(content: bytes, config_value: dict, policy: str) -> bytes
         return content
     html = re.sub(r'<script\b[^>]*\bid=["\']alc-tts-config["\'][^>]*>[\s\S]*?</script>', '', html, flags=re.I)
     html = re.sub(r'<meta\b(?=[^>]*http-equiv\s*=\s*["\']Content-Security-Policy["\'])[^>]*>', '', html, flags=re.I)
-    config = '<script type="application/json" id="alc-tts-config">' + json.dumps(config_value) + '</script>'
+    encoded = (json.dumps(config_value).replace('&', r'\u0026')
+               .replace('<', r'\u003c').replace('>', r'\u003e'))
+    config = '<script type="application/json" id="alc-tts-config">' + encoded + '</script>'
     meta_policy = re.sub(r'(?:sandbox|frame-ancestors)[^;]*;\s*', '', policy)
     meta = '<meta http-equiv="Content-Security-Policy" content="' + meta_policy.replace('"', '&quot;') + '">'
     position = html.lower().find('</head>')
