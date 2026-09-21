@@ -10383,8 +10383,9 @@
     return tex;
   }
 
-  function katexSemanticMacros() {
+  function katexSemanticMacros(displayMode) {
     return {
+      "\\displaylimits": displayMode ? "\\limits" : "\\nolimits",
       "\\arcdeg": "^{\\circ}",
       "\\arcmin": "^{\\prime}",
       "\\arcsec": "^{\\prime\\prime}",
@@ -10558,11 +10559,12 @@
     scope.querySelectorAll(".math[data-tex]").forEach(function (node) {
       if (node.dataset.alcTypeset === "true") return;
       try {
+        var displayMode = node.classList.contains("math-display");
         var settings = {
-          displayMode: node.classList.contains("math-display"),
+          displayMode: displayMode,
           throwOnError: true,
           strict: "warn",
-          macros: katexSemanticMacros()
+          macros: katexSemanticMacros(displayMode)
         };
         var candidates = katexCandidates(node.dataset.tex);
         var rendered = candidates.some(function (candidate) {
