@@ -26,14 +26,28 @@ def test_missing_html_heading_keeps_stored_title(tmp_path):
     assert document_title(store,store.get(job['id']))=='Saved'
 
 
-def test_uploaded_pdf_filename_wins_over_extracted_title(tmp_path):
+def test_uploaded_pdf_uses_extracted_title_and_retains_manual_name(tmp_path):
     store = Store(tmp_path)
     job = store.create({'source_id': 'a' * 32, 'title': 'Chapter 01.PDF'})
     store.update(job['id'], detail={'document_title': 'Extracted paper heading'})
-    assert store.get(job['id'])['display_title'] == 'Chapter 01.PDF'
-    assert store.summaries()[0]['display_title'] == 'Chapter 01.PDF'
+    assert store.get(job['id'])['display_title'] == 'Extracted paper heading'
+    assert store.summaries()[0]['display_title'] == 'Extracted paper heading'
     store.rename(job['id'], 'My chapter')
     assert store.get(job['id'])['display_title'] == 'My chapter'
+
+
+def test_reader_translation_title_overwrites_current_value_without_revisions(tmp_path):
+    store = Store(tmp_path)
+    job = store.create({'title': 'paper.html'})
+    assert store.reader_translation_title(job['id']) == ''
+    assert store.rename_reader_translation_title(job['id'], '译文标题') == '译文标题'
+    assert store.reader_translation_title(job['id']) == '译文标题'
+    assert store.rename_reader_translation_title(job['id'], '更新译文标题') == '更新译文标题'
+    with store.connect() as db:
+        assert db.execute(
+            'SELECT count(*) FROM reader_presentation WHERE job_id=?',
+            (job['id'],),
+        ).fetchone()[0] == 1
 
 
 def test_source_warnings_deduplicate_and_do_not_claim_empty_pages():

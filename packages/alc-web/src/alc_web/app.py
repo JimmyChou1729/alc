@@ -288,7 +288,9 @@ def create_app(
         if value.source_id:
             source = store.source(value.source_id)
             spec["title"] = source["name"]
+            spec["source_label"] = source["name"]
         else:
+            spec["source_label"] = value.source_url.strip()
             spec["source_url"] = normalize_source_url(value.source_url)
             spec["title"] = spec["source_url"]
         if value.ocr_proofread and (value.pdf_mode != "mineru" or spec["ocr"] is None or not may_be_pdf):
@@ -404,11 +406,24 @@ def create_app(
     @app.get("/api/jobs/{job_id}/reader")
     def reader(job_id: str, download: bool = False):
         if job_id.startswith("agent-"):
-            from .history import reader_path
+            from .history import (
+                reader_path, rename_history, reader_translation_title,
+                rename_history_reader_translation_title,
+            )
             path = reader_path(store, job_id)
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if not download:
-                return RedirectResponse(reader_hosts.open(path, digest), status_code=307)
+                history = history_job(store, job_id)
+                def rename_reader_title(title):
+                    return rename_history(store, job_id, title)["display_title"]
+                def rename_reader_translation_title(title):
+                    return rename_history_reader_translation_title(store, job_id, title)
+                return RedirectResponse(reader_hosts.open(
+                    path, digest, title=history["display_title"],
+                    on_title_change=rename_reader_title,
+                    translated_title=reader_translation_title(store, job_id),
+                    on_translated_title_change=rename_reader_translation_title,
+                ), status_code=307)
             return FileResponse(path, media_type="text/html", filename="reader.html",
                 headers={"Content-Security-Policy": "sandbox"})
         job = store.get(job_id)
@@ -425,7 +440,16 @@ def create_app(
                 409, "Reader bytes no longer match the verified delivery."
             )
         if not download:
-            return RedirectResponse(reader_hosts.open(path, result["sha256"]), status_code=307)
+            def rename_reader_title(title):
+                return store.rename(job_id, title)["display_title"]
+            def rename_reader_translation_title(title):
+                return store.rename_reader_translation_title(job_id, title)
+            return RedirectResponse(reader_hosts.open(
+                path, result["sha256"], title=job["display_title"],
+                on_title_change=rename_reader_title,
+                translated_title=store.reader_translation_title(job_id),
+                on_translated_title_change=rename_reader_translation_title,
+            ), status_code=307)
         return FileResponse(
             path,
             media_type="text/html",

@@ -1,9 +1,11 @@
 """Live projections and Web-local presentation of package-owned Agent tasks."""
 from datetime import datetime
+import json
 from pathlib import Path
 from fastapi import HTTPException
 from ac_jobs.errors import AcJobsError
 from alc_catalog import project_records, records, register_project
+from .presentation import source_label
 
 
 def _time(value):
@@ -13,11 +15,46 @@ def _time(value):
         return 0
 
 
+def _is_local_web_job_project(value):
+    """Exclude projects nested inside any Local Web task workspace.
+
+    A catalog is shared between Local Web workspaces.  A task created by one
+    workspace can therefore be discovered while another workspace is open,
+    but it must not be presented as read-only Agent-plugin history.
+    """
+    path = Path(value).resolve()
+    for candidate in (path, *path.parents):
+        if candidate.name != 'project':
+            continue
+        job = candidate.parent
+        jobs = job.parent
+        web = jobs.parent
+        if (
+            jobs.name == 'jobs'
+            and web.name == 'web'
+            and web.parent.name == '.alc'
+        ):
+            return True
+    return False
+
+
+def _history_source_label(entry):
+    manifest = Path(entry['project']) / 'source-bundle/manifest.json'
+    try:
+        bundle = json.loads(manifest.read_text()).get('bundle', {})
+        source = bundle.get('requested_url') or bundle.get('final_url')
+        return source_label({'source_url': source}) if source else ''
+    except (OSError, ValueError, TypeError):
+        return ''
+
+
 def history_jobs(store):
     result = []
     with store.connect() as db:
         presentation = {row['job_id']: dict(row) for row in db.execute('SELECT * FROM job_presentation')}
-    for entry in records(exclude_root=store.root / 'jobs'):
+    for entry in records():
+        if _is_local_web_job_project(entry['project']):
+            continue
         display = presentation.get(entry['id'], {})
         if display.get('deleted'):
             continue
@@ -25,7 +62,9 @@ def history_jobs(store):
                  'pending': 'queued', 'running': 'running', 'cancelled': 'cancelled'}.get(entry['state'], 'needs_input')
         result.append({'id': entry['id'], 'external': True, 'state': state,
             'phase': entry['kind'], 'created': _time(entry['created_at']),
-            'display_title': display.get('title') or entry['title'], 'spec': {'title': entry['title'], 'output': entry['kind']},
+            'display_title': display.get('title') or entry['title'],
+            'source_label': _history_source_label(entry),
+            'spec': {'title': entry['title'], 'output': entry['kind']},
             'detail': {'project': entry['project'], 'run_id': entry['run_id'], 'artifact_available': bool(entry['artifact'])},
             'result': {'available': True} if entry['reader'] else None,
             'metrics': {}, 'error': None})
@@ -59,6 +98,30 @@ def rename_history(store, job_id, title):
     with store.connect() as db:
         db.execute('INSERT INTO job_presentation(job_id,title) VALUES(?,?) ON CONFLICT(job_id) DO UPDATE SET title=excluded.title', (job_id,title))
     return history_job(store, job_id)
+
+
+def reader_translation_title(store, job_id):
+    history_job(store, job_id)
+    with store.connect() as db:
+        row = db.execute(
+            'SELECT translated_title FROM reader_presentation WHERE job_id=?',
+            (job_id,),
+        ).fetchone()
+    return row['translated_title'] if row and row['translated_title'] else ''
+
+
+def rename_history_reader_translation_title(store, job_id, title):
+    history_job(store, job_id)
+    title = title.strip()
+    if not title or len(title) > 500:
+        raise HTTPException(400, '译文标题请输入1–500个字符。')
+    with store.connect() as db:
+        db.execute(
+            'INSERT INTO reader_presentation(job_id,translated_title) VALUES(?,?) '
+            'ON CONFLICT(job_id) DO UPDATE SET translated_title=excluded.translated_title',
+            (job_id, title),
+        )
+    return title
 
 
 def delete_history(store, job_id):

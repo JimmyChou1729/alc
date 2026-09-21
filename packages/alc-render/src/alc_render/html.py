@@ -2305,6 +2305,7 @@ def _html_shell(publication: Publication, payload: Mapping[str, Any]) -> str:
   <link rel="stylesheet" href="assets/reader.css">
   <script defer src="assets/markdown-it/markdown-it.min.js"></script>
   <script defer src="assets/katex/katex.min.js"></script>
+  <script id="alc-mathlive-runtime" defer src="assets/mathlive/mathlive.min.js"></script>
   <script defer src="assets/reader.js"></script>
 </head>
 <body data-publication-digest="{digest}">

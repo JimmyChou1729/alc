@@ -12,6 +12,11 @@ def test_agent_history_import_authentication_and_local_controls(tmp_path, monkey
     (run / 'spec.json').write_text(json.dumps({'run_id': 'run-one', 'semantic_input': {}}))
     (project / '.alc/companion/project.json').write_text(json.dumps({'current_run_id': 'run-one'}))
     (project / 'companion.html').write_text('<html>Saved Reader</html>')
+    source_bundle = project / 'source-bundle'
+    source_bundle.mkdir()
+    (source_bundle / 'manifest.json').write_text(json.dumps({
+        'bundle': {'requested_url': 'https://arxiv.org/html/2609.10568v1'},
+    }))
     origin = 'http://127.0.0.1:8765'
     app = create_app(tmp_path / 'web', token='test-token', origin=origin, run_scheduler=False, discovered=[])
     with TestClient(app, base_url=origin) as client:
@@ -22,6 +27,7 @@ def test_agent_history_import_authentication_and_local_controls(tmp_path, monkey
         for _ in range(2): register_project(project)
         rows = client.get('/api/jobs').json()
         assert len(rows) == 1 and rows[0]['external']
+        assert rows[0]['source_label'] == '2609.10568v1'
         job_id = rows[0]['id']
         detail = client.get('/api/jobs/'+job_id).json()
         assert detail['state'] == 'completed'
@@ -56,3 +62,18 @@ def test_agent_history_import_authentication_and_local_controls(tmp_path, monkey
         assert app.state.store.list() == []
         (project / 'companion.html').unlink()
         assert client.get(f'/api/jobs/{job_id}/reader?download=true').status_code == 404
+
+
+def test_history_ignores_local_web_projects_from_other_workspaces(tmp_path, monkeypatch):
+    catalog = tmp_path / 'catalog'
+    monkeypatch.setenv('ALC_CATALOG_DIR', str(catalog))
+    project = tmp_path / 'older-web' / '.alc' / 'web' / 'jobs' / 'job-one' / 'project'
+    run = project / '.alc' / 'companion' / 'jobs' / 'runs' / 'run-one'
+    run.mkdir(parents=True)
+    (run / 'snapshot.json').write_text(json.dumps({'run_id': 'run-one', 'status': 'succeeded'}))
+    (run / 'spec.json').write_text(json.dumps({'run_id': 'run-one', 'semantic_input': {}}))
+    register_project(project)
+    app = create_app(tmp_path / 'new-web', token='test-token', origin='http://127.0.0.1:8765', run_scheduler=False, discovered=[])
+    with TestClient(app, base_url='http://127.0.0.1:8765') as client:
+        client.headers.update({'Origin': 'http://127.0.0.1:8765', 'Authorization': 'Bearer test-token'})
+        assert client.get('/api/jobs').json() == []
