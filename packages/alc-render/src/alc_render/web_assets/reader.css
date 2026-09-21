@@ -951,9 +951,32 @@ html:lang(zh) .alc-export-panel .alc-export-action { width: 8rem; }
   font-size: clamp(1.8rem, 4vw, 3.1rem);
 }
 .alc-book-header > h1,
+.alc-book-header > .alc-reader-title-surface,
 .alc-book-header > .alc-translated-title:not(.is-inline-editing)
   .alc-markdown > :first-child {
   text-align: center;
+}
+.alc-book-header > .alc-reader-title-surface > h1 { text-align: center; }
+.alc-reader-title-surface { position: relative; }
+.alc-reader-title-surface > h1 { cursor: text; }
+.alc-book-header > .alc-reader-title-editor {
+  margin: .2rem 0 0;
+  padding: .4rem .65rem;
+  color: var(--alc-ink);
+  background: transparent;
+  font-family: var(--alc-source-font);
+}
+.alc-book-header > .alc-reader-title-editor > .alc-fragment-header {
+  min-height: 2.2rem;
+  margin: 0 0 .4rem;
+  justify-content: flex-end;
+}
+.alc-book-header > .alc-reader-title-editor > .alc-inline-editor {
+  width: 100%;
+}
+.alc-book-header > .alc-reader-title-editor .alc-inline-markdown {
+  min-height: 8rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 .alc-book-header > .alc-translated-title {
   position: relative;
@@ -2144,6 +2167,9 @@ img.alc-markdown-image {
   padding-top: 1.5rem;
   border-top: 1px solid var(--alc-line);
 }
+.alc-appendix-title { margin: 0; }
+.alc-appendix-source-title { color: var(--alc-ink); }
+.alc-appendix-translation-title { margin-top: .35rem; }
 .alc-glossary-row {
   position: relative;
   display: grid;

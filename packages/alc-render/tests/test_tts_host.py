@@ -22,14 +22,27 @@ def test_audio_capability_is_separate_from_task_and_install_apis(tmp_path):
     manager = FakeSpeech()
     hosts = ReaderHosts(tts_manager=manager)
     try:
-        url = hosts.open(path, hashlib.sha256(original).hexdigest())
+        saved_titles, saved_translated_titles = [], []
+        url = hosts.open(
+            path, hashlib.sha256(original).hexdigest(), title='Original title',
+            on_title_change=lambda title: saved_titles.append(title) or title,
+            translated_title='译文标题',
+            on_translated_title_change=lambda title: saved_translated_titles.append(title) or title,
+        )
         origin = str(httpx.URL(url).copy_with(path='/')).rstrip('/')
         with httpx.Client(trust_env=False) as client:
             reader = client.get(url)
             assert reader.status_code == 200
             assert b'id="alc-tts-config"' in reader.content
             assert b'id="alc-contents-controls-runtime"' in reader.content
+            assert b'id="alc-reader-runtime"' in reader.content
+            assert b'id="alc-mathlive-runtime"' in reader.content
+            assert b'convertLatexToSpeakableText' in reader.content
             assert 'connect-src ' + url + '/tts/' in reader.headers['content-security-policy']
+            assert url + '/title' in reader.headers['content-security-policy']
+            assert url + '/translated-title' in reader.headers['content-security-policy']
+            assert b'"title_endpoint": "/' in reader.content
+            assert b'"translated_title_endpoint": "/' in reader.content
             assert "media-src data: blob:" in reader.headers['content-security-policy']
             assert path.read_bytes() == original
             assert client.get(url + '/tts/status').json()['installed']
@@ -49,6 +62,14 @@ def test_audio_capability_is_separate_from_task_and_install_apis(tmp_path):
             assert manager.request[1]['voice'] == 'Jasper'
             assert client.post(url + '/tts/speech', json={'text': 'Bad', 'model_id': []}, headers=headers).status_code == 400
             assert client.post(url + '/tts/install', json={'confirmed': True}, headers=headers).status_code == 404
+            assert client.post(url + '/title', json={'title': 'Updated title'}, headers=headers).json() == {'title': 'Updated title'}
+            assert saved_titles == ['Updated title']
+            assert client.post(url + '/translated-title', json={'title': '更新译文'}, headers=headers).json() == {'title': '更新译文'}
+            assert saved_translated_titles == ['更新译文']
+            refreshed = client.get(url)
+            assert b'"title": "Updated title"' in refreshed.content
+            assert b'"translated_title": "\\u66f4\\u65b0\\u8bd1\\u6587"' in refreshed.content
+            assert client.post(url + '/title', json={'title': ''}, headers=headers).status_code == 400
             assert client.get(origin + '/api/jobs').status_code == 404
             assert client.post(url + '/tts/speech', json={'text': 'a' * 8001}, headers=headers).status_code == 400
             assert client.post(url + '/tts/speech', json={'text': 'a' * 70000}, headers=headers).status_code == 413

@@ -25,8 +25,21 @@ def refresh_reader_runtime(content: bytes) -> bytes:
     runtime = files('alc_render').joinpath('web_assets/reader.js').read_text(encoding='utf-8')
     match = matches[0]
     html = html[:match.start(2)] + runtime + html[match.end(2):]
-    for name in ('glossary-editor', 'tts-reader', 'contents-controls'):
+    mathlive = files('alc_render').joinpath('web_assets/mathlive/mathlive.min.js').read_text(encoding='utf-8')
+    html = re.sub(
+        r'<script id="alc-mathlive-runtime">[\s\S]*?</script>', '', html,
+        flags=re.I,
+    )
+    mathlive = re.sub(r'</script', r'<\\/script', mathlive, flags=re.I)
+    runtime_tag = '<script id="alc-mathlive-runtime">' + mathlive + '</script>'
+    match = next(
+        item for item in pattern.finditer(html)
+        if 'function renderSourceRow(' in item[2] and 'function setupEditor(' in item[2]
+    )
+    html = html[:match.start()] + runtime_tag + html[match.start():]
+    for name in ('reader', 'glossary-editor', 'tts-reader', 'contents-controls'):
         css = files('alc_render').joinpath('web_assets/' + name + '.css').read_text(encoding='utf-8')
+        css = re.sub(r'^@import\s+[^;]+;\s*', '', css, flags=re.M)
         style_id = 'alc-' + name + '-runtime'
         html = re.sub(r'<style id="' + style_id + r'">[\s\S]*?</style>', '', html)
         style = '<style id="' + style_id + '">' + css + '</style>'
@@ -35,14 +48,14 @@ def refresh_reader_runtime(content: bytes) -> bytes:
     return html.encode('utf-8')
 
 
-def _reader_audio_html(content: bytes, endpoint: str, policy: str) -> bytes:
+def _reader_audio_html(content: bytes, config_value: dict, policy: str) -> bytes:
     html = content.decode('utf-8')
     # Only renderer-owned, self-contained documents receive the audio capability.
     if 'id="alc-render-payload"' not in html or 'function renderSourceRow(' not in html:
         return content
     html = re.sub(r'<script\b[^>]*\bid=["\']alc-tts-config["\'][^>]*>[\s\S]*?</script>', '', html, flags=re.I)
     html = re.sub(r'<meta\b(?=[^>]*http-equiv\s*=\s*["\']Content-Security-Policy["\'])[^>]*>', '', html, flags=re.I)
-    config = '<script type="application/json" id="alc-tts-config">' + json.dumps({'endpoint': endpoint}) + '</script>'
+    config = '<script type="application/json" id="alc-tts-config">' + json.dumps(config_value) + '</script>'
     meta_policy = re.sub(r'(?:sandbox|frame-ancestors)[^;]*;\s*', '', policy)
     meta = '<meta http-equiv="Content-Security-Policy" content="' + meta_policy.replace('"', '&quot;') + '">'
     position = html.lower().find('</head>')
@@ -66,14 +79,25 @@ class ReaderHosts:
         self._lock = threading.Lock()
         self._audio_slots = threading.BoundedSemaphore(2)
 
-    def open(self, path: Path, digest: str) -> str:
+    def open(self, path: Path, digest: str, *, title: str | None = None,
+             on_title_change=None, translated_title: str | None = None,
+             on_translated_title_change=None) -> str:
         path = path.resolve()
         key = (str(path), digest)
         with self._lock:
             if key in self._hosts:
+                self._hosts[key][2]['title'] = title
+                self._hosts[key][2]['on_title_change'] = on_title_change
+                self._hosts[key][2]['translated_title'] = translated_title
+                self._hosts[key][2]['on_translated_title_change'] = on_translated_title_change
                 return self._hosts[key][1]
             capability = '/' + secrets.token_urlsafe(32)
             manager, slots = self._tts, self._audio_slots
+            reader_options = {
+                'title': title, 'on_title_change': on_title_change,
+                'translated_title': translated_title,
+                'on_translated_title_change': on_translated_title_change,
+            }
 
             class Handler(BaseHTTPRequestHandler):
                 def log_message(self, *_args):
@@ -122,19 +146,68 @@ class ReaderHosts:
                         self.send_error(409); return
                     content = refresh_reader_runtime(content)
                     audio = manager is not None and b'id="alc-render-payload"' in content and b'function renderSourceRow(' in content
-                    connect = self.origin() + capability + '/tts/' if audio else "'none'"
+                    title_change = reader_options['on_title_change'] is not None
+                    translated_title_change = reader_options['on_translated_title_change'] is not None
+                    endpoints = []
+                    if audio:
+                        endpoints.append(self.origin() + capability + '/tts/')
+                    if title_change:
+                        endpoints.append(self.origin() + capability + '/title')
+                    if translated_title_change:
+                        endpoints.append(self.origin() + capability + '/translated-title')
+                    connect = ' '.join(endpoints) if endpoints else "'none'"
                     policy = (
                         "sandbox allow-scripts allow-same-origin allow-downloads allow-modals; "
                         "default-src 'none'; script-src 'unsafe-inline' blob:; "
                         "style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; "
                         f"connect-src {connect}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
                     )
-                    if audio:
-                        content = _reader_audio_html(content, capability + '/tts', policy)
+                    if audio or title_change or translated_title_change:
+                        config = {}
+                        if audio:
+                            config['endpoint'] = capability + '/tts'
+                        if title_change:
+                            config['title_endpoint'] = capability + '/title'
+                            config['title'] = reader_options['title'] or ''
+                        if translated_title_change:
+                            config['translated_title_endpoint'] = capability + '/translated-title'
+                            config['translated_title'] = reader_options['translated_title'] or ''
+                        content = _reader_audio_html(content, config, policy)
                     self.respond(200, content, 'text/html; charset=utf-8', policy)
 
                 def do_POST(self):
                     if not self.boundary(write=True): return
+                    callbacks = {
+                        capability + '/title': reader_options['on_title_change'],
+                        capability + '/translated-title': reader_options['on_translated_title_change'],
+                    }
+                    if self.path in callbacks:
+                        callback = callbacks[self.path]
+                        if callback is None:
+                            self.send_error(404); return
+                        if self.headers.get('Content-Type', '').split(';')[0].strip() != 'application/json' or self.headers.get('Transfer-Encoding'):
+                            self.error(415, 'Expected a bounded JSON request.'); return
+                        try:
+                            size = int(self.headers.get('Content-Length', '0'))
+                            if not 0 < size <= 1024: raise ValueError()
+                            value = json.loads(self.rfile.read(size))
+                            if not isinstance(value, dict) or set(value) != {'title'}:
+                                raise ValueError('Invalid title.')
+                            title = value['title']
+                            if not isinstance(title, str) or not title.strip() or len(title.strip()) > 500:
+                                raise ValueError('Invalid title.')
+                            saved = callback(title.strip())
+                            if not isinstance(saved, str) or not saved.strip():
+                                saved = title.strip()
+                            if self.path == capability + '/title':
+                                reader_options['title'] = saved
+                            else:
+                                reader_options['translated_title'] = saved
+                            self.respond(200, json.dumps({'title': saved}).encode(), 'application/json'); return
+                        except (ValueError, UnicodeError):
+                            self.error(400, 'Invalid title.'); return
+                        except (RuntimeError, OSError):
+                            self.error(503, 'Reader title could not be saved.'); return
                     if manager is None or self.path != capability + '/tts/speech':
                         self.send_error(404); return
                     if self.headers.get('Content-Type', '').split(';')[0].strip() != 'application/json' or self.headers.get('Transfer-Encoding'):
@@ -207,12 +280,12 @@ class ReaderHosts:
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             url = f'http://127.0.0.1:{server.server_port}{capability}'
-            self._hosts[key] = (server, url)
+            self._hosts[key] = (server, url, reader_options)
             return url
 
     def close(self):
         with self._lock:
-            for server, _url in self._hosts.values():
+            for server, _url, _options in self._hosts.values():
                 server.shutdown()
                 server.server_close()
             self._hosts.clear()

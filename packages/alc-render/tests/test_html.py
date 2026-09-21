@@ -2155,6 +2155,8 @@ def test_rendered_html_is_standalone_and_embeds_atomic_markdown(
     assert 'href="assets/' not in text
     assert "window.markdownit" in text
     assert "window.katex" in text
+    assert "MathLive 0.110.0" in text
+    assert "convertLatexToSpeakableText" in text
     assert "showDirectoryPicker" in text
     assert "@media print" in text
     assert "--print-to-pdf" not in text
