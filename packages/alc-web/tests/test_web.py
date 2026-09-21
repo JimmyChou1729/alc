@@ -36,6 +36,18 @@ def upload(client, text="# A short note\n\nA readable paragraph with $x^2$.\n"):
     return response.json()["id"]
 
 
+def test_new_job_preserves_the_original_source_label(web):
+    client, _ = web
+    response = client.post(
+        "/api/jobs",
+        json={"source_url": "arXiv:2609.04308v1", "output": "source"},
+    )
+    assert response.status_code == 201, response.text
+    job = response.json()
+    assert job["source_label"] == "arXiv:2609.04308v1"
+    assert job["spec"]["source_url"] == "https://arxiv.org/html/2609.04308v1"
+
+
 @pytest.mark.parametrize("resume", [False, True])
 @pytest.mark.parametrize("workers", [2, 16])
 @pytest.mark.parametrize("owner", ["translate", "companion"])
@@ -168,14 +180,19 @@ def test_source_reader_runs_without_a_model_and_verifies_delivery(web, monkeypat
     assert "A readable paragraph" in response.text
     assert "allow-same-origin" not in response.headers["content-security-policy"]
     opened = []
-    def open_reader(_self, path, digest):
-        opened.append((path, digest))
+    def open_reader(_self, path, digest, **kwargs):
+        opened.append((path, digest, kwargs))
         return "http://127.0.0.1:54321/opaque-reader"
     monkeypatch.setattr("alc_web.reader_host.ReaderHosts.open", open_reader)
     response = client.get(f"/api/jobs/{job_id}/reader", follow_redirects=False)
     assert response.status_code == 307
     assert response.headers['location'] == "http://127.0.0.1:54321/opaque-reader"
     assert opened[0][1] == job['result']['sha256']
+    assert opened[0][2]['title'] == job['display_title']
+    assert opened[0][2]['on_title_change']('Renamed in Reader') == 'Renamed in Reader'
+    assert store.get(job_id)['display_title'] == 'Renamed in Reader'
+    assert opened[0][2]['on_translated_title_change']('Reader translation') == 'Reader translation'
+    assert store.reader_translation_title(job_id) == 'Reader translation'
     path = store.project / job["result"]["reader"]
     path.write_text("tampered")
     assert client.get(f"/api/jobs/{job_id}/reader").status_code == 409
@@ -755,6 +772,7 @@ def test_list_is_lightweight_and_usage_projection_reads_only_new_events(
             "created": store.get(job_id)["created"],
             "spec": {"title": "note.md"},
             "display_title": "note.md",
+            "source_label": "note.md",
         }
     ]
     assert reads == []

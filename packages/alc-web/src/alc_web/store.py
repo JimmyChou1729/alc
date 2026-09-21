@@ -41,6 +41,7 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS job_events ON events(job_id, sequence);
                 CREATE TABLE IF NOT EXISTS job_presentation (job_id TEXT PRIMARY KEY, title TEXT, deleted INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS reader_presentation (job_id TEXT PRIMARY KEY, translated_title TEXT);
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, value TEXT NOT NULL);
                 PRAGMA user_version=1;
@@ -81,10 +82,11 @@ class Store:
         if result.get("error"):
             from .errors import explain_error
             result["error"]["user_message"] = explain_error(result["error"], result["spec"].get("provider"))
-        from .presentation import document_title
+        from .presentation import document_title, source_label
         with self.connect() as db:
             display = db.execute("SELECT title,deleted FROM job_presentation WHERE job_id=?", (job_id,)).fetchone()
         result["display_title"] = (display["title"] if display else None) or document_title(self, result) or result["spec"].get("title", "未命名任务")
+        result["source_label"] = source_label(result["spec"])
         result["deleted"] = bool(display and display["deleted"])
         return result
 
@@ -96,6 +98,27 @@ class Store:
         with self.connect() as db:
             db.execute("INSERT INTO job_presentation(job_id,title) VALUES(?,?) ON CONFLICT(job_id) DO UPDATE SET title=excluded.title", (job_id,title))
         return self.get(job_id)
+
+    def reader_translation_title(self, job_id: str) -> str:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT translated_title FROM reader_presentation WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        return row["translated_title"] if row and row["translated_title"] else ""
+
+    def rename_reader_translation_title(self, job_id: str, title: str) -> str:
+        title = title.strip()
+        if not title or len(title) > 500:
+            raise ValueError("译文标题请输入1–500个字符。")
+        self.get(job_id)
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO reader_presentation(job_id,translated_title) VALUES(?,?) "
+                "ON CONFLICT(job_id) DO UPDATE SET translated_title=excluded.translated_title",
+                (job_id, title),
+            )
+        return title
 
     def delete(self, job_id: str) -> None:
         # Retain saved work on disk; deletion only removes an idle job from the list.
@@ -120,7 +143,7 @@ class Store:
 
     def summaries(self) -> list[dict[str, Any]]:
         return [
-            {k: j[k] for k in ("id", "state", "phase", "created", "display_title")} | {"spec": {"title": j["spec"].get("title", "")}}
+            {k: j[k] for k in ("id", "state", "phase", "created", "display_title", "source_label")} | {"spec": {"title": j["spec"].get("title", "")}}
             for j in self.list() if not j["deleted"]
         ]
 

@@ -2,6 +2,8 @@
 from functools import lru_cache
 import json
 from pathlib import Path
+import re
+from urllib.parse import unquote, urlsplit
 
 
 @lru_cache(maxsize=128)
@@ -35,11 +37,33 @@ def source_title(path: Path) -> str:
         return ""
 
 
+def source_label(spec: dict) -> str:
+    """Return the original source identifier used to create a task."""
+    explicit = str(spec.get("source_label") or "").strip()
+    if explicit:
+        return explicit
+    if spec.get("source_id"):
+        return str(spec.get("title") or "").strip()
+    source = str(spec.get("source_url") or "").strip()
+    if not source:
+        return ""
+    try:
+        parts = urlsplit(source)
+    except ValueError:
+        return source
+    host = (parts.hostname or "").lower()
+    path = unquote(parts.path).strip("/")
+    if host in {"doi.org", "dx.doi.org"} and re.fullmatch(r"10\.\d{4,9}/\S+", path):
+        return path
+    if host in {"arxiv.org", "www.arxiv.org"}:
+        match = re.fullmatch(r"(?:html|abs|pdf)/(.+?)(?:\.pdf)?", path)
+        if match:
+            return match.group(1)
+    return source
+
+
 def document_title(store, job) -> str:
     spec = job.get('spec', {})
-    filename = spec.get('title', '')
-    if spec.get('source_id') and Path(filename).suffix.lower() == '.pdf':
-        return filename
     root = store.job_directory(job['id']).resolve()
     try:
         info = json.loads((root / 'source.json').read_text())
