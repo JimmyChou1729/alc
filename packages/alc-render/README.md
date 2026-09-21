@@ -371,8 +371,9 @@ editable, versioned, and reflected immediately in the appendix, tooltips,
 linked Fragment text, and exports.
 
 Speech uses the browser Web Speech API. Source and target content have separate
-voice choices. Playback follows publication order and skips display equations,
-code, and table bodies. Glossary playback reads the source term first, followed
+voice choices. Playback follows publication order and converts inline and display
+TeX formulas to speakable text with the bundled offline MathLive rules; code and
+table bodies are skipped. Glossary playback reads the source term first, followed
 by the translated term and definition.
 
 ## Export

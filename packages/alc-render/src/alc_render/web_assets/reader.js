@@ -153,6 +153,10 @@
     visibilityEmptyRoot: null,
     primaryTitleBlockId: "",
     primaryTitleFragmentId: "",
+    readerTitleOverride: "",
+    readerTitleDraft: null,
+    readerTitleSaving: false,
+    translatedTitleOverride: "",
     readerPreferences: Object.assign({}, READER_PREFERENCE_DEFAULTS),
     readerSettingsReady: false,
     pendingReaderLinkTimer: null,
@@ -488,6 +492,8 @@
       editor: "编辑",
       newNote: "添加",
       title: "标题",
+      editReaderTitle: "编辑 Reader 标题",
+      readerTitleSaveFailed: "Reader 标题保存失败，请重试。",
       role: "类型",
       priority: "优先级",
       colors: traditional ? "同類型與優先級的樣式" : "同类型与优先级的样式",
@@ -679,6 +685,8 @@
       editor: "Edit",
       newNote: "Add",
       title: "Title",
+      editReaderTitle: "Edit Reader title",
+      readerTitleSaveFailed: "Reader title could not be saved. Please retry.",
       role: "Role",
       priority: "Priority",
       colors: "Style for this role and priority",
@@ -3108,11 +3116,7 @@
     var titlePromotion = updatePrimaryTitleState(documentValue);
     var header = document.getElementById("alc-book-header");
     header.replaceChildren();
-    var heading = element("h1", "", title);
-    removeVisibleHtmlTags(heading);
-    header.appendChild(heading);
-    decorateGlossary(heading, "source");
-    decorateGlossary(heading, "target");
+    header.appendChild(renderReaderTitle(title));
     var delivery = renderDeliverySummary();
     if (delivery) header.appendChild(delivery);
     if (titlePromotion) {
@@ -7317,6 +7321,7 @@
       priority: draft.priority,
       appearance: draft.appearance
     }) : fragment;
+    var primaryTranslatedTitle = isPrimaryTranslatedTitle(fragment);
     var card = element("aside", "alc-fragment");
     if (sourceEditOperation(fragment)) {
       card.classList.add("alc-source-edit");
@@ -7330,10 +7335,7 @@
     card.lang = visual.language ||
       (state.payload.publication.reader_profile || {}).target_language ||
       document.documentElement.lang;
-    if (
-      fragment.fragment_id === state.primaryTitleFragmentId &&
-      visual.role === "translation" && visual.priority <= 100
-    ) {
+    if (primaryTranslatedTitle) {
       card.classList.add("alc-translated-title");
     }
     if (editing) {
@@ -7354,9 +7356,11 @@
     typeset(title);
     header.appendChild(title);
     var actions = element("div", "alc-fragment-actions");
-    actions.appendChild(element(
-      "span", "alc-fragment-meta", fragmentMetaText(visual, editing)
-    ));
+    if (!primaryTranslatedTitle) {
+      actions.appendChild(element(
+        "span", "alc-fragment-meta", fragmentMetaText(visual, editing)
+      ));
+    }
     if (editing) {
       actions.classList.add("alc-inline-actions");
       appendInlineActions(actions);
@@ -7366,7 +7370,8 @@
       );
       accessibleEdit.type = "button";
       accessibleEdit.addEventListener("click", function () {
-        beginInlineEdit(fragment);
+        primaryTranslatedTitle ? beginTranslatedTitleEdit(fragment) :
+          beginInlineEdit(fragment);
       });
       actions.appendChild(accessibleEdit);
     }
@@ -7398,21 +7403,27 @@
       card.appendChild(recoveryNotice);
     }
     var saved = element("div", "alc-fragment-saved-content");
-    var rendered = renderMarkdown(fragment.markdown_body, fragment);
+    var rendered = renderMarkdown(
+      primaryTranslatedTitle ? "# " + translatedReaderTitle(fragment) :
+        fragment.markdown_body,
+      fragment
+    );
     decorateTranslationSourceNoteTokens(rendered, fragment);
     decorateOverlayEquation(rendered, fragment);
     saved.appendChild(rendered);
     saved.addEventListener("click", function (event) {
-      handleSavedFragmentClick(event, fragment);
+      if (primaryTranslatedTitle) handleTranslatedTitleClick(event, fragment);
+      else handleSavedFragmentClick(event, fragment);
     });
     saved.addEventListener("dblclick", function (event) {
-      handleSavedFragmentDoubleClick(event, fragment);
+      if (primaryTranslatedTitle) handleTranslatedTitleDoubleClick(event, fragment);
+      else handleSavedFragmentDoubleClick(event, fragment);
     });
     card.appendChild(saved);
     if (editing) {
       card.classList.add("is-inline-editing");
       card.appendChild(renderInlineEditor());
-    } else {
+    } else if (!primaryTranslatedTitle) {
       card.appendChild(renderCardActions(
         visual.role, fragmentTargetId(fragment), fragment
       ));
@@ -7816,9 +7827,12 @@
 
   function appendInlineActions(actions) {
     var strings = labels();
-    var advanced = element("button", "alc-inline-advanced", strings.advancedAction);
-    advanced.type = "button";
-    advanced.addEventListener("click", openAdvancedEditor);
+    if (!primaryTitleDraftActive()) {
+      var advanced = element("button", "alc-inline-advanced", strings.advancedAction);
+      advanced.type = "button";
+      advanced.addEventListener("click", openAdvancedEditor);
+      actions.appendChild(advanced);
+    }
     var cancel = element("button", "alc-inline-cancel", strings.cancel);
     cancel.type = "button";
     cancel.addEventListener("click", cancelActiveDraft);
@@ -7826,7 +7840,6 @@
     save.type = "button";
     save.disabled = !activeDraftHasChanges();
     save.addEventListener("click", saveEditor);
-    actions.appendChild(advanced);
     actions.appendChild(cancel);
     actions.appendChild(save);
   }
@@ -7834,12 +7847,16 @@
   function renderInlineEditor() {
     var root = element("div", "alc-inline-editor");
     var textarea = element("textarea", "alc-inline-markdown");
-    textarea.value = state.activeDraft ? state.activeDraft.markdown_body : "";
+    var titleDraft = primaryTitleDraftActive();
+    textarea.value = state.activeDraft ? (titleDraft ?
+      titleEditorText(state.activeDraft.markdown_body) :
+      state.activeDraft.markdown_body) : "";
     textarea.setAttribute("aria-label", labels().markdown);
     textarea.spellcheck = true;
     textarea.addEventListener("input", function () {
       if (!state.activeDraft) return;
-      state.activeDraft.markdown_body = textarea.value;
+      state.activeDraft.markdown_body = titleDraft ?
+        "# " + textarea.value : textarea.value;
       resizeInlineTextarea(textarea);
       updateDraftSaveButtons(textarea.closest(".alc-fragment"));
     });
@@ -8052,6 +8069,16 @@
     var rules = [];
     if (!state.glossaryVisible) rules.push('#alc-glossary,[data-contents-entry="glossary"]{display:none}');
     if (!state.referencesVisible) rules.push('#alc-references,[data-contents-entry="references"]{display:none}');
+    if (!state.sourceVisible) {
+      rules.push(
+        '.alc-appendix .alc-appendix-source-title{display:none}'
+      );
+    }
+    if (!state.roleOrder.includes("translation") || state.hiddenRoles.has("translation")) {
+      rules.push(
+        '.alc-appendix .alc-appendix-translation-title{display:none}'
+      );
+    }
     state.hiddenRoles.forEach(function (role) {
       if (role === "source") return;
       rules.push(
@@ -9162,14 +9189,42 @@
       return normalizeSpeechText(fallback);
     }
     return normalizeSpeechText(spans.map(function (span) {
-      if (!span || span.kind === "math") return "";
+      if (!span) return "";
+      if (span.kind === "math") {
+        return mathSpeechText(span.tex || span.source || span.text);
+      }
       return span.text || "";
     }).join(""));
+  }
+
+  function mathSpeechText(value) {
+    var tex = String(value || "").trim()
+      .replace(/^\$\$([\s\S]*?)\$\$$/, "$1")
+      .replace(/^\$([\s\S]*?)\$$/, "$1")
+      .replace(/^\\\(([\s\S]*?)\\\)$/, "$1")
+      .replace(/^\\\[([\s\S]*?)\\\]$/, "$1")
+      .trim();
+    if (!tex || !window.MathLive ||
+      typeof window.MathLive.convertLatexToSpeakableText !== "function") {
+      return "";
+    }
+    try {
+      return normalizeSpeechText(
+        window.MathLive.convertLatexToSpeakableText(tex)
+      );
+    } catch (_error) {
+      return "";
+    }
   }
 
   function speechTextFromNode(root) {
     if (!root) return "";
     var clone = root.cloneNode(true);
+    Array.prototype.forEach.call(clone.querySelectorAll(".math[data-tex]"), function (math) {
+      math.replaceWith(document.createTextNode(
+        " " + mathSpeechText(math.dataset.tex) + " "
+      ));
+    });
     Array.prototype.forEach.call(clone.querySelectorAll("table"), function (table) {
       var caption = table.querySelector("caption");
       if (!caption) {
@@ -9180,7 +9235,7 @@
       table.replaceWith(replacement);
     });
     Array.prototype.forEach.call(clone.querySelectorAll(
-      "script, style, button, input, select, textarea, pre, code, .math, .katex"
+      "script, style, button, input, select, textarea, pre, code, .katex"
     ), function (node) { node.remove(); });
     Array.prototype.forEach.call(clone.querySelectorAll("img[alt]"), function (image) {
       image.replaceWith(document.createTextNode(" " + image.alt + " "));
@@ -9225,7 +9280,8 @@
     if (block.kind === "table") {
       return normalizeSpeechText(payload.caption);
     }
-    if (block.kind === "code" || block.kind === "equation") return "";
+    if (block.kind === "code") return "";
+    if (block.kind === "equation") return mathSpeechText(payload.tex);
     return speechTextFromNode(card);
   }
 
@@ -9736,6 +9792,7 @@
       appendContentsLink(list, strings.companionReferences, "#alc-references", "references");
     }
     appendSupplementCoverage(list);
+    syncContentsLanguage();
     updateContentsTitles();
   }
 
@@ -9774,6 +9831,32 @@
       button.textContent = source ? strings.contentsSource : strings.contentsTranslation;
       button.setAttribute("aria-pressed", String(button.dataset.contentsLanguage === state.contentsLanguage));
     });
+    var contents = contentsSurfaceLabels(strings);
+    var heading = document.getElementById("alc-contents-heading");
+    if (heading) heading.textContent = contents.contents;
+    var list = document.getElementById("alc-contents-list");
+    if (!list) return;
+    Array.prototype.forEach.call(
+      list.querySelectorAll("[data-contents-entry] a"),
+      function (link) {
+        link.textContent = contents[link.parentElement.dataset.contentsEntry] || "";
+      }
+    );
+  }
+
+  function contentsSurfaceLabels(strings) {
+    if (state.contentsLanguage === "source") {
+      return {
+        contents: "Contents",
+        glossary: "Glossary",
+        references: "Companion references"
+      };
+    }
+    return {
+      contents: strings.contents,
+      glossary: strings.glossary,
+      references: strings.companionReferences
+    };
   }
 
   function appendSupplementCoverage(list) {
@@ -9852,6 +9935,13 @@
         link.parentElement.hidden = Boolean(sourceEdit && sourceEdit.deleted);
         if (link.parentElement.hidden) return;
         link.replaceChildren();
+        if (link.dataset.blockId === state.primaryTitleBlockId) {
+          var primary = primaryTitleFragment();
+          var title = state.contentsLanguage === "translation" && primary ?
+            translatedReaderTitle(primary) : readerTitle();
+          appendTocTitle(link, title);
+          return;
+        }
         var heading = visibleHeadingForBlock(link.dataset.blockId);
         if (heading) {
           Array.prototype.forEach.call(heading.childNodes, function (child) {
@@ -9865,6 +9955,14 @@
         }
       }
     );
+  }
+
+  function primaryTitleFragment() {
+    var selected = state.selected.get(state.primaryTitleFragmentId);
+    if (selected) return selected;
+    return (state.payload.selected_heading_fragments || []).find(function (fragment) {
+      return fragment.fragment_id === state.primaryTitleFragmentId;
+    }) || null;
   }
 
   function visibleHeadingForBlock(blockId) {
@@ -9914,7 +10012,7 @@
   function renderGlossary(main, glossary, strings) {
     var section = element("section", "alc-appendix");
     section.id = "alc-glossary";
-    section.appendChild(element("h2", "", strings.glossary));
+    appendAppendixTitles(section, "Glossary", strings.glossary);
     var dl = element("dl");
     glossary.forEach(function (entry) {
       dl.appendChild(renderGlossaryRow(entry, strings));
@@ -10171,7 +10269,7 @@
     if (!bibliography.length) return;
     var section = element("section", "alc-appendix");
     section.id = "alc-references";
-    section.appendChild(element("h2", "", strings.companionReferences));
+    appendAppendixTitles(section, "Companion references", strings.companionReferences);
     var list = element("ol", "alc-reference-list");
     bibliographyIndex().groups.forEach(function (group) {
       var entry = group.entry;
@@ -10203,6 +10301,13 @@
     });
     section.appendChild(list);
     main.appendChild(section);
+  }
+
+  function appendAppendixTitles(section, source, translation) {
+    section.appendChild(element("h2", "alc-appendix-title alc-appendix-source-title", source));
+    section.appendChild(element(
+      "h2", "alc-appendix-title alc-appendix-translation-title", translation
+    ));
   }
 
   function renderDiagnostics(main) {
@@ -10383,8 +10488,9 @@
     return tex;
   }
 
-  function katexSemanticMacros() {
+  function katexSemanticMacros(displayMode) {
     return {
+      "\\displaylimits": displayMode ? "\\limits" : "\\nolimits",
       "\\arcdeg": "^{\\circ}",
       "\\arcmin": "^{\\prime}",
       "\\arcsec": "^{\\prime\\prime}",
@@ -10558,11 +10664,12 @@
     scope.querySelectorAll(".math[data-tex]").forEach(function (node) {
       if (node.dataset.alcTypeset === "true") return;
       try {
+        var displayMode = node.classList.contains("math-display");
         var settings = {
-          displayMode: node.classList.contains("math-display"),
+          displayMode: displayMode,
           throwOnError: true,
           strict: "warn",
-          macros: katexSemanticMacros()
+          macros: katexSemanticMacros(displayMode)
         };
         var candidates = katexCandidates(node.dataset.tex);
         var rendered = candidates.some(function (candidate) {
@@ -13634,10 +13741,256 @@
   function readerTitle() {
     var publication = state.payload.publication;
     var profile = publication.reader_profile || {};
-    return profile.title || state.payload.reader_title ||
+    var hosted = readerTitleHostConfig();
+    return state.readerTitleOverride || hosted.title || profile.title ||
+      state.payload.reader_title ||
       publication.labels.document_title ||
       sourceTitle(publication.source_document) ||
       publication.labels.untitled_document || "Untitled document";
+  }
+
+  function isPrimaryTranslatedTitle(fragment) {
+    return Boolean(fragment &&
+      fragment.fragment_id === state.primaryTitleFragmentId &&
+      fragment.role === "translation" && fragment.priority <= 100);
+  }
+
+  function translatedReaderTitle(fragment) {
+    var hosted = readerTitleHostConfig();
+    return state.translatedTitleOverride || hosted.translatedTitle ||
+      titleEditorText(fragment && fragment.markdown_body);
+  }
+
+  function beginTranslatedTitleEdit(fragment, event) {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    var hosted = readerTitleHostConfig();
+    if (state.saveInProgress || !hosted.translatedTitleEndpoint) return;
+    if (!prepareForDraftSwitch()) return;
+    state.editorKind = "fragment";
+    state.activeDraft = draftFromFragment(fragment);
+    state.activeDraft.markdown_body = "# " + translatedReaderTitle(fragment);
+    state.editorBase = fragment;
+    state.editorAnchor = fragment.anchor;
+    state.editorHistorical = fragment;
+    replaceFragmentCard(fragment.fragment_id, fragment.anchor);
+    focusInlineEditor(fragment.fragment_id);
+  }
+
+  function handleTranslatedTitleClick(event, fragment) {
+    if (event.target && event.target.closest && event.target.closest(
+      "button, input, textarea, select, a"
+    )) return;
+    if (state.readerPreferences.editActivation === "single") {
+      beginTranslatedTitleEdit(fragment, event);
+    }
+  }
+
+  function handleTranslatedTitleDoubleClick(event, fragment) {
+    if (state.readerPreferences.editActivation !== "double") return;
+    if (event.target && event.target.closest && event.target.closest(
+      "button, input, textarea, select, a"
+    )) return;
+    beginTranslatedTitleEdit(fragment, event);
+  }
+
+  async function saveTranslatedReaderTitle(event) {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    var hosted = readerTitleHostConfig();
+    var draft = state.activeDraft;
+    var title = titleEditorText(draft && draft.markdown_body);
+    if (!draft || state.saveInProgress || !hosted.translatedTitleEndpoint || !title) return;
+    state.saveInProgress = true;
+    updateDraftSaveButtons();
+    try {
+      var response = await fetch(hosted.translatedTitleEndpoint, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({title: title})
+      });
+      if (!response.ok) throw new Error("translated title save failed");
+      var result = await response.json();
+      state.translatedTitleOverride = typeof result.title === "string" &&
+        result.title.trim() ? result.title.trim() : title;
+      state.activeDraft = null;
+      state.editorBase = null;
+      state.editorAnchor = null;
+      state.editorHistorical = null;
+      renderBookHeader(state.payload.publication.source_document);
+      updateContentsTitles();
+      setStatus(labels().saveSuccess);
+    } catch (_error) {
+      setStatus(labels().readerTitleSaveFailed, "error");
+    } finally {
+      state.saveInProgress = false;
+      updateDraftSaveButtons();
+    }
+  }
+
+  function readerTitleHostConfig() {
+    if (typeof document === "undefined" || typeof document.getElementById !== "function") {
+      return {title: "", endpoint: "", translatedTitle: "", translatedTitleEndpoint: ""};
+    }
+    var config = document.getElementById("alc-tts-config");
+    if (!config || !/^https?:$/.test(window.location.protocol)) {
+      return {title: "", endpoint: "", translatedTitle: "", translatedTitleEndpoint: ""};
+    }
+    try {
+      var value = JSON.parse(config.textContent);
+      var title = typeof value.title === "string" ? value.title.trim() : "";
+      var translatedTitle = typeof value.translated_title === "string" ?
+        value.translated_title.trim() : "";
+      var endpoint = value.title_endpoint;
+      if (typeof endpoint !== "string" || !/^\/(?!\/)/.test(endpoint)) {
+        endpoint = "";
+      } else {
+        var url = new URL(endpoint, window.location.href);
+        endpoint = url.origin === window.location.origin && !url.search && !url.hash ?
+          url.pathname : "";
+      }
+      var translatedTitleEndpoint = value.translated_title_endpoint;
+      if (typeof translatedTitleEndpoint !== "string" || !/^\/(?!\/)/.test(translatedTitleEndpoint)) {
+        translatedTitleEndpoint = "";
+      } else {
+        var translatedUrl = new URL(translatedTitleEndpoint, window.location.href);
+        translatedTitleEndpoint = translatedUrl.origin === window.location.origin &&
+          !translatedUrl.search && !translatedUrl.hash ? translatedUrl.pathname : "";
+      }
+      return {
+        title: title.slice(0, 500), endpoint: endpoint,
+        translatedTitle: translatedTitle.slice(0, 500),
+        translatedTitleEndpoint: translatedTitleEndpoint
+      };
+    } catch (_error) {
+      return {title: "", endpoint: "", translatedTitle: "", translatedTitleEndpoint: ""};
+    }
+  }
+
+  function renderReaderTitle(title) {
+    if (state.readerTitleDraft !== null) return renderReaderTitleEditor();
+    var surface = element("div", "alc-reader-title-surface");
+    var heading = element("h1", "", title);
+    removeVisibleHtmlTags(heading);
+    decorateGlossary(heading, "source");
+    decorateGlossary(heading, "target");
+    var host = readerTitleHostConfig();
+    if (host.endpoint) {
+      heading.addEventListener("click", function () {
+        if (state.readerPreferences.editActivation === "single") beginReaderTitleEdit();
+      });
+      heading.addEventListener("dblclick", function (event) {
+        if (state.readerPreferences.editActivation !== "double") return;
+        event.preventDefault();
+        beginReaderTitleEdit();
+      });
+      var edit = element("button", "alc-edit-accessible", labels().editReaderTitle);
+      edit.type = "button";
+      edit.addEventListener("click", beginReaderTitleEdit);
+      surface.appendChild(edit);
+    }
+    surface.appendChild(heading);
+    return surface;
+  }
+
+  function beginReaderTitleEdit(event) {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    if (state.readerTitleSaving || !readerTitleHostConfig().endpoint) return;
+    if (!prepareForDraftSwitch()) return;
+    state.readerTitleDraft = readerTitle();
+    renderBookHeader(state.payload.publication.source_document);
+  }
+
+  function renderReaderTitleEditor() {
+    var root = element("aside", "alc-reader-title-editor alc-fragment is-inline-editing");
+    var header = element("header", "alc-fragment-header");
+    var actions = element("div", "alc-fragment-actions alc-inline-actions");
+    var cancel = element("button", "alc-inline-cancel", labels().cancel);
+    cancel.type = "button";
+    cancel.disabled = state.readerTitleSaving;
+    cancel.addEventListener("click", cancelReaderTitleEdit);
+    var save = element("button", "alc-inline-save", labels().save);
+    save.type = "button";
+    save.disabled = state.readerTitleSaving || !readerTitleDraftValue();
+    save.addEventListener("click", saveReaderTitle);
+    actions.appendChild(cancel);
+    actions.appendChild(save);
+    header.appendChild(actions);
+    root.appendChild(header);
+    var editor = element("div", "alc-inline-editor");
+    var textarea = element("textarea", "alc-inline-markdown");
+    textarea.value = state.readerTitleDraft || "";
+    textarea.maxLength = 500;
+    textarea.setAttribute("aria-label", labels().markdown);
+    textarea.addEventListener("input", function () {
+      state.readerTitleDraft = textarea.value;
+      save.disabled = !readerTitleDraftValue() || state.readerTitleSaving;
+      resizeInlineTextarea(textarea);
+    });
+    textarea.addEventListener("keydown", function (event) {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        if (!save.disabled) saveReaderTitle();
+      }
+    });
+    editor.appendChild(textarea);
+    root.appendChild(editor);
+    window.requestAnimationFrame(function () {
+      resizeInlineTextarea(textarea);
+      textarea.focus();
+      textarea.select();
+    });
+    return root;
+  }
+
+  function cancelReaderTitleEdit(event) {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    if (state.readerTitleSaving || state.readerTitleDraft === null) return;
+    state.readerTitleDraft = null;
+    renderBookHeader(state.payload.publication.source_document);
+  }
+
+  async function saveReaderTitle(event) {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+    var host = readerTitleHostConfig();
+    var title = readerTitleDraftValue();
+    if (state.readerTitleSaving || !host.endpoint || !title) return;
+    state.readerTitleSaving = true;
+    try {
+      var response = await fetch(host.endpoint, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({title: title})
+      });
+      if (!response.ok) throw new Error("title save failed");
+      var result = await response.json();
+      state.readerTitleOverride = typeof result.title === "string" &&
+        result.title.trim() ? result.title.trim() : title;
+      state.readerTitleDraft = null;
+      document.title = state.readerTitleOverride;
+      renderBookHeader(state.payload.publication.source_document);
+      updateContentsTitles();
+    } catch (_error) {
+      state.readerTitleSaving = false;
+      setStatus(labels().readerTitleSaveFailed, "error");
+      renderBookHeader(state.payload.publication.source_document);
+      return;
+    }
+    state.readerTitleSaving = false;
+  }
+
+  function readerTitleDraftValue() {
+    return titleEditorText(state.readerTitleDraft);
+  }
+
+  function primaryTitleDraftActive() {
+    var draft = state.activeDraft;
+    return Boolean(draft && state.primaryTitleFragmentId && (
+      draft.inlineFragmentId === state.primaryTitleFragmentId ||
+      (draft.base && draft.base.fragment_id === state.primaryTitleFragmentId)
+    ));
+  }
+
+  function titleEditorText(value) {
+    return markdownHeading(String(value || "").replace(/^\s*#\s*/m, ""));
   }
 
   function exportFilename(suffix, extension) {
@@ -13759,6 +14112,9 @@
   }
 
   function activeInlineDraftCard() {
+    if (state.readerTitleDraft !== null) {
+      return document.querySelector(".alc-reader-title-editor.is-inline-editing");
+    }
     if (state.activeGlossaryDraft) {
       return document.querySelector(
         '.alc-glossary-row[data-glossary-entry-id="' +
@@ -13808,8 +14164,8 @@
     var guard = document.getElementById("alc-unsaved-dialog");
     if (!card || (advanced && advanced.open) || (guard && guard.open)) return;
     if (card.contains(event.target)) return;
-    if (!activeDraftHasChanges()) {
-      cancelActiveDraft();
+    if (!hasUnsavedInlineDraftChanges()) {
+      cancelCurrentInlineDraft();
       return;
     }
     event.preventDefault();
@@ -13818,7 +14174,7 @@
   }
 
   function guardUnsavedDraftBeforeUnload(event) {
-    if (!activeDraftHasChanges()) return;
+    if (!hasUnsavedInlineDraftChanges()) return;
     event.preventDefault();
     event.returnValue = "";
   }
@@ -13840,7 +14196,7 @@
     document.getElementById("alc-unsaved-discard").addEventListener(
       "click", function () {
         closeUnsavedDialog(false);
-        cancelActiveDraft();
+        cancelCurrentInlineDraft();
       }
     );
     document.getElementById("alc-unsaved-save").addEventListener(
@@ -13851,10 +14207,10 @@
         save.disabled = true;
         discard.disabled = true;
         error.hidden = true;
-        await saveEditor(event);
+        await saveCurrentInlineDraft(event);
         save.disabled = false;
         discard.disabled = false;
-        if (!state.activeDraft && !state.activeGlossaryDraft) {
+        if (!state.readerTitleDraft && !state.activeDraft && !state.activeGlossaryDraft) {
           closeUnsavedDialog(false);
           return;
         }
@@ -13865,6 +14221,28 @@
     document.addEventListener("pointerdown", attemptInlineDraftExit, true);
     document.addEventListener("click", attemptInlineDraftExit, true);
     window.addEventListener("beforeunload", guardUnsavedDraftBeforeUnload);
+  }
+
+  function readerTitleDraftHasChanges() {
+    return state.readerTitleDraft !== null &&
+      readerTitleDraftValue() !== readerTitle();
+  }
+
+  function hasUnsavedInlineDraftChanges() {
+    return readerTitleDraftHasChanges() || activeDraftHasChanges();
+  }
+
+  function cancelCurrentInlineDraft() {
+    if (state.readerTitleDraft !== null) {
+      cancelReaderTitleEdit();
+      return;
+    }
+    cancelActiveDraft();
+  }
+
+  async function saveCurrentInlineDraft(event) {
+    if (state.readerTitleDraft !== null) return saveReaderTitle(event);
+    return saveEditor(event);
   }
 
   async function setupEditor() {
@@ -14920,6 +15298,13 @@
   }
 
   function focusActiveDraft() {
+    if (state.readerTitleDraft !== null) {
+      var titleInput = document.querySelector(
+        ".alc-reader-title-editor .alc-inline-markdown"
+      );
+      if (titleInput && typeof titleInput.focus === "function") titleInput.focus();
+      return;
+    }
     if (state.activeGlossaryDraft) {
       var glossaryDialog = document.getElementById("alc-editor-dialog");
       if (glossaryDialog && glossaryDialog.open) {
@@ -14945,6 +15330,13 @@
   }
 
   function prepareForDraftSwitch() {
+    if (state.readerTitleDraft !== null) {
+      if (readerTitleDraftValue() !== readerTitle()) {
+        setStatus(labels().draftRedirected, "error");
+        return false;
+      }
+      cancelReaderTitleEdit();
+    }
     if (!state.activeDraft && !state.activeGlossaryDraft) return true;
     if (activeDraftHasChanges()) {
       setStatus(labels().draftRedirected, "error");
@@ -15137,6 +15529,14 @@
       return;
     }
     if (!state.activeDraft || state.saveInProgress) return;
+    if (primaryTitleDraftActive()) {
+      state.activeDraft = null;
+      state.editorBase = null;
+      state.editorAnchor = null;
+      state.editorHistorical = null;
+      renderBookHeader(state.payload.publication.source_document);
+      return;
+    }
     var anchor = state.activeDraft.anchor;
     var fragmentId = state.activeDraft.base && state.activeDraft.base.fragment_id;
     state.activeDraft = null;
@@ -15414,6 +15814,7 @@
 
   function saveEditor(event) {
     if (state.activeGlossaryDraft) return persistGlossaryEditor(event);
+    if (primaryTitleDraftActive()) return saveTranslatedReaderTitle(event);
     return persistEditor(event, false);
   }
 
@@ -16002,6 +16403,10 @@
     var draft = state.activeDraft;
     if (!draft) return false;
     try {
+      if (primaryTitleDraftActive()) {
+        return titleEditorText(draft.markdown_body) !==
+          translatedReaderTitle(draft.base);
+      }
       if (!draft.base) {
         return stableStringify(editableDraftState(draft)) !== stableStringify(draft.initialEditableState || {
           title: null,

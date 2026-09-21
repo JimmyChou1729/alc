@@ -79,6 +79,7 @@ type Job = {
   translation_notice?: string | null;
   id: string;
   display_title: string;
+  source_label: string;
   state: string;
   phase: string;
   created: number;
@@ -114,7 +115,14 @@ type Settings = {
 };
 type JobSummary = Pick<
   Job,
-  "id" | "state" | "phase" | "created" | "spec" | "display_title" | "external"
+  | "id"
+  | "state"
+  | "phase"
+  | "created"
+  | "spec"
+  | "display_title"
+  | "source_label"
+  | "external"
 >;
 const taskSourceKind = (job: JobSummary) => {
   const source = String(job.spec.source_url || job.spec.title || "").trim();
@@ -906,10 +914,17 @@ function App() {
               <TaskSourceIcon job={item} />
               <span>
                 <strong>{item.display_title || item.spec.title}</strong>
-                <small>
-                  <i className={"dot " + item.state} />
-                  {states[item.state]}
-                  {item.external ? " · Agent 插件" : ""}
+                <small className="job-nav-meta">
+                  <span className="job-nav-state">
+                    <i className={"dot " + item.state} />
+                    {states[item.state]}
+                    {item.external ? " · Agent 插件" : ""}
+                  </span>
+                  {item.source_label && (
+                    <span className="job-nav-source" title={item.source_label}>
+                      {item.source_label}
+                    </span>
+                  )}
                 </small>
               </span>
             </button>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -34,6 +35,21 @@ def test_reader_javascript_passes_node_syntax_check() -> None:
         capture_output=True,
         text=True,
     )
+
+
+def test_reader_vendors_pinned_mathlive_speech_converter() -> None:
+    path = ASSETS / "mathlive" / "mathlive.min.js"
+    mathlive = path.read_text(encoding="utf-8")
+    notice = _text("mathlive/NOTICE.md")
+    license_text = _text("mathlive/LICENSE.txt")
+
+    assert mathlive.startswith("/** MathLive 0.110.0 */")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest == "32e6f80a8bf4e1ad15e8ce19529d24fd9ea25f48a598a63db2dfd8f34287a6d3"
+    assert f"Vendored SHA-256: `{digest}`" in notice
+    assert "convertLatexToSpeakableText" in mathlive
+    assert "MathLive 0.110.0" in notice
+    assert "Permission is hereby granted, free of charge" in license_text
 
 
 def test_reader_uses_dismissible_floating_delivery_panel_without_inline_badges() -> None:
@@ -1905,12 +1921,14 @@ def test_reader_speech_uses_structured_paragraphs_and_current_viewport() -> None
     ]
     assert "loadAllPayload(false);" in queue_source
     assert "renderAllChunks();" not in queue_source
+    assert 'clone.querySelectorAll(".math[data-tex]")' in javascript
     instrumented = (
         "globalThis.window = globalThis;\n"
         + javascript[:startup]
         + """
   globalThis.__alcSpeechTest = {
     normalizeSpeechText: normalizeSpeechText,
+  mathSpeechText: mathSpeechText,
     speechInlineText: speechInlineText,
     sourceSpeechText: sourceSpeechText,
     speechLanguage: speechLanguage,
@@ -1936,6 +1954,14 @@ function row(top, bottom) {
   }};
 }
 var helpers = globalThis.__alcSpeechTest;
+globalThis.MathLive = {
+  convertLatexToSpeakableText: function (tex) {
+    return {
+      "E=mc^2": "E equals m c squared",
+      "x^2": "x squared"
+    }[tex] || "";
+  }
+};
 globalThis.innerHeight = 600;
 var controls = {
   "alc-speech-rate": {value: "1.2"},
@@ -1994,17 +2020,23 @@ assert(
   "structured list items were not preserved"
 );
 assert(
-  helpers.sourceSpeechText({kind: "equation", payload: {tex: "x^2"}}) === "",
-  "display equation unexpectedly became a speech paragraph"
+  helpers.sourceSpeechText({kind: "equation", payload: {tex: "x^2"}}) === "x squared",
+  "display equation did not use MathLive speech text"
 );
 assert(
   helpers.speechInlineText([
     {kind: "text", text: "Energy "},
     {kind: "math", source: "$E=mc^2$"},
     {kind: "text", text: "."}
-  ], "Energy $E=mc^2$.") === "Energy.",
-  "inline math was spoken instead of using structured prose spans"
+  ], "Energy $E=mc^2$.") === "Energy E equals m c squared.",
+  "inline math did not use MathLive speech text"
 );
+assert(
+  helpers.mathSpeechText("$$E=mc^2$$") === "E equals m c squared",
+  "math delimiters were not removed before conversion"
+);
+globalThis.MathLive.convertLatexToSpeakableText = function () { throw new Error("invalid TeX"); };
+assert(helpers.mathSpeechText("\\\\bad") === "", "invalid TeX did not fall back silently");
 assert(
   helpers.speechLanguage("source", null) === "en" &&
     helpers.speechLanguage("translation", null) === "zh-CN",
@@ -2570,6 +2602,14 @@ if (
   String.raw`^{\\circ}`
 ) {
   throw new Error("AASTeX arc-degree macro is not registered semantically");
+}
+if (
+  helpers.katexSemanticMacros(true)[String.raw`\\displaylimits`] !==
+    String.raw`\\limits` ||
+  helpers.katexSemanticMacros(false)[String.raw`\\displaylimits`] !==
+    String.raw`\\nolimits`
+) {
+  throw new Error("displaylimits compatibility does not follow the render mode");
 }
 if (
   helpers.plainFragmentTitle(
@@ -6339,7 +6379,19 @@ def test_reader_uses_low_distraction_controls_and_inline_editor() -> None:
     assert "alc-edit-button" not in javascript
     assert "beginInlineEdit" in javascript
     assert "openAdvancedEditor" in javascript
+    assert "state.readerTitleDraft = readerTitle();" in javascript
+    assert "function readerTitleDraftValue()" in javascript
+    assert 'labels().original + " · 100 · v1"' not in javascript
+    assert "function hasUnsavedInlineDraftChanges()" in javascript
+    assert "function saveCurrentInlineDraft(event)" in javascript
+    assert "readerTitleAdvancedUnavailable" not in javascript
+    assert "function saveTranslatedReaderTitle(event)" in javascript
+    assert "translated_title_endpoint" in javascript
+    assert 'state.readerTitleDraft = textarea.value;' in javascript
     assert "renderGlossaryRow" in javascript
+    assert "appendAppendixTitles" in javascript
+    assert '"Glossary", strings.glossary' in javascript
+    assert '"Companion references", strings.companionReferences' in javascript
     assert "alc-glossary-inline-input" in javascript
     assert "alc-glossary-inline-definition" in javascript
     assert "focusGlossaryInlineEditor" in javascript
@@ -6397,6 +6449,11 @@ def test_reader_uses_low_distraction_controls_and_inline_editor() -> None:
     assert ".alc-glossary-row.is-inline-editing" in stylesheet
     assert ".alc-glossary-inline-input" in stylesheet
     assert ".alc-glossary-inline-definition" in stylesheet
+    assert ".alc-appendix-source-title" in stylesheet
+    assert ".alc-appendix-translation-title" in stylesheet
+    assert ".alc-reader-title-editor > .alc-fragment-header" in stylesheet
+    assert "justify-content: flex-end;" in stylesheet
+    assert ".alc-reader-title-surface > h1 { text-align: center; }" in stylesheet
     assert "html { scroll-behavior: auto; }" in stylesheet
     assert "html { scroll-behavior: smooth; }" not in stylesheet
     assert ".alc-storage-status" in stylesheet

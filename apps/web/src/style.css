@@ -212,6 +212,19 @@ a svg {
   font-size: 10px;
   margin-top: 4px;
 }
+.job-nav-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+.job-nav-source {
+  min-width: 0;
+  overflow: hidden;
+  color: #8b96a6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .job-nav-item:hover {
   background: #f5f7f9;
 }
