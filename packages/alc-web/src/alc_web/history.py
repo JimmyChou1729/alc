@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import HTTPException
 from ac_jobs.errors import AcJobsError
 from alc_catalog import project_records, records, register_project
-from .presentation import source_label
+from .presentation import source_label, source_type
 
 
 def _time(value):
@@ -38,16 +38,6 @@ def _is_local_web_job_project(value):
     return False
 
 
-def _history_source_label(entry):
-    manifest = Path(entry['project']) / 'source-bundle/manifest.json'
-    try:
-        bundle = json.loads(manifest.read_text()).get('bundle', {})
-        source = bundle.get('requested_url') or bundle.get('final_url')
-        return source_label({'source_url': source}) if source else ''
-    except (OSError, ValueError, TypeError):
-        return ''
-
-
 def history_jobs(store):
     result = []
     with store.connect() as db:
@@ -60,10 +50,13 @@ def history_jobs(store):
             continue
         state = {'succeeded': 'completed', 'failed': 'needs_input', 'paused': 'paused',
                  'pending': 'queued', 'running': 'running', 'cancelled': 'cancelled'}.get(entry['state'], 'needs_input')
+        source = {'source_url': entry['source_url'], 'source_label': entry['source_url']} if entry.get('source_url') else {}
         result.append({'id': entry['id'], 'external': True, 'state': state,
             'phase': entry['kind'], 'created': _time(entry['created_at']),
+            'completed': (_time(entry.get('updated_at')) or None) if state == 'completed' else None,
             'display_title': display.get('title') or entry['title'],
-            'source_label': _history_source_label(entry),
+            'source_label': source_label({'source_url': source.get('source_url')}),
+            'source_type': source_type(source),
             'spec': {'title': entry['title'], 'output': entry['kind']},
             'detail': {'project': entry['project'], 'run_id': entry['run_id'], 'artifact_available': bool(entry['artifact'])},
             'result': {'available': True} if entry['reader'] else None,
