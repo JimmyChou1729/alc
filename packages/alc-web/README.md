@@ -181,3 +181,11 @@ forward arbitrary model-selected URLs to the host network. Other webpages use
 authorized native web tools. Older Foundation environments without Claude
 connection support report a provider configuration warning instead of failing
 to import the application. The pinned runtime includes this capability.
+
+Resuming failed local PDF OCR before any derived source has been adopted
+preserves the old attempt under `ocr-attempts/` and retries from the verified
+original PDF. This stage can bind the current runtime after a code update;
+the frozen model and task settings are retained. Saved source delivery,
+proofreading, and downstream translation/Companion results still require
+compatible runtimes and are not discarded by this recovery path. Remote OCR
+is not resubmitted through this local-only retry path.
