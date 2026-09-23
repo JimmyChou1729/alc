@@ -23,7 +23,7 @@ def test_build_freezes_auto_provider_and_model(
 
     assert frozen.model == ModelSelection(
         provider="codex",
-        model="gpt-5.6-luna",
+        model="gpt-6-luna",
         tier="medium",
         reasoning_effort="medium",
     )

@@ -39,6 +39,7 @@ import {
 import "./style.css";
 import { TtsLab } from "./TtsLab";
 import { TtsSettings } from "./TtsSettings";
+import { currentModelReferenceCost } from "./referenceCost";
 
 type Provider = {
   base_url?: string;
@@ -860,6 +861,13 @@ function App() {
     job?.source_messages ??
     [...new Set(rawWarnings)].filter((w) => w !== sourceNote);
   const quality = job?.metrics.quality;
+  const referenceFallback =
+    job?.metrics.cost?.reference_only && job.metrics.cost.amount == null
+      ? currentModelReferenceCost(job.spec.model, job.metrics.usage)
+      : null;
+  const displayedCost = referenceFallback
+    ? { ...job!.metrics.cost, ...referenceFallback }
+    : job?.metrics.cost;
   const hasWarnings =
     warnings.length > 0 ||
     quality?.source_fallback_count > 0 ||
@@ -1423,48 +1431,50 @@ function App() {
               </div>
               <div className="metric">
                 <span>
-                  {job.metrics.cost.reference_only
+                  {displayedCost.reference_only
                     ? "API 等价参考费用"
                     : "API 用量估算金额"}
                 </span>
                 <strong>
-                  {job.metrics.cost.amount == null
+                  {displayedCost.amount == null
                     ? "—"
-                    : job.metrics.cost.amount_range &&
-                        job.metrics.cost.amount_range[0] !==
-                          job.metrics.cost.amount_range[1]
-                      ? `${job.metrics.cost.currency} ${Number(job.metrics.cost.amount_range[0]).toFixed(4)}–${Number(job.metrics.cost.amount_range[1]).toFixed(4)}`
-                      : job.metrics.cost.currency +
+                    : displayedCost.amount_range &&
+                        displayedCost.amount_range[0] !==
+                          displayedCost.amount_range[1]
+                      ? `${displayedCost.currency} ${Number(displayedCost.amount_range[0]).toFixed(4)}–${Number(displayedCost.amount_range[1]).toFixed(4)}`
+                      : displayedCost.currency +
                         " " +
-                        Number(job.metrics.cost.amount).toFixed(4)}
+                        Number(displayedCost.amount).toFixed(4)}
                 </strong>
                 <small>
-                  {job.metrics.cost.reference_only
-                    ? (job.metrics.cost.amount == null
-                        ? job.metrics.cost.source
+                  {displayedCost.reference_only
+                    ? (displayedCost.amount == null
+                        ? displayedCost.source
                           ? "等待已报告用量。"
                           : "尚无此具体模型的官方参考价。"
-                        : "按已报告用量和官方 API 价折算，仅供参考。") +
+                        : displayedCost.display_fallback
+                          ? "按已报告总量和短上下文价格粗估，未按逐次调用计入长上下文差异。"
+                          : "按已报告用量和官方 API 价折算，仅供参考。") +
                       (job.spec.provider?.credential_override_present
                         ? "实际计费以 CLI 账号为准。"
                         : "订阅登录时使用订阅额度，不按此金额扣费。")
-                    : job.metrics.cost.basis === "cli_managed"
+                    : displayedCost.basis === "cli_managed"
                       ? "CLI 托管认证；不是 API 账单"
-                      : job.metrics.cost.amount == null
+                      : displayedCost.amount == null
                         ? "尚无可计算的用量与价格"
                         : "按配置价格计算" +
-                          (job.metrics.cost.complete
+                          (displayedCost.complete
                             ? "，不是账单实付"
                             : "，仅包含已知部分")}
                 </small>
-                {job.metrics.cost.reference_only && job.metrics.cost.source && (
+                {displayedCost.reference_only && displayedCost.source && (
                   <small>
                     <a
-                      href={job.metrics.cost.source}
+                      href={displayedCost.source}
                       target="_blank"
                       rel="noreferrer"
                     >
-                      价格参考来源 · {job.metrics.cost.verified_on}
+                      价格参考来源 · {displayedCost.verified_on}
                     </a>
                   </small>
                 )}

@@ -181,3 +181,9 @@ forward arbitrary model-selected URLs to the host network. Other webpages use
 authorized native web tools. Older Foundation environments without Claude
 connection support report a provider configuration warning instead of failing
 to import the application. The pinned runtime includes this capability.
+For CLI tasks using GPT-6 Luna or Sol, the API-equivalent cost card uses the
+official standard API list rates. When a running Local Web process has not yet
+loaded updated backend price cards, the page shows a clearly labeled fallback
+range from reported aggregate token counts; the regular backend projection
+uses each reported call after the service is restarted. Neither figure is an
+actual Codex subscription charge.

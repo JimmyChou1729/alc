@@ -2056,3 +2056,7 @@ select {
   font-size: 13px;
   line-height: 22px;
 }
+
+.api-connection-form .form-grid .price-input input:not([type="checkbox"]) {
+  margin-top: 0;
+}

@@ -41,7 +41,7 @@ alc-companion build note.md \
   --target-language zh-CN \
   --user-intent "Explain the main argument and its assumptions." \
   --provider codex \
-  --model gpt-5.6-luna \
+  --model gpt-6-luna \
   --effort medium \
   --host-authority unknown
 
@@ -64,7 +64,7 @@ reader source or output. Use `unrestricted` only when the host explicitly
 grants it. Otherwise use `unknown`, or `restricted` when known, and preserve the
 same authority on resume.
 
-For the Codex provider, the frozen default is `gpt-5.6-luna` with `medium`
+For the Codex provider, the frozen default is `gpt-6-luna` with `medium`
 reasoning effort. `--model` and `--effort` can be overridden independently;
 the selected pair is part of run identity and is reused on resume.
 
