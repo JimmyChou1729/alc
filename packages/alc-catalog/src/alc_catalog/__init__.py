@@ -9,7 +9,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-__version__ = "2.1.6"
+__version__ = "2.1.7"
 
 KINDS = ('companion', 'translate', 'ocr-proofread', 'pdf-bundle-proofread')
 
@@ -96,6 +96,10 @@ def project_records(project: Path) -> list[dict[str, Any]]:
                     continue
                 key = hashlib.sha256(f'{project}\0{kind}\0{run_id}'.encode()).hexdigest()
                 source = spec.get('semantic_input', {}).get('request', {}).get('source', {})
+                bundle = spec.get('semantic_input', {}).get('request', {}).get('source_bundle')
+                requested_url = bundle.get('requested_url') if isinstance(bundle, dict) else None
+                if not isinstance(requested_url, str) or not requested_url.startswith(('https://', 'http://')):
+                    requested_url = None
                 title = source.get('metadata', {}).get('title') if isinstance(source, dict) else None
                 if not isinstance(title, str) or not title.strip():
                     title = next((b.get('payload', {}).get('text') for b in source.get('blocks', [])
@@ -104,6 +108,7 @@ def project_records(project: Path) -> list[dict[str, Any]]:
                     'run_id': run_id, 'state': snapshot.get('status', 'unknown'),
                     'created_at': snapshot.get('created_at'), 'updated_at': snapshot.get('updated_at'),
                     'title': title if isinstance(title, str) and title.strip() else project.name,
+                    'source_url': requested_url,
                     'reader': _reader(project, kind, run, marker),
                     'artifact': _artifact(project, run, snapshot)})
             except (OSError, ValueError, KeyError, TypeError, AttributeError):

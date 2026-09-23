@@ -8,8 +8,8 @@ def test_agent_history_import_authentication_and_local_controls(tmp_path, monkey
     project = tmp_path / 'plugin-project'
     run = project / '.alc/companion/jobs/runs/run-one'
     run.mkdir(parents=True)
-    (run / 'snapshot.json').write_text(json.dumps({'run_id': 'run-one', 'status': 'succeeded', 'created_at': '2026-09-10T01:00:00Z'}))
-    (run / 'spec.json').write_text(json.dumps({'run_id': 'run-one', 'semantic_input': {}}))
+    (run / 'snapshot.json').write_text(json.dumps({'run_id': 'run-one', 'status': 'succeeded', 'created_at': '2026-09-10T01:00:00Z', 'updated_at': '2026-09-10T02:00:00Z'}))
+    (run / 'spec.json').write_text(json.dumps({'run_id': 'run-one', 'semantic_input': {'request': {'source_bundle': {'requested_url': 'https://arxiv.org/html/2609.10568v1'}}}}))
     (project / '.alc/companion/project.json').write_text(json.dumps({'current_run_id': 'run-one'}))
     (project / 'companion.html').write_text('<html>Saved Reader</html>')
     source_bundle = project / 'source-bundle'
@@ -28,6 +28,8 @@ def test_agent_history_import_authentication_and_local_controls(tmp_path, monkey
         rows = client.get('/api/jobs').json()
         assert len(rows) == 1 and rows[0]['external']
         assert rows[0]['source_label'] == '2609.10568v1'
+        assert rows[0]['source_type'] == 'https'
+        assert rows[0]['completed'] == rows[0]['created'] + 3600
         job_id = rows[0]['id']
         detail = client.get('/api/jobs/'+job_id).json()
         assert detail['state'] == 'completed'
@@ -50,6 +52,7 @@ def test_agent_history_import_authentication_and_local_controls(tmp_path, monkey
         snapshot.write_text(json.dumps(updated))
         detail = client.get('/api/jobs/'+job_id).json()
         assert detail['state'] == 'running'
+        assert detail['completed'] is None
         assert detail['display_title'] == 'My Agent task'
         assert client.patch('/api/jobs/'+job_id, json={'title':' '}).status_code == 400
         assert client.delete('/api/jobs/'+job_id).status_code == 200
@@ -77,3 +80,29 @@ def test_history_ignores_local_web_projects_from_other_workspaces(tmp_path, monk
     with TestClient(app, base_url='http://127.0.0.1:8765') as client:
         client.headers.update({'Origin': 'http://127.0.0.1:8765', 'Authorization': 'Bearer test-token'})
         assert client.get('/api/jobs').json() == []
+
+
+def test_agent_history_uses_each_runs_frozen_source_not_project_manifest(tmp_path, monkeypatch):
+    monkeypatch.setenv('ALC_CATALOG_DIR', str(tmp_path / 'catalog'))
+    project = tmp_path / 'agent-project'
+    for run_id, url in [('run-a', 'https://arxiv.org/html/2609.10568v1'),
+                        ('run-b', 'https://doi.org/10.1234/different'),
+                        ('run-c', None)]:
+        run = project / '.alc/companion/jobs/runs' / run_id
+        run.mkdir(parents=True)
+        (run / 'snapshot.json').write_text(json.dumps({'run_id': run_id, 'status': 'succeeded'}))
+        request = {'source_bundle': {'requested_url': url}} if url else {}
+        (run / 'spec.json').write_text(json.dumps({'run_id': run_id, 'semantic_input': {'request': request}}))
+    bundle = project / 'source-bundle'
+    bundle.mkdir()
+    (bundle / 'manifest.json').write_text(json.dumps({'bundle': {'requested_url': 'https://wrong.example/current'}}))
+    register_project(project)
+    app = create_app(tmp_path / 'web', token='test-token', origin='http://127.0.0.1:8765', run_scheduler=False, discovered=[])
+    with TestClient(app, base_url='http://127.0.0.1:8765') as client:
+        client.headers.update({'Origin': 'http://127.0.0.1:8765', 'Authorization': 'Bearer test-token'})
+        jobs = {job['detail']['run_id']: job for job in client.get('/api/jobs').json()}
+    assert jobs['run-a']['source_label'] == '2609.10568v1'
+    assert jobs['run-b']['source_label'] == '10.1234/different'
+    assert jobs['run-a']['source_type'] == jobs['run-b']['source_type'] == 'https'
+    assert jobs['run-c']['source_label'] == ''
+    assert jobs['run-c']['source_type'] == 'other'

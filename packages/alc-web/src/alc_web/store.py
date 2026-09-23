@@ -40,6 +40,8 @@ class Store:
                     source_key TEXT UNIQUE
                 );
                 CREATE INDEX IF NOT EXISTS job_events ON events(job_id, sequence);
+                CREATE INDEX IF NOT EXISTS job_finished_events ON events(job_id, created)
+                    WHERE kind='job.finished';
                 CREATE TABLE IF NOT EXISTS job_presentation (job_id TEXT PRIMARY KEY, title TEXT, deleted INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS reader_presentation (job_id TEXT PRIMARY KEY, translated_title TEXT);
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -136,14 +138,24 @@ class Store:
             ids = [
                 r[0]
                 for r in db.execute(
-                    "SELECT id FROM jobs WHERE id NOT IN (SELECT job_id FROM job_presentation WHERE deleted=1) ORDER BY created DESC LIMIT 500"
+                    "SELECT id FROM jobs WHERE id NOT IN (SELECT job_id FROM job_presentation WHERE deleted=1) ORDER BY created DESC"
                 )
             ]
         return [self.get(job_id) for job_id in ids]
 
     def summaries(self) -> list[dict[str, Any]]:
+        from .presentation import source_type
+        with self.connect() as db:
+            completed = dict(db.execute(
+                "SELECT job_id,MAX(created) FROM events WHERE kind='job.finished' "
+                "AND json_extract(data,'$.state')='completed' GROUP BY job_id"
+            ))
         return [
-            {k: j[k] for k in ("id", "state", "phase", "created", "display_title", "source_label")} | {"spec": {"title": j["spec"].get("title", "")}}
+            {k: j[k] for k in ("id", "state", "phase", "created", "display_title", "source_label")} | {
+                "spec": {"title": j["spec"].get("title", "")},
+                "source_type": source_type(j['spec']),
+                "completed": completed.get(j['id']) if j['state'] == 'completed' else None,
+            }
             for j in self.list() if not j["deleted"]
         ]
 

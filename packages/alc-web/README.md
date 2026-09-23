@@ -196,3 +196,15 @@ the frozen model and task settings are retained. Saved source delivery,
 proofreading, and downstream translation/Companion results still require
 compatible runtimes and are not discarded by this recovery path. Remote OCR
 is not resubmitted through this local-only retry path.
+
+The recent-task sidebar searches displayed titles and original filenames/source
+identifiers as you type. Origin (Web or Agent) and input type (DOI, arXiv ID,
+HTTPS, PDF, Markdown, or other) filters can be combined. Input types prefer
+the original submitted identifier; old records without it use available source
+metadata. Agent history reads each run's frozen source URL; runs without one
+appear under “other” rather than inheriting a different run's current source.
+Sort by name, creation time, or completion time in either direction;
+creation time newest-first is the default. Missing completion times sort last
+in both directions. Web completion uses successful completion events, while
+Agent completion uses the succeeded run's snapshot timestamp. Filtering does
+not change the open task or delete history.

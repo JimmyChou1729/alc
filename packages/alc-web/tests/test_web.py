@@ -773,6 +773,8 @@ def test_list_is_lightweight_and_usage_projection_reads_only_new_events(
             "spec": {"title": "note.md"},
             "display_title": "note.md",
             "source_label": "note.md",
+            "source_type": "markdown",
+            "completed": None,
         }
     ]
     assert reads == []
