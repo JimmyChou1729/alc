@@ -23,7 +23,7 @@
     {
       "id": "product",
       "repository": "https://github.com/tririver/alc.git",
-      "commit": "3195413ea33be58679203d3ba53354bf5157cf60",
+      "commit": "8420c2dd8d8cf4811a702fd5c12a628ad29378e4",
       "packages": [
         "alc-catalog",
         "alc-companion",
