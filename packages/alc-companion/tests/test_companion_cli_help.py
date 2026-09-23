@@ -6,6 +6,7 @@ import pytest
 
 import alc_companion.request_contracts as request_contracts
 from ac_llm import ModelSelection
+from ac_llm.config import DEFAULT_MODELS
 from alc_companion.cli import main
 from alc_companion.request_contracts import (
     CompanionGenerationRecipe,
@@ -23,7 +24,7 @@ def test_build_freezes_auto_provider_and_model(
 
     assert frozen.model == ModelSelection(
         provider="codex",
-        model="gpt-6-luna",
+        model=DEFAULT_MODELS["codex"]["medium"],
         tier="medium",
         reasoning_effort="medium",
     )

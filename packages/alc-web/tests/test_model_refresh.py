@@ -71,6 +71,10 @@ def test_codex_prefers_current_luna_when_old_luna_is_still_available(monkeypatch
         ),
     )
     monkeypatch.setattr(providers, "_routing_warning", lambda name: None)
+    monkeypatch.setattr(providers, "DEFAULT_MODELS", {
+        **providers.DEFAULT_MODELS,
+        "codex": {**providers.DEFAULT_MODELS["codex"], "medium": "gpt-6-luna"},
+    })
     monkeypatch.setattr(
         providers,
         "codex_model_catalog",
