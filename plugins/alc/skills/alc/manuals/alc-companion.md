@@ -119,7 +119,7 @@ The user's Companion request is the authorization to process the supplied
 source with the workflow's frozen provider. It is not necessary to obtain a
 second destination confirmation for that same provider.
 
-For the Codex provider, Companion defaults to `gpt-5.6-luna` with `medium`
+For the Codex provider, Companion defaults to `gpt-6-luna` with `medium`
 reasoning effort. Override them independently with `--model` and `--effort`;
 supported effort values are `low`, `medium`, `high`, and `xhigh`. Both values
 are part of durable run identity and remain unchanged on resume. The Skill
