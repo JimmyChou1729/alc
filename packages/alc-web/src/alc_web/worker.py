@@ -486,17 +486,30 @@ def execute(project: str, job_id: str, generation: int | None = None):
         return
     from .runtime import runtime_identity
 
-    current_runtime = runtime_identity()
-    if (current["spec"].get("runtime") != current_runtime
-        and not store.bind_unstarted_runtime(job_id, current_runtime)):
-        store.update(
-            job_id,
-            state="needs_input",
-            error={
-                "code": "runtime_changed",
-                "message": "The task runtime has changed or was not recorded. Restore the original environment to resume, or create a new task with the current runtime.",
-            },
-        )
+    try:
+        current_runtime = runtime_identity()
+        compatible = (current["spec"].get("runtime") == current_runtime
+            or store.bind_unstarted_runtime(job_id, current_runtime)
+            or store.bind_pdf_retry_runtime(job_id, current_runtime))
+        if not compatible:
+            store.update(
+                job_id,
+                state="needs_input",
+                error={
+                    "code": "runtime_changed",
+                    "message": "The task runtime has changed or was not recorded. Restore the original environment to resume, or create a new task with the current runtime.",
+                },
+            )
+    except Exception as exc:
+        try:
+            store.update(job_id, state='needs_input', error={
+                'code': 'runtime_preparation_failed',
+                'message': f'Could not prepare task recovery: {exc}',
+            })
+        finally:
+            lease.release()
+        return
+    if not compatible:
         lease.release()
         return
     worker = Worker(store, job_id)
