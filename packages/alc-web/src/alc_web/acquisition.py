@@ -138,9 +138,11 @@ def acquire(store, job: dict, checkpoint) -> tuple[Path, Path | None, list[str]]
         ocr = job["spec"].get("ocr")
         if not text_only and ocr:
             from ac_document import parse_pdf_mineru
+            from .pdf_retry import prepare_pdf_retry
             if ocr.get("api_url") and job["spec"].get("ocr_remote_consent") is not True:
                 raise NeedsSourceInput("Confirm remote OCR upload when creating a new task.")
             store.update(job["id"], phase="ocr")
+            prepare_pdf_retry(store, store.get(job['id']))
             result = parse_pdf_mineru(path, job_dir=root / "ocr-job", checkpoint=checkpoint, **ocr)
             checkpoint()
             path, manifest = Path(result["source"]), Path(result["manifest"])

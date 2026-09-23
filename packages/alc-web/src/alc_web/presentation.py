@@ -62,6 +62,28 @@ def source_label(spec: dict) -> str:
     return source
 
 
+def source_type(spec: dict) -> str:
+    """Classify the submitted identifier before normalized URL fallbacks."""
+    if spec.get('source_id'):
+        name = str(spec.get('title', '')).lower()
+        if name.endswith('.pdf'):
+            return 'pdf'
+        return 'markdown' if name.endswith(('.md', '.markdown')) else 'other'
+    raw = str(spec.get('source_label') or '').strip()
+    value = raw or source_label(spec)
+    if re.match(r'^https?://', value, re.I):
+        return 'https'
+    if re.fullmatch(r'(?:doi:\s*)?10\.\d{4,9}/\S+', value, re.I):
+        return 'doi'
+    if re.fullmatch(r'(?:arxiv:\s*)?(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?/\d{7})(?:v[1-9]\d*)?', value, re.I):
+        return 'arxiv'
+    if value.lower().endswith('.pdf'):
+        return 'pdf'
+    if value.lower().endswith(('.md', '.markdown')):
+        return 'markdown'
+    return 'other'
+
+
 def document_title(store, job) -> str:
     spec = job.get('spec', {})
     root = store.job_directory(job['id']).resolve()

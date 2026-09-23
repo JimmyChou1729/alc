@@ -53,6 +53,42 @@ def test_settings_refresh_updates_catalog(tmp_path, monkeypatch):
         assert client.get("/api/settings").json()["providers"][0]["default_model"] == "second"
 
 
+def test_codex_prefers_current_luna_when_old_luna_is_still_available(monkeypatch):
+    from types import SimpleNamespace
+    from ac_llm.model_catalog import ProviderModel
+
+    models = [
+        ProviderModel(model, model, "Model", ("medium",), "medium", model == "gpt-6-astra")
+        for model in ("gpt-6-astra", "gpt-5.6-luna", "gpt-6-luna")
+    ]
+    monkeypatch.setattr(providers.shutil, "which", lambda name: "/fixture/" + name)
+    monkeypatch.setattr(
+        providers.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="--ignore-user-config --json --sandbox --skip-git-repo-check",
+        ),
+    )
+    monkeypatch.setattr(providers, "_routing_warning", lambda name: None)
+    monkeypatch.setattr(providers, "DEFAULT_MODELS", {
+        **providers.DEFAULT_MODELS,
+        "codex": {**providers.DEFAULT_MODELS["codex"], "medium": "gpt-6-luna"},
+    })
+    monkeypatch.setattr(
+        providers,
+        "codex_model_catalog",
+        lambda _: SimpleNamespace(models=models, status="available", message=None),
+    )
+
+    codex = next(item for item in providers.cli_profiles() if item["id"] == "codex")
+    assert codex["default_model"] == "gpt-6-luna"
+
+    models.pop()
+    codex = next(item for item in providers.cli_profiles() if item["id"] == "codex")
+    assert codex["default_model"] == "gpt-6-astra"
+
+
 def test_source_only_companion_warning_is_not_lost():
     from alc_web.worker import companion_delivery_warnings
     assert companion_delivery_warnings({'warnings': [{'code': 'provider_degraded_source_only'}]})

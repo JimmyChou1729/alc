@@ -40,6 +40,8 @@ class Store:
                     source_key TEXT UNIQUE
                 );
                 CREATE INDEX IF NOT EXISTS job_events ON events(job_id, sequence);
+                CREATE INDEX IF NOT EXISTS job_finished_events ON events(job_id, created)
+                    WHERE kind='job.finished';
                 CREATE TABLE IF NOT EXISTS job_presentation (job_id TEXT PRIMARY KEY, title TEXT, deleted INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS reader_presentation (job_id TEXT PRIMARY KEY, translated_title TEXT);
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -136,14 +138,24 @@ class Store:
             ids = [
                 r[0]
                 for r in db.execute(
-                    "SELECT id FROM jobs WHERE id NOT IN (SELECT job_id FROM job_presentation WHERE deleted=1) ORDER BY created DESC LIMIT 500"
+                    "SELECT id FROM jobs WHERE id NOT IN (SELECT job_id FROM job_presentation WHERE deleted=1) ORDER BY created DESC"
                 )
             ]
         return [self.get(job_id) for job_id in ids]
 
     def summaries(self) -> list[dict[str, Any]]:
+        from .presentation import source_type
+        with self.connect() as db:
+            completed = dict(db.execute(
+                "SELECT job_id,MAX(created) FROM events WHERE kind='job.finished' "
+                "AND json_extract(data,'$.state')='completed' GROUP BY job_id"
+            ))
         return [
-            {k: j[k] for k in ("id", "state", "phase", "created", "display_title", "source_label")} | {"spec": {"title": j["spec"].get("title", "")}}
+            {k: j[k] for k in ("id", "state", "phase", "created", "display_title", "source_label")} | {
+                "spec": {"title": j["spec"].get("title", "")},
+                "source_type": source_type(j['spec']),
+                "completed": completed.get(j['id']) if j['state'] == 'completed' else None,
+            }
             for j in self.list() if not j["deleted"]
         ]
 
@@ -184,6 +196,24 @@ class Store:
             spec["runtime"] = runtime
             db.execute("UPDATE jobs SET spec=?, updated=? WHERE id=?",
                        (json.dumps(spec), time.time(), job_id))
+        return True
+
+    def bind_pdf_retry_runtime(self, job_id: str, runtime: dict) -> bool:
+        """Rebind only verified original bytes before OCR has produced a source."""
+        from .pdf_retry import prepare_pdf_retry
+        job = self.get(job_id)
+        if job['state'] != 'running' or not prepare_pdf_retry(self, job):
+            return False
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT state,control,spec FROM jobs WHERE id=?', (job_id,)).fetchone()
+            if row['state'] != 'running' or row['control']:
+                return False
+            spec = json.loads(row['spec'])
+            previous = spec.get('runtime')
+            spec['runtime'] = runtime
+            db.execute('UPDATE jobs SET spec=?,updated=? WHERE id=?', (json.dumps(spec), time.time(), job_id))
+            self._event(db, job_id, 'job.runtime_rebound', {'reason': 'retry_unadopted_pdf', 'previous': previous, 'current': runtime})
         return True
 
     def resume_ocr_review(self, job_id: str, runtime: dict) -> dict:

@@ -173,6 +173,104 @@ a svg {
 .nav-label span {
   letter-spacing: 0;
 }
+.history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  min-width: 0;
+}
+.history-search {
+  display: flex;
+  flex: 1 1 96px;
+  min-width: 96px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 8px;
+  color: var(--muted);
+  margin: 0;
+}
+.history-search:focus-within {
+  outline: 2px solid var(--primary);
+}
+.history-search input[type="search"] {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  height: 32px;
+  padding: 4px 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+  box-shadow: none;
+}
+.history-search input:focus {
+  outline: none;
+}
+.history-search svg {
+  flex-shrink: 0;
+}
+.history-filters {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+.history-icon {
+  display: inline-flex;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+.history-icon:hover,
+.history-icon[aria-expanded="true"] {
+  color: var(--primary);
+  background: var(--soft);
+}
+.history-icon.active {
+  color: var(--primary);
+}
+.history-icon.active::after {
+  content: "";
+  position: absolute;
+  right: 2px;
+  top: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.history-icon:focus-visible {
+  outline: 2px solid var(--primary);
+}
+.history-reset {
+  flex-basis: 100%;
+  min-height: 28px;
+  color: var(--primary);
+  font-size: 12px;
+}
+@media (pointer: coarse) {
+  .history-icon {
+    width: 44px;
+    height: 44px;
+  }
+}
+@media (max-width: 760px) {
+  .history-controls {
+    grid-column: 1 / -1;
+  }
+}
 .job-nav {
   overflow: auto;
   flex: 1;
@@ -1185,6 +1283,17 @@ select {
   .local-note {
     display: none;
   }
+  .empty-nav.history-empty {
+    display: block;
+    padding: 4px;
+    width: 100%;
+  }
+  .history-empty > svg {
+    display: none;
+  }
+  .history-empty p {
+    margin: 0;
+  }
   .job-nav {
     grid-column: 1/-1;
     display: flex;
@@ -2055,4 +2164,8 @@ select {
   padding: 10px 12px;
   font-size: 13px;
   line-height: 22px;
+}
+
+.api-connection-form .form-grid .price-input input:not([type="checkbox"]) {
+  margin-top: 0;
 }

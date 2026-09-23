@@ -8,7 +8,7 @@ supersede legacy-default descriptions below; resume uses the saved recipe.
 For every new generation step below, pass the resolved provider, exact model,
 effort and processing mode explicitly, along with `--execution-profile local-app`,
 `--window-workers <1-8>` and `--review-rounds <0-2>`. With the Codex defaults this
-is `--provider codex --model gpt-5.6-luna --reasoning-effort medium
+is `--provider codex --model gpt-6-luna --reasoning-effort medium
 --processing-mode standard`. Preserve explicit user overrides. Follow the same
 configuration across language detection, glossary and blocks; do not infer a
 different setup for each command.

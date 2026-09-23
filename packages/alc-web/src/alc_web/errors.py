@@ -64,6 +64,8 @@ def explain_error(error: Mapping, provider: Mapping | None = None) -> str:
         return '模型服务返回支付或余额不足错误（402）。请检查服务账户余额；已完成内容已保存，处理后可恢复。'
     if 'runtime_changed' in codes:
         return '任务已有进度与当前运行版本不兼容，已保留已有结果。需要先确认兼容迁移，避免混用不同版本的处理结果。'
+    if 'runtime_preparation_failed' in codes:
+        return '恢复准备未完成，原始文件和已有记录已保留。请查看具体错误；若识别进程仍在运行，请等待结束后再恢复。'
     if 'timeout' in codes or 'provider_timeout' in codes:
         return '模型响应超时，已完成内容已保存。系统会在允许的次数内自动等待后重试，也可手动恢复。'
     if statuses & {401, 403}:

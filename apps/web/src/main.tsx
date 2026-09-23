@@ -9,6 +9,10 @@ import { createRoot } from "react-dom/client";
 import { createPortal } from "react-dom";
 import {
   ArrowRight,
+  Search,
+  Workflow,
+  Filter,
+  ArrowDownUp,
   RefreshCw,
   Terminal,
   Cable,
@@ -39,6 +43,8 @@ import {
 import "./style.css";
 import { TtsLab } from "./TtsLab";
 import { TtsSettings } from "./TtsSettings";
+import { selectHistory } from "./taskHistory";
+import { currentModelReferenceCost } from "./referenceCost";
 
 type Provider = {
   base_url?: string;
@@ -83,6 +89,8 @@ type Job = {
   state: string;
   phase: string;
   created: number;
+  completed?: number | null;
+  source_type?: string;
   spec: Record<string, any>;
   detail: Record<string, any>;
   error?: Record<string, any>;
@@ -119,6 +127,8 @@ type JobSummary = Pick<
   | "state"
   | "phase"
   | "created"
+  | "completed"
+  | "source_type"
   | "spec"
   | "display_title"
   | "source_label"
@@ -356,12 +366,16 @@ function StyledSelect({
   "aria-label": label,
   compact = false,
   disabled = false,
+  icon,
+  active = false,
 }: {
   value: string | number;
   children: React.ReactNode;
   "aria-label": string;
   compact?: boolean;
   disabled?: boolean;
+  icon?: React.ReactNode;
+  active?: boolean;
   onChange: (event: { target: { value: string } }) => void;
 }) {
   const items: [string, string, string][] = [];
@@ -422,17 +436,30 @@ function StyledSelect({
     );
     const below = window.innerHeight - r.bottom - 12;
     const above = r.top - 12;
-    const flip = below < 276 && above > below;
-    const height = Math.max(40, Math.min(276, flip ? above : below));
+    const fullHeight = (menu.current?.scrollHeight || 0) + 2;
+    const limit = icon ? fullHeight : 276;
+    const flip = below < limit && above > below;
+    const height = Math.max(40, Math.min(limit, flip ? above : below));
     setPosition({
       left: Math.max(
         8,
         Math.min(r.left, document.documentElement.clientWidth - width - 8),
       ),
-      top: flip ? undefined : r.bottom + 6,
-      bottom: flip ? window.innerHeight - r.top + 6 : undefined,
+      top: icon
+        ? Math.max(
+            8,
+            Math.min(
+              flip ? r.top - fullHeight - 6 : r.bottom + 6,
+              window.innerHeight - fullHeight - 8,
+            ),
+          )
+        : flip
+          ? undefined
+          : r.bottom + 6,
+      bottom: !icon && flip ? window.innerHeight - r.top + 6 : undefined,
       width,
-      maxHeight: height,
+      maxHeight: icon ? "none" : height,
+      overflow: icon ? "visible" : "auto",
     });
   }, [open]);
   useEffect(() => {
@@ -468,8 +495,13 @@ function StyledSelect({
         type="button"
         ref={trigger}
         disabled={disabled}
-        className={"currency-trigger" + (compact ? "" : " select-trigger-wide")}
+        className={
+          icon
+            ? "history-icon" + (active ? " active" : "")
+            : "currency-trigger" + (compact ? "" : " select-trigger-wide")
+        }
         aria-label={`${label}：${selectedLabel(items[selected])}`}
+        title={icon ? `${label}：${selectedLabel(items[selected])}` : undefined}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? id : undefined}
@@ -481,8 +513,12 @@ function StyledSelect({
           }
         }}
       >
-        <span>{selectedLabel(items[selected])}</span>
-        <ChevronDown size={15} />
+        {icon || (
+          <>
+            <span>{selectedLabel(items[selected])}</span>
+            <ChevronDown size={15} />
+          </>
+        )}
       </button>
       {open &&
         createPortal(
@@ -716,6 +752,26 @@ function App() {
   const query = new URLSearchParams(location.search);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyOrigin, setHistoryOrigin] = useState("all");
+  const [historyInput, setHistoryInput] = useState("all");
+  const [historySort, setHistorySort] = useState("created:desc");
+  const visibleJobs = selectHistory(
+    jobs,
+    historySearch,
+    historyOrigin,
+    historyInput,
+    historySort,
+  );
+  const historyFiltered =
+    Boolean(historySearch.trim()) ||
+    historyOrigin !== "all" ||
+    historyInput !== "all";
+  function clearHistoryFilters() {
+    setHistorySearch("");
+    setHistoryOrigin("all");
+    setHistoryInput("all");
+  }
   const [view, setView] = useState(
     query.get("view") === "tts-lab" ? "tts-lab" : query.get("job") || "new",
   );
@@ -860,6 +916,13 @@ function App() {
     job?.source_messages ??
     [...new Set(rawWarnings)].filter((w) => w !== sourceNote);
   const quality = job?.metrics.quality;
+  const referenceFallback =
+    job?.metrics.cost?.reference_only && job.metrics.cost.amount == null
+      ? currentModelReferenceCost(job.spec.model, job.metrics.usage)
+      : null;
+  const displayedCost = referenceFallback
+    ? { ...job!.metrics.cost, ...referenceFallback }
+    : job?.metrics.cost;
   const hasWarnings =
     warnings.length > 0 ||
     quality?.source_fallback_count > 0 ||
@@ -895,7 +958,74 @@ function App() {
           新建任务
         </button>
         <div className="nav-label">
-          最近任务 <span>{jobs.length}</span>
+          最近任务{" "}
+          <span aria-live="polite">
+            {historyFiltered
+              ? `${visibleJobs.length} / ${jobs.length}`
+              : jobs.length}
+          </span>
+        </div>
+        <div className="history-controls" role="search" aria-label="查找任务">
+          <label className="history-search">
+            <Search size={16} aria-hidden="true" />
+            <input
+              type="search"
+              aria-label="搜索标题或文件名"
+              placeholder="搜索标题、文件名"
+              value={historySearch}
+              onChange={(e) => setHistorySearch(e.target.value)}
+            />
+          </label>
+          <div className="history-filters">
+            <StyledSelect
+              compact
+              icon={<Workflow size={17} aria-hidden="true" />}
+              active={historyOrigin !== "all"}
+              aria-label="任务来源"
+              value={historyOrigin}
+              onChange={(e) => setHistoryOrigin(e.target.value)}
+            >
+              <option value="all">全部来源</option>
+              <option value="web">Web</option>
+              <option value="agent">Agent</option>
+            </StyledSelect>
+            <StyledSelect
+              compact
+              icon={<Filter size={17} aria-hidden="true" />}
+              active={historyInput !== "all"}
+              aria-label="输入类型"
+              value={historyInput}
+              onChange={(e) => setHistoryInput(e.target.value)}
+            >
+              <option value="all">全部类型</option>
+              <option value="doi">DOI</option>
+              <option value="arxiv">arXiv ID</option>
+              <option value="https">HTTPS</option>
+              <option value="pdf">PDF</option>
+              <option value="markdown">Markdown</option>
+              <option value="other">其他</option>
+            </StyledSelect>
+            <StyledSelect
+              compact
+              icon={<ArrowDownUp size={17} aria-hidden="true" />}
+              active={historySort !== "created:desc"}
+              aria-label="任务排序"
+              value={historySort}
+              onChange={(e) => setHistorySort(e.target.value)}
+            >
+              <option value="created:desc">添加时间 · 从新到旧</option>
+              <option value="created:asc">添加时间 · 从旧到新</option>
+              <option value="completed:desc">完成时间 · 从新到旧</option>
+              <option value="completed:asc">完成时间 · 从旧到新</option>
+              <option value="name:asc">名称 · 升序</option>
+              <option value="name:desc">名称 · 降序</option>
+            </StyledSelect>
+          </div>
+          {historyFiltered && (
+            <button className="history-reset" onClick={clearHistoryFilters}>
+              清除搜索和筛选
+            </button>
+          )}
         </div>
         <nav className="job-nav" aria-label="任务列表">
           {!jobs.length && (
@@ -905,7 +1035,14 @@ function App() {
               <span>添加文档后会显示在这里</span>
             </div>
           )}
-          {jobs.map((item) => (
+          {jobs.length > 0 && !visibleJobs.length && (
+            <div className="empty-nav history-empty" role="status">
+              <Search size={25} />
+              <p>没有匹配的任务</p>
+              <span>试试其他标题、文件名，或清除筛选</span>
+            </div>
+          )}
+          {visibleJobs.map((item) => (
             <button
               key={item.id}
               className={"job-nav-item " + (view === item.id ? "selected" : "")}
@@ -1423,48 +1560,50 @@ function App() {
               </div>
               <div className="metric">
                 <span>
-                  {job.metrics.cost.reference_only
+                  {displayedCost.reference_only
                     ? "API 等价参考费用"
                     : "API 用量估算金额"}
                 </span>
                 <strong>
-                  {job.metrics.cost.amount == null
+                  {displayedCost.amount == null
                     ? "—"
-                    : job.metrics.cost.amount_range &&
-                        job.metrics.cost.amount_range[0] !==
-                          job.metrics.cost.amount_range[1]
-                      ? `${job.metrics.cost.currency} ${Number(job.metrics.cost.amount_range[0]).toFixed(4)}–${Number(job.metrics.cost.amount_range[1]).toFixed(4)}`
-                      : job.metrics.cost.currency +
+                    : displayedCost.amount_range &&
+                        displayedCost.amount_range[0] !==
+                          displayedCost.amount_range[1]
+                      ? `${displayedCost.currency} ${Number(displayedCost.amount_range[0]).toFixed(4)}–${Number(displayedCost.amount_range[1]).toFixed(4)}`
+                      : displayedCost.currency +
                         " " +
-                        Number(job.metrics.cost.amount).toFixed(4)}
+                        Number(displayedCost.amount).toFixed(4)}
                 </strong>
                 <small>
-                  {job.metrics.cost.reference_only
-                    ? (job.metrics.cost.amount == null
-                        ? job.metrics.cost.source
+                  {displayedCost.reference_only
+                    ? (displayedCost.amount == null
+                        ? displayedCost.source
                           ? "等待已报告用量。"
                           : "尚无此具体模型的官方参考价。"
-                        : "按已报告用量和官方 API 价折算，仅供参考。") +
+                        : displayedCost.display_fallback
+                          ? "按已报告总量和短上下文价格粗估，未按逐次调用计入长上下文差异。"
+                          : "按已报告用量和官方 API 价折算，仅供参考。") +
                       (job.spec.provider?.credential_override_present
                         ? "实际计费以 CLI 账号为准。"
                         : "订阅登录时使用订阅额度，不按此金额扣费。")
-                    : job.metrics.cost.basis === "cli_managed"
+                    : displayedCost.basis === "cli_managed"
                       ? "CLI 托管认证；不是 API 账单"
-                      : job.metrics.cost.amount == null
+                      : displayedCost.amount == null
                         ? "尚无可计算的用量与价格"
                         : "按配置价格计算" +
-                          (job.metrics.cost.complete
+                          (displayedCost.complete
                             ? "，不是账单实付"
                             : "，仅包含已知部分")}
                 </small>
-                {job.metrics.cost.reference_only && job.metrics.cost.source && (
+                {displayedCost.reference_only && displayedCost.source && (
                   <small>
                     <a
-                      href={job.metrics.cost.source}
+                      href={displayedCost.source}
                       target="_blank"
                       rel="noreferrer"
                     >
-                      价格参考来源 · {job.metrics.cost.verified_on}
+                      价格参考来源 · {displayedCost.verified_on}
                     </a>
                   </small>
                 )}

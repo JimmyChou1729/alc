@@ -136,7 +136,7 @@ def test_companion_skill_declares_codex_host_execution_boundary() -> None:
     assert "Do not submit `--provider auto`" in workflow_prose
     assert "--provider <resolved-provider>" in workflow
     assert (
-        "当前伴读将使用默认模型 `gpt-5.6-luna + effort medium` 进行。"
+        "当前伴读将使用默认模型 `gpt-6-luna + effort medium` 进行。"
         "如需调整，可在请求中指定模型和 effort；本次将按上述参数继续执行。"
         in workflow
     )
