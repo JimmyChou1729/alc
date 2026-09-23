@@ -109,7 +109,8 @@ const modules = new Map();
 function requireModule(id) {
  if (!id.startsWith('./')) return localRequire(id);
  if (modules.has(id)) return modules.get(id).exports;
- const filename = 'apps/web/src/' + id.slice(2) + '.tsx';
+ const stem = 'apps/web/src/' + id.slice(2);
+ const filename = fs.existsSync(stem + '.tsx') ? stem + '.tsx' : stem + '.ts';
  const context = {exports: {}, require: requireModule};
  modules.set(id, context);
  vm.createContext(context);
