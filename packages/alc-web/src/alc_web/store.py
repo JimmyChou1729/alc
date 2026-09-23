@@ -198,6 +198,24 @@ class Store:
                        (json.dumps(spec), time.time(), job_id))
         return True
 
+    def bind_pdf_retry_runtime(self, job_id: str, runtime: dict) -> bool:
+        """Rebind only verified original bytes before OCR has produced a source."""
+        from .pdf_retry import prepare_pdf_retry
+        job = self.get(job_id)
+        if job['state'] != 'running' or not prepare_pdf_retry(self, job):
+            return False
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT state,control,spec FROM jobs WHERE id=?', (job_id,)).fetchone()
+            if row['state'] != 'running' or row['control']:
+                return False
+            spec = json.loads(row['spec'])
+            previous = spec.get('runtime')
+            spec['runtime'] = runtime
+            db.execute('UPDATE jobs SET spec=?,updated=? WHERE id=?', (json.dumps(spec), time.time(), job_id))
+            self._event(db, job_id, 'job.runtime_rebound', {'reason': 'retry_unadopted_pdf', 'previous': previous, 'current': runtime})
+        return True
+
     def resume_ocr_review(self, job_id: str, runtime: dict) -> dict:
         """Continue a verified completed OCR candidate under the caller's worker lease."""
         root = self.job_directory(job_id)

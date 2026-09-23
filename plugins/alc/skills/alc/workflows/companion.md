@@ -118,7 +118,7 @@ reply. This is a non-blocking parameter disclosure, not an approval checkpoint.
 When neither value was supplied by the user and the Codex defaults resolve to
 Luna plus medium effort, use this exact wording:
 
-> 当前伴读将使用默认模型 `gpt-5.6-luna + effort medium` 进行。如需调整，可在请求中指定模型和 effort；本次将按上述参数继续执行。
+> 当前伴读将使用默认模型 `gpt-6-luna + effort medium` 进行。如需调整，可在请求中指定模型和 effort；本次将按上述参数继续执行。
 
 When the user supplied either value, use this pattern with the fully resolved
 values:
