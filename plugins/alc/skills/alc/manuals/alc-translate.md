@@ -5,7 +5,12 @@ For new Skill-driven tasks, use the processing policy in SKILL.md:
 Respect explicit 0/1/2 review rounds and 1–8 workers. These explicit settings
 supersede legacy-default descriptions below; resume uses the saved recipe.
 
-For every new generation step below, pass the resolved provider, exact model,
+For Host execution in Work/dot, follow `host-execution.md`, use `--provider host`
+and omit model/effort for inheritance. An `awaiting_host` pause is completed by
+the agent and submitted before the same translation command is resumed. Keep
+this route consistent across detection, glossary, blocks and content review.
+
+For native CLI generation steps below, pass the resolved provider, exact model,
 effort and processing mode explicitly, along with `--execution-profile local-app`,
 `--window-workers <1-8>` and `--review-rounds <0-2>`. With the Codex defaults this
 is `--provider codex --model gpt-6-luna --reasoning-effort medium

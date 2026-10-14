@@ -4,8 +4,8 @@
   "sources": [
     {
       "id": "foundation",
-      "repository": "https://github.com/tririver/ac-foundation.git",
-      "commit": "80320cf74b540932032876c4e037136bd55f157a",
+      "repository": "https://github.com/JimmyChou1729/ac-foundation.git",
+      "commit": "57f361bb7e29ac1d48dc372feab8a36b165bf534",
       "packages": [
         "ac-jobs",
         "ac-llm",
@@ -22,8 +22,8 @@
     },
     {
       "id": "product",
-      "repository": "https://github.com/tririver/alc.git",
-      "commit": "8420c2dd8d8cf4811a702fd5c12a628ad29378e4",
+      "repository": "https://github.com/JimmyChou1729/alc.git",
+      "commit": "c8f8814e801c093995ee063e923a0537e5b0bd1a",
       "packages": [
         "alc-catalog",
         "alc-companion",

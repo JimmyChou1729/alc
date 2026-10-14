@@ -28,6 +28,16 @@ Read `rules/interaction.md` for user-choice and automation behavior and
 `rules/operating.md` for shared local-state rules. Do not preload unrelated
 manuals.
 
+## Host execution
+
+For ChatGPT Work or dot with shell/Python, read `manuals/host-execution.md`
+before model-backed work. Use the actual host capabilities to select the route:
+Host by default in Work/dot, native CLI in coding-agent hosts with permitted
+prelaunch fallback. A typed `awaiting_host` pause asks the agent to complete,
+submit and resume the original task. It is not a blocking model process.
+Companion independent guide/reviewer rounds require actual fresh contexts;
+translation and page recognition may use the current host agent.
+
 ## CLI resolution
 
 Use `alc-ocr-proofread`, `alc-translate`, `alc-render`, or `alc-companion`
@@ -45,7 +55,7 @@ For an ALC command unavailable on `PATH`, use the same launcher:
 <skill-dir>/scripts/alc-runtime alc-translate <command> [args...]
 ```
 
-For Companion, use `<skill-dir>/../../bin/alc-companion` when the command is
+For Companion, use `<skill-dir>/scripts/alc-companion` when the command is
 not on PATH. This plugin entrypoint supplies the optional research host;
 do not bypass it with the generic runtime launcher for Companion builds.
 
@@ -102,7 +112,9 @@ Acquisition warnings and source identity remain attached to the result.
 
 For PDF translation, rendering or Companion, read the PDF input section of
 `manuals/ac-document.md` first. It routes through the project's configured
-MinerU and preserves the PDF manifest throughout the learning workflow. Local
+MinerU, or use `manuals/host-pdf.md` for Host page recognition when no MinerU
+runtime is configured and the host can inspect images. Both routes preserve
+the PDF manifest throughout the learning workflow. Local
 Web and this plugin share that project configuration; remote upload still
 requires authorization for the selected destination. OCR extraction alone
 must not be labeled proofreading. For optional native PDF proofreading, read
@@ -117,7 +129,9 @@ source artifacts; hidden state is not the final deliverable. Preserve exact
 source identity, returned run IDs, assumptions, and warnings.
 
 Keep following a model-backed command until its execution session returns a
-terminal result. A yielded tool session or a period without stdout is not a
+terminal result or an actionable Host pause. Handle Host work using the public
+export/submit/resume protocol before declaring the workflow complete. A yielded
+tool session or a period without stdout is not a
 completed command. Do not end the task with "still running" while that session
 remains active; poll the session and use the workflow's public status command
 for progress. A run snapshot's timestamp alone does not measure live progress.
@@ -132,7 +146,8 @@ requires user input, and describe the verified state at that point.
 Use the shared Local Web processing defaults for new translation and Companion:
 `--execution-profile local-app`, 2 workers, and `--review-rounds 1`. Specify the
 same provider/model/language chosen by the user; do not silently substitute a
-model. Use the medium-tier default when no model is requested. The local-app
+model. Host defaults to inherited model and unset effort; native providers use
+their medium-tier defaults. For native execution, the local-app
 profile uses the official CLI login and isolated execution; custom API routes
 must be configured explicitly rather than inherited from host CLI settings.
 
@@ -160,6 +175,8 @@ Local Web separately limits the number of simultaneous document jobs.
 The installed learning CLIs register their `--project-dir` in a local catalog,
 independently of LocalWeb. Keep project directories durable so users can open
 those records in LocalWeb later. Do not put persistent results in temporary
-folders. Existing projects can be registered by running their normal status
+folders. A cloud catalog belongs to that cloud workspace and is not automatically
+synchronized with Local Web on the user's computer. Existing projects can be
+registered by running their normal status
 command or through LocalWeb's “导入插件项目”. LocalWeb currently exposes these
 records and results read-only; use the original Agent command to resume them.

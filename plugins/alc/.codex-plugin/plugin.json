@@ -6,19 +6,30 @@
     "name": "ALC"
   },
   "license": "MIT",
-  "keywords": ["alc", "learning", "ocr", "translation", "companion", "html"],
+  "keywords": [
+    "alc",
+    "learning",
+    "ocr",
+    "translation",
+    "companion",
+    "html"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "ALC",
-    "shortDescription": "OCR, translation, Companion reading, and HTML",
+    "shortDescription": "Read, translate, and learn",
     "longDescription": "Agent Skills and lazy-installed CLIs for source-faithful OCR proofreading, translation, Companion generation, and interactive standalone HTML.",
     "developerName": "ALC",
-    "category": "Education",
-    "capabilities": ["Learning"],
+    "category": "Education & Research",
+    "capabilities": [
+      "Learning"
+    ],
     "defaultPrompt": [
       "Use ALC to proofread this OCR against its PDF",
       "Use ALC to translate this document",
       "Use ALC to build a Companion reader"
-    ]
+    ],
+    "logo": "./assets/logo.png",
+    "composerIcon": "./assets/logo.png"
   }
 }

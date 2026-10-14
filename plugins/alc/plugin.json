@@ -1,0 +1,41 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "alc",
+  "version": "2.1.7",
+  "description": "Agentic Learning Copilot for OCR proofreading, translation, Companion reading, and standalone HTML.",
+  "author": {
+    "name": "ALC"
+  },
+  "homepage": "https://github.com/tririver/alc",
+  "repository": "https://github.com/tririver/alc",
+  "license": "MIT",
+  "keywords": [
+    "alc",
+    "learning",
+    "ocr",
+    "translation",
+    "companion",
+    "html"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "ALC",
+        "shortDescription": "Read, translate, and learn",
+        "longDescription": "Agent Skills and lazy-installed CLIs for source-faithful OCR proofreading, translation, Companion generation, and interactive standalone HTML.",
+        "developerName": "ALC",
+        "category": "Education & Research",
+        "capabilities": [
+          "Learning"
+        ],
+        "defaultPrompt": [
+          "Use ALC to proofread this OCR against its PDF",
+          "Use ALC to translate this document",
+          "Use ALC to build a Companion reader"
+        ],
+        "logo": "./assets/logo.png",
+        "composerIcon": "./assets/logo.png"
+      }
+    }
+  }
+}

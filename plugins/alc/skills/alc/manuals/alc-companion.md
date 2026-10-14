@@ -1,5 +1,11 @@
 # ALC Companion Quick Start
 
+For Work/dot Host execution, read `host-execution.md`. Use the portable
+`<skill-dir>/scripts/alc-companion` launcher and `--provider host`; omit model
+and effort for inheritance. Independent guide/reviewer workers require actual
+fresh contexts. Complete exported Host tasks and resume this same project;
+`host-authority` alone does not select the execution provider.
+
 For new Skill-driven tasks, use the processing policy in SKILL.md:
 `--execution-profile local-app --review-rounds 1` by default, with two workers.
 Respect explicit 0/1/2 review rounds and 1–8 workers. These explicit settings
@@ -22,7 +28,7 @@ alc-companion --help
 If the bare command is unavailable, use the portable Skill runtime:
 
 ```bash
-<skill-dir>/../../bin/alc-companion --help
+<skill-dir>/scripts/alc-companion --help
 ```
 
 Inside an ALC source checkout, the package virtual environment is the direct
@@ -77,7 +83,9 @@ URLs and local resources. ARC is reserved for optional discovery or enrichment,
 not automatic replacement of this acquisition route.
 Partial-resource warnings are preserved through the normal source-diagnostic
 warning surface. Do not fall back to TeX or flattened Markdown after an
-acquisition failure. If the
+acquisition failure. For a DNS failure in a proxy-only environment, follow
+the original-HTML local import guidance in `ac-document.md`; distinguish that
+route from a successful source-bundle acquisition. If the
 user explicitly supplies authors, repeat `--author <name>`; otherwise let Companion
 verify source-derived candidates. Unsupported reader-interface languages need
 one complete `--reader-labels <json-file>` map.

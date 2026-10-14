@@ -207,8 +207,8 @@ def test_public_marketplaces_and_install_instructions_are_complete() -> None:
         ]
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "codex plugin marketplace add tririver/alc --ref stable" in readme
-    assert "/plugin marketplace add tririver/alc@stable" in readme
+    assert "codex plugin marketplace add tririver/alc --ref main" in readme
+    assert "/plugin marketplace add tririver/alc@main" in readme
     assert "dsh plugin --profile alc add github:tririver/alc" in readme
 
 

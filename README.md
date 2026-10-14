@@ -12,7 +12,8 @@ ALC currently offers two ways to use it: Local Web and an agent plugin.
 **Local Web** runs a document workspace on your computer. Configure models,
 create translation or Companion tasks, and open or download Readers in a browser.
 
-**Agent plugin** lets Codex, Claude Code, or DeepSeek Harness run ALC workflows
+**Agent plugin** lets Codex, Claude Code, DeepSeek Harness, or shell/Python hosts such as
+ChatGPT Work and dot run ALC workflows
 from natural-language instructions.
 
 Both entry points use the same Python workflow packages. Local Web can discover
@@ -41,14 +42,14 @@ Foundation dependencies. No separate Foundation clone or manual activation is ne
 Codex:
 
 ```bash
-codex plugin marketplace add tririver/alc --ref stable
+codex plugin marketplace add tririver/alc --ref main
 codex plugin add alc@alc
 ```
 
 Claude Code:
 
 ```text
-/plugin marketplace add tririver/alc@stable
+/plugin marketplace add tririver/alc@main
 /plugin install alc
 ```
 
@@ -88,7 +89,7 @@ You can specify these options in the same message:
 | Target language | For example, Simplified Chinese or English; specify it to avoid ambiguity. |
 | Concurrency | 1–8 concurrent batches per task; default **2**. |
 | Content review | **0** (none), **1** round, or **at most 2** rounds; default **1**. Applies to translation and Companion. |
-| Model and effort | Specify an available model and supported effort. Codex's current default is `gpt-5.6-luna` / `medium`; other providers resolve their own defaults. |
+| Model and effort | Specify an available model and supported effort. Codex's current default is `gpt-6-luna` / `medium`; Host inherits the host model and effort unless requested, and other providers resolve their own defaults. |
 | Additional requirements | Terminology, writing style, intended audience, or output directory. |
 
 Presets are shorthand: **fast draft = 4 / 0**, **standard = 2 / 1**, and
@@ -101,6 +102,23 @@ These settings concern translation and Companion.
 The plugin prepares its runtime on demand using pinned Git revisions; no manual
 repository clone is needed. See the [Skill guide](plugins/alc/skills/alc/SKILL.md)
 for detailed workflows.
+
+### Work and dot
+
+ALC 2.2 supports portable Host execution. See the
+[Host guide](plugins/alc/skills/alc/manuals/host-execution.md) for capability
+checks, model inheritance, export/submit/resume and installation diagnostics.
+Companion independent guide/reviewer stages require fresh subagent contexts.
+The cloud plugin delivers standalone Readers; it does not start Local Web.
+Native CLI routes and configured MinerU remain available. Host PDF recognition
+is an optional alternative; see the [PDF guide](plugins/alc/skills/alc/manuals/host-pdf.md).
+Offline protocol tests do not establish OCR accuracy or account-specific access.
+
+Plugin installation and updates track `main` by default. For a reproducible
+installation, ask the host to package a verified version tag instead. The
+previous version is retained on `stable` during this release transition.
+The optional packager remains available for manual use; CI does not produce
+a distribution ZIP or publish a GitHub Release.
 
 ### PDF recognition and OCR proofreading
 
@@ -165,9 +183,9 @@ Build the frontend before packaging `alc-web`. Keep generated files and local
 experiments under ignored `local/` paths. See [AGENTS.md](AGENTS.md) for repository
 rules.
 
-## Release
+## Version tags
 
-From a clean worktree, run:
+Prepare a version in a release PR from a clean worktree:
 
 ```bash
 scripts/release-alc.sh VERSION
@@ -179,7 +197,42 @@ together, excluding the optional Web application from the plugin runtime. Keep
 an existing runtime lock matched to its pinned tree until the replacement source
 commit exists. New Foundation APIs must be available in the pinned Foundation
 commit before clean-checkout CI or release validation; a working-tree override
-is only for local development. No PyPI publication is assumed.
+is only for local development. The preparation script creates local commits;
+it does not create or push a tag.
+
+Merge Foundation changes first. Set both runtime repositories to the canonical
+`https://github.com/tririver/ac-foundation.git` and
+`https://github.com/tririver/alc.git` URLs before a formal tag. The Foundation
+pin must be a full SHA already merged into upstream `main`, and the generated
+source manifest must refer to that same commit. The product pin must be an
+ancestor of the tagged commit with an identical `packages/` tree. A subsequent
+pin-only commit is supported. If squash merging changes commit identities,
+refresh the pin to the final upstream source commit in a follow-up PR before
+tagging; do not retain a development fork SHA that upstream does not contain.
+
+After merging and passing CI, an explicitly authorized maintainer creates an
+annotated `vMAJOR.MINOR.PATCH` tag on the verified upstream commit and pushes
+that tag. Tag CI checks all package, plugin and frontend versions against the
+tag and `VERSION`, verifies upstream `main` ancestry and runtime pins, then
+runs the normal tests and package builds. A tag is ready for use only after
+that CI run succeeds. Never move a published tag; issue a new version for a
+correction. Development commits do not each require a version bump.
+
+For a local preflight (with a full upstream Foundation clone checked out at
+the locked SHA):
+
+```bash
+python scripts/check-release-tag.py --tag vMAJOR.MINOR.PATCH \
+  --check-pins --foundation-root /path/to/ac-foundation
+```
+
+This workflow creates no GitHub Release, distributed plugin ZIP or PyPI
+publication. Give users the tag URL so their host can package the plugin from
+that fixed source. CI does not run the ZIP-based cold-plugin installation job.
+Packaging unit tests may still create temporary archive fixtures, and the packager remains
+available for manual use. Package builds and test fixtures are validation,
+not release assets. Cold installation of a packaged plugin must be checked
+separately when needed.
 
 ## License
 

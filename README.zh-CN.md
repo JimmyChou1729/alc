@@ -37,14 +37,14 @@ Windows 将 `python3` 换成 `python`。已有源码时，在 ALC 目录执行�
 Codex：
 
 ```bash
-codex plugin marketplace add tririver/alc --ref stable
+codex plugin marketplace add tririver/alc --ref main
 codex plugin add alc@alc
 ```
 
 Claude Code：
 
 ```text
-/plugin marketplace add tririver/alc@stable
+/plugin marketplace add tririver/alc@main
 /plugin install alc
 ```
 
@@ -168,6 +168,18 @@ scripts/release-alc.sh VERSION
 产品源码 SHA 与包清单；插件运行环境不包含可选的 Web 应用。新的源码提交形成前，应保持
 现有 runtime lock 与其固定提交一致。新增 Foundation API 必须先包含在固定的 Foundation
 提交中，才能进行干净环境的 CI 或发布验证；工作区覆盖只用于本地开发。本项目不假设包已在 PyPI 发布。
+
+## Work／dot
+
+ALC 2.2 支持由宿主 Agent 完成模型任务，通过导出、提交和原任务恢复继续流程。
+使用前检查 shell/Python、可写项目目录及实际工具能力；Companion 的独立生成和评审还需要新上下文。
+线上插件交付独立 HTML Reader，不启动 Local Web。保留原生 CLI 和已配置的 MinerU，
+也可选择无需安装 MinerU 的 Host PDF 识别。识别结构校验不等于文字和公式准确率验收。
+详见 [Host 执行](plugins/alc/skills/alc/manuals/host-execution.md) 和
+[Host PDF](plugins/alc/skills/alc/manuals/host-pdf.md)。
+
+插件安装和更新默认跟踪 `main`；需要复现固定版本时，让宿主按已验证的 tag 打包。
+本轮升级前的版本保留在 `stable`。CI 不生成分发 ZIP，也不创建 GitHub Release。
 
 ## 许可证
 
