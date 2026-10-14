@@ -205,3 +205,133 @@ def test_python_symlink_preserves_virtualenv_cli(monkeypatch, tmp_path):
         llm=LLMExecutionOptions(runtime_environment=_environment()),
     ))
     assert result.runtime_environment.values["PATH"].split(os.pathsep)[0] == str(venv)
+
+
+def test_durable_host_turn_executes_readonly_broker_and_retains_receipt(tmp_path):
+    from dataclasses import replace
+    from ac_jobs import RunContext, RunRepository, RunSpec
+    from ac_llm import (
+        HostAuthority,
+        HostCoordinator,
+        HostTaskService,
+        JsonOutput,
+        LLMCompleted,
+        LLMExecutionOptions,
+        LLMPaused,
+        LLMRequest,
+        ModelSelection,
+    )
+
+    command = tmp_path / "ac-document"
+    command.write_text("#!/bin/sh\nprintf 'Verified source passage.\\n'\n")
+    command.chmod(0o755)
+    argv = [
+        "ac-document",
+        "read-cached-source-range",
+        "--document-ref",
+        "{}",
+        "--text-only",
+        "1",
+        "1",
+    ]
+    commands = {"source": [{"argv": argv, "part_numbers": [1]}]}
+    root = tmp_path / "jobs"
+    repo = RunRepository(root)
+    prepared = repo.create(RunSpec("broker-run", "host-broker-test", {}))
+    context = RunContext(repo, prepared, resume_input=None)
+    environment = AcRuntimeEnvironment(
+        {**_environment().values, "PATH": str(tmp_path) + ":/usr/bin:/bin"}
+    )
+    broker = CompanionSourceHostBroker(environment)
+    broker.bind_context(context)
+    broker.register_commands(commands)
+    options = LLMExecutionOptions(
+        host_coordinator=HostCoordinator("offline-reader"),
+        host_authority=HostAuthority.UNKNOWN,
+        host_broker=broker,
+    )
+    host = HostTaskService()
+    request = LLMRequest(
+        "read-source",
+        "Read the declared source, then answer.",
+        JsonOutput(
+            {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+                "additionalProperties": False,
+            }
+        ),
+        ModelSelection(provider="host"),
+    )
+    # Use the existing owning RunContext so source-read receipts share its journal.
+    from ac_llm import LLMTaskService
+
+    tasks = LLMTaskService()
+    assert isinstance(
+        tasks.execute_or_resume(context, request, options=options), LLMPaused
+    )
+
+    def submit(output):
+        rows = host.pending(run_root=root, run_id=prepared.run_id)
+        assert len(rows) == 1
+        task = host.export(
+            run_root=root, run_id=prepared.run_id, task_id=rows[0]["task_id"]
+        )
+        response = {
+            "schema_version": "ac.llm.host_response.v1",
+            "task_id": task["task_id"],
+            "request_sha256": task["request_sha256"],
+            "actor": {
+                "actor_id": "fixture",
+                "kind": "fake",
+                "context_id": task["task_id"],
+            },
+            "output": output,
+        }
+        host.submit(run_root=root, run_id=prepared.run_id, response=response)
+        return task
+
+    submit(
+        {
+            "schema_version": "ac.llm.host_turn.v1",
+            "state": "request_host",
+            "result": None,
+            "host_request": {
+                "request_id": "source-read",
+                "instruction": shlex.join(argv),
+                "purpose": "Read the source",
+            },
+        }
+    )
+    assert isinstance(
+        tasks.execute_or_resume(context, request, options=options), LLMPaused
+    )
+    broker.validate_reads(commands, require_complete=True)
+    task = submit(
+        {
+            "schema_version": "ac.llm.host_turn.v1",
+            "state": "complete",
+            "result": {"answer": "Verified source passage."},
+            "host_request": None,
+        }
+    )
+    assert (
+        task["request"]["continuation"]["response"]["result"]["stdout"]
+        == "Verified source passage.\n"
+    )
+    fresh = CompanionSourceHostBroker(environment)
+    fresh.bind_context(context)
+    fresh.register_commands(commands)
+    fresh.validate_reads(commands, require_complete=True)
+    outcome = tasks.execute_or_resume(
+        context, request, options=replace(options, host_broker=fresh)
+    )
+    assert isinstance(outcome, LLMCompleted)
+    assert outcome.value == {"answer": "Verified source passage."}
+    assert (
+        fresh.execute(
+            HostRequest("write", "rm -rf data", "Write"), workspace=tmp_path
+        ).status
+        is HostResponseStatus.REFUSED
+    )

@@ -85,7 +85,9 @@ class CompanionService:
     ) -> RunSnapshot:
         if translation_adapter is None:
             require_translation_runtime()
-        prepared = self.prepare(request, recipe=recipe, run_id=run_id)
+        prepared = self.prepare(
+            request, recipe=recipe, run_id=run_id, execution=execution
+        )
         return self.execute(
             prepared.run_id,
             execution=execution,
@@ -99,10 +101,11 @@ class CompanionService:
         *,
         recipe: CompanionGenerationRecipe | None = None,
         run_id: str | None = None,
+        execution: CompanionExecutionOptions = CompanionExecutionOptions(),
     ) -> RunSnapshot:
         """Durably create one build before an external selector points to it."""
 
-        resolved_recipe = _recipe_for_request(request, recipe)
+        resolved_recipe = _recipe_for_request(request, recipe, execution=execution)
         resolved = run_id or _companion_run_id_for_recipe(
             request, resolved_recipe
         )
@@ -523,8 +526,10 @@ class CompanionService:
 def companion_run_id(
     request: CompanionBuildRequest,
     recipe: CompanionGenerationRecipe | None,
+    *,
+    execution: CompanionExecutionOptions = CompanionExecutionOptions(),
 ) -> str:
-    resolved_recipe = _recipe_for_request(request, recipe)
+    resolved_recipe = _recipe_for_request(request, recipe, execution=execution)
     return _companion_run_id_for_recipe(request, resolved_recipe)
 
 
@@ -547,13 +552,15 @@ def _companion_run_id_for_recipe(
 def _recipe_for_request(
     request: CompanionBuildRequest,
     recipe: CompanionGenerationRecipe | None,
+    *,
+    execution: CompanionExecutionOptions = CompanionExecutionOptions(),
 ) -> CompanionGenerationRecipe:
     if not isinstance(request, CompanionBuildRequest):
         raise ValueError("unsupported Companion build request")
     resolved_recipe = recipe or CompanionGenerationRecipe()
     if not isinstance(resolved_recipe, CompanionGenerationRecipe):
         raise ValueError("build request requires a Companion recipe")
-    return freeze_generation_recipe(resolved_recipe)
+    return freeze_generation_recipe(resolved_recipe, options=execution.llm)
 
 
 def _optional_artifact_json(

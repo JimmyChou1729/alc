@@ -23,7 +23,12 @@ from ac_jobs import (
     command_result_json,
     snapshot_data,
 )
-from ac_llm import HostAuthority, LLMExecutionOptions, ModelSelection
+from ac_llm import (
+    HostAuthority,
+    LLMExecutionOptions,
+    ModelSelection,
+    with_host_resume_location,
+)
 from ac_document import AcDocumentService
 
 from .contracts import (
@@ -433,13 +438,17 @@ def _status(args: argparse.Namespace) -> CommandResult:
     project = TranslationProject.load(args.project_dir)
     run_id = _current_run(project)
     service = TranslationService(project.jobs_root)
-    selected_snapshot = service.inspect(run_id).snapshot
+    selected_snapshot = with_host_resume_location(
+        service.inspect(run_id).snapshot, run_root=project.jobs_root
+    )
     base = command_result_from_snapshot(selected_snapshot, query=True)
     steps: dict[str, Any] = {}
     for step in ("language", "glossary", "blocks"):
         selected = project.run_id(step)
         if selected is not None:
-            steps[step] = snapshot_data(service.inspect(selected).snapshot)
+            steps[step] = snapshot_data(with_host_resume_location(
+                service.inspect(selected).snapshot, run_root=project.jobs_root
+            ))
     blocks_delivery_ok = (
         project.current_step == "blocks"
         and selected_snapshot.status.value == "succeeded"
@@ -714,6 +723,7 @@ def _snapshot_result(
     *,
     document: Any | None = None,
 ) -> CommandResult:
+    snapshot = with_host_resume_location(snapshot, run_root=project.jobs_root)
     base = command_result_from_snapshot(snapshot)
     if snapshot.status.value != "succeeded":
         from .partial import render_partial_translation

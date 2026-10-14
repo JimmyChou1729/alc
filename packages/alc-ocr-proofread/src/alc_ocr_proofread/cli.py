@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ac_llm import with_host_resume_location
+
 from ac_jobs import (
     CommandArtifact,
     CommandError,
@@ -152,7 +154,9 @@ def _dispatch(args: argparse.Namespace) -> CommandResult:
         )
     if args.command == "workers":
         control = service.workers(run_id) if args.worker_command == "get" else service.set_workers(run_id, args.workers)
-        snapshot = service.inspect(run_id).snapshot
+        snapshot = with_host_resume_location(
+            service.inspect(run_id).snapshot, run_root=project.jobs_root
+        )
         return CommandResult(
             CommandStatus.COMPLETED,
             data={
@@ -165,7 +169,9 @@ def _dispatch(args: argparse.Namespace) -> CommandResult:
             },
         )
     if args.command == "status":
-        snapshot = service.inspect(run_id).snapshot
+        snapshot = with_host_resume_location(
+            service.inspect(run_id).snapshot, run_root=project.jobs_root
+        )
         data: dict[str, Any] = {"run": snapshot_data(snapshot), "metrics": service.metrics(run_id)}
         try:
             control = service.workers(run_id)
@@ -207,6 +213,7 @@ def _dispatch(args: argparse.Namespace) -> CommandResult:
 
 
 def _generation_result(service: ProofreadService, snapshot) -> CommandResult:
+    snapshot = with_host_resume_location(snapshot, run_root=service.project.jobs_root)
     base = command_result_from_snapshot(snapshot)
     artifacts = base.artifacts
     if snapshot.status is RunStatus.SUCCEEDED:

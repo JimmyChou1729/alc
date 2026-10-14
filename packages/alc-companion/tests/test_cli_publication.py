@@ -405,7 +405,7 @@ def test_build_refuses_implicit_selected_lineage_replacement(
     monkeypatch.setattr(
         cli, "CompanionGenerationRecipe", lambda **_kwargs: object()
     )
-    monkeypatch.setattr(cli, "freeze_generation_recipe", lambda value: value)
+    monkeypatch.setattr(cli, "freeze_generation_recipe", lambda value, **kwargs: value)
     monkeypatch.setattr(cli, "companion_run_id", lambda *_args: "new-run")
     monkeypatch.setattr(cli, "CompanionService", lambda _root: object())
     args = SimpleNamespace(
@@ -478,7 +478,7 @@ def test_build_binds_html_source_manifest_and_persists_warnings(
         lambda *_args, **_kwargs: (object(), (), ("parser warning",)),
     )
     monkeypatch.setattr(cli, "CompanionBuildRequest", request_factory)
-    monkeypatch.setattr(cli, "freeze_generation_recipe", lambda value: value)
+    monkeypatch.setattr(cli, "freeze_generation_recipe", lambda value, **kwargs: value)
     monkeypatch.setattr(cli, "CompanionService", Service)
     monkeypatch.setattr(cli, "companion_run_id", lambda *_args: "bundle-run")
     monkeypatch.setattr(cli, "_snapshot_result", lambda *_args, **_kwargs: "ok")
@@ -911,3 +911,33 @@ def test_main_reports_html_validation_errors_as_protocol_failures(
     assert cli.main(["status", "--project-dir", "unused"]) == 1
     result = json.loads(capsys.readouterr().out)
     assert result["error"]["code"] == "html_render_failed"
+
+
+def test_host_pause_generation_and_status_expose_owned_location(
+    tmp_path, monkeypatch,
+):
+    paths = CompanionProjectPaths.open(tmp_path / "project")
+    paths.select_run("legacy-host-run")
+    snapshot = RunSnapshot(
+        "legacy-host-run", 2, RunStatus.PAUSED, 1,
+        "2026-09-01T00:00:00Z", "2026-09-01T00:01:00Z",
+        awaiting=Awaiting(
+            ResumeReason.EXTERNAL_CONDITION, "host:guide", False,
+            details={"code": "awaiting_host", "host_task_id": "guide-task"},
+        ),
+    )
+    service = SimpleNamespace(
+        inspect=lambda _run_id: SimpleNamespace(snapshot=snapshot),
+        build_diagnostics=lambda _run_id: None,
+        progress=lambda _run_id: {"phase": "paused"},
+    )
+    monkeypatch.setattr(cli, "CompanionService", lambda _root: service)
+    generated = cli._snapshot_result(paths, snapshot)
+    status = cli._status(SimpleNamespace(project_dir=str(paths.root)))
+    expected = {"code": "awaiting_host", "host_task_id": "guide-task",
+                "run_root": str(paths.jobs_root), "run_id": snapshot.run_id}
+    assert generated.resume.details == expected
+    assert generated.data["run"]["resume"]["details"] == expected
+    assert status.resume.details == expected
+    assert status.data["selected_run"]["resume"]["details"] == expected
+    assert "run_root" not in snapshot.awaiting.details

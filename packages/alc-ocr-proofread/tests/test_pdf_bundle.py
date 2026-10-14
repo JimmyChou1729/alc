@@ -1209,3 +1209,240 @@ def test_structured_candidate_baseline_tampering_rejected(tmp_path, attack):
     result["candidate_digest"] = candidate_digest(result)
     with pytest.raises(ValueError):
         validate_candidate(manifest, result)
+
+
+def test_host_page_and_inline_verification_resume_without_manual_input(tmp_path):
+    from ac_llm import HostAuthority, HostCoordinator, HostTaskService
+
+    manifest = bundle(
+        tmp_path, pages=['<p id="p1">Helo <math alttext="P_n"></math>1 end.</p>']
+    )
+    original = (manifest.parent / "source.html").read_bytes()
+    service = PDFBundleProofreadService(tmp_path / "project")
+    prepared = service.prepare(manifest, provider="host", workers=1)
+    options = LLMExecutionOptions(
+        host_coordinator=HostCoordinator("offline-vision", default_provider="host"),
+        host_authority=HostAuthority.UNRESTRICTED,
+    )
+    host = HostTaskService()
+    root = service.repository.root
+    snapshot = service.execute(prepared.run_id, renderer=Renderer(), options=options)
+    phases = []
+    for _ in range(4):
+        if snapshot.status is RunStatus.SUCCEEDED:
+            break
+        assert snapshot.status is RunStatus.PAUSED, snapshot.error
+        rows = host.pending(run_root=root, run_id=prepared.run_id)
+        assert len(rows) == 1
+        row = rows[0]
+        task = host.export(
+            run_root=root, run_id=prepared.run_id, task_id=row["task_id"]
+        )
+        image = task["request"]["inputs"][0]
+        assert image["media_type"] == "image/png"
+        assert base64.b64decode(image["content_base64"]) == PNG
+        assert image["sha256"] == hashlib.sha256(PNG).hexdigest()
+        snapshot = service.resume(prepared.run_id, renderer=Renderer(), options=options)
+        assert snapshot.status is RunStatus.PAUSED
+        assert (
+            host.pending(run_root=root, run_id=prepared.run_id)[0]["request_sha256"]
+            == row["request_sha256"]
+        )
+        inline = "inline-verify" in task["llm_task_id"]
+        phases.append(inline)
+        output = (
+            {
+                "decisions": [
+                    {"proposal_id": "a", "approved": True, "reason": "Image comparison"}
+                ]
+            }
+            if inline
+            else {
+                **page_output(edit("Helo", "Hello")),
+                "structure_proposals": [
+                    {
+                        "proposal_id": "a",
+                        "anchor_id": "p1",
+                        "before_html": '<math alttext="P_n"></math>1',
+                        "after": [{"kind": "math", "value": "P_{n-1}"}],
+                        "reason": "Printed subscript",
+                    }
+                ],
+            }
+        )
+        response = {
+            "schema_version": "ac.llm.host_response.v1",
+            "task_id": task["task_id"],
+            "request_sha256": task["request_sha256"],
+            "actor": {
+                "actor_id": "fixture",
+                "kind": "fake",
+                "context_id": task["task_id"],
+            },
+            "output": output,
+        }
+        host.submit(run_root=root, run_id=prepared.run_id, response=response)
+        assert host.submit(run_root=root, run_id=prepared.run_id, response=response)[
+            "reused"
+        ]
+        snapshot = service.resume(prepared.run_id, renderer=Renderer(), options=options)
+    assert snapshot.status is RunStatus.SUCCEEDED, snapshot
+    assert phases == [False, True]
+    result = service.result(prepared.run_id)
+    assert "Hello" in result["corrected_html"]
+    assert 'alttext="P_{n-1}"' in result["corrected_html"]
+    assert result["approval_required"]
+    assert (manifest.parent / "source.html").read_bytes() == original
+    assert (
+        service.resume(prepared.run_id, renderer=Renderer(), options=options).status
+        is RunStatus.SUCCEEDED
+    )
+    assert (
+        len(host.pending(run_root=root, run_id=prepared.run_id, include_completed=True))
+        == 2
+    )
+
+
+@pytest.mark.parametrize(
+    "fragment,expected",
+    [
+        ('<p>x<img alt="+">y</p>', "x+y"),
+        ('<p>x<img alt=" ">y</p>', "x y"),
+        ('<p>x<img alt="">y</p>', "xy"),
+        ('<figure><img alt="Plot"><figcaption>Plot</figcaption></figure>', "Plot"),
+        ('<figure><img alt="Plot details"><figcaption>Plot</figcaption></figure>', "Plot details\nPlot"),
+        ('<figure><img alt="Plot"><figcaption>Plot details</figcaption></figure>', "Plot\nPlot details"),
+        ('<figure><img alt="Plot"><figcaption></figcaption></figure>', "Plot"),
+        ('<figure><img alt="Plot"><figcaption> </figcaption></figure>', "Plot"),
+        ('<figure><img alt="Plot"></figure>', "Plot"),
+        ('<figure><img><figcaption>Caption</figcaption></figure>', "Caption"),
+        ('<figure><img alt="x = 1"><figcaption>x = 2</figcaption></figure>', "x = 1\nx = 2"),
+        ('<table><caption>Values</caption><tr><td>1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr></table>', "Values\n1\t2\t\n3\t4"),
+        ('<table><caption> </caption><tr><td>1</td><td>2</td></tr></table>', "1\t2"),
+    ],
+)
+def test_visible_text_keeps_distinct_descriptions_and_table_boundaries(fragment, expected):
+    from alc_ocr_proofread.pdf_bundle import _visible_text
+
+    assert _visible_text(fragment) == expected
+
+
+def _small_pdf():
+    stream = b"BT /F1 12 Tf 10 70 Td (Hello OCR) Tj 0 -20 Td (x y 1 2) Tj ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+    payload, offsets = b"%PDF-1.4\n", []
+    for index, obj in enumerate(objects, 1):
+        offsets.append(len(payload))
+        payload += f"{index} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref = len(payload)
+    payload += b"xref\n0 6\n0000000000 65535 f \n"
+    payload += b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets)
+    return payload + f"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+
+
+@pytest.mark.parametrize("real_renderer", [False, True], ids=["offline", "poppler"])
+def test_captionless_host_pdf_roundtrip_to_proofread_candidate(tmp_path, real_renderer):
+    import shutil
+    from types import SimpleNamespace
+
+    from ac_document import AcDocumentService, HostPDFRunner
+    from ac_llm import HostAuthority, HostCoordinator, HostTaskService
+
+    if real_renderer and (not shutil.which("pdftotext") or not shutil.which("pdftoppm")):
+        pytest.skip("Poppler is not installed")
+    options = LLMExecutionOptions(
+        host_coordinator=HostCoordinator("offline-vision", default_provider="host"),
+        host_authority=HostAuthority.UNRESTRICTED,
+    )
+    host = HostTaskService()
+
+    def submit(root, run_id, output):
+        pending = host.pending(run_root=root, run_id=run_id)
+        assert len(pending) == 1
+        task = host.export(run_root=root, run_id=run_id, task_id=pending[0]["task_id"])
+        assert task["request"]["inputs"][0]["media_type"] == "image/png"
+        response = {
+            "schema_version": "ac.llm.host_response.v1",
+            "task_id": task["task_id"],
+            "request_sha256": task["request_sha256"],
+            "actor": {"actor_id": "fixture", "kind": "fake", "context_id": task["task_id"]},
+            "output": output,
+        }
+        host.submit(run_root=root, run_id=run_id, response=response)
+        assert host.submit(run_root=root, run_id=run_id, response=response)["reused"]
+
+    pdf = tmp_path / "source.pdf"
+    pdf.write_bytes(_small_pdf())
+    runner_args = {} if real_renderer else {
+        "renderer": Renderer(),
+        "text_extractor": SimpleNamespace(extract=lambda _: SimpleNamespace(pages=("",))),
+    }
+    runner = HostPDFRunner(tmp_path / "recognition", options=options, **runner_args)
+    run_args = {"output_dir": tmp_path / "host-bundle", "run_id": "recognize"}
+    snapshot = runner.run(pdf, **run_args)
+    assert snapshot.status is RunStatus.PAUSED, snapshot.error
+    assert snapshot.awaiting.details["code"] == "awaiting_host"
+    submit(runner.repository.root, snapshot.run_id, {
+        "schema_version": "ac.document.host_pdf_page.v1", "page_number": 1,
+        "coverage": "complete", "warnings": [], "blocks": [
+            {"kind": "paragraph", "text": "Helo OCR", "rows": []},
+            {"kind": "table", "text": "", "rows": [["x", "y"], ["1", "2"]]},
+            {"kind": "figure", "text": "Scanned page", "rows": []},
+        ],
+    })
+    snapshot = runner.run(pdf, **run_args)
+    assert snapshot.status is RunStatus.SUCCEEDED, snapshot.error
+    result = runner.read_result(snapshot)
+    manifest = Path(result["manifest"])
+    original_files = {p.relative_to(manifest.parent): p.read_bytes() for p in manifest.parent.rglob("*") if p.is_file()}
+    source = Path(result["source"])
+    original_html = source.read_text()
+    assert "<caption>" not in original_html
+    AcDocumentService(cache_root=tmp_path / "cache").parse_pdf_source(source, manifest=manifest)
+    service = PDFBundleProofreadService(tmp_path / "proofreading")
+    prepared = service.prepare(manifest, provider="host", workers=1)
+    execution_args = {"options": options}
+    if not real_renderer:
+        execution_args["renderer"] = Renderer()
+    paused = service.execute(prepared.run_id, **execution_args)
+    assert paused.status is RunStatus.PAUSED, paused.error
+    assert paused.awaiting.details["code"] == "awaiting_host"
+    submit(service.repository.root, prepared.run_id, page_output(edit("Helo", "Hello")))
+    completed = service.resume(prepared.run_id, **execution_args)
+    assert completed.status is RunStatus.SUCCEEDED, completed.error
+    candidate = service.result(prepared.run_id)
+    assert candidate["approval_required"] is True and candidate["proofread"] is False
+    assert candidate["original_html"] == original_html
+    assert candidate["corrected_html"] == original_html.replace("Helo", "Hello")
+    projected = candidate["pages"][0]["corrected_text"]
+    assert "x\ty\t\n1\t2" in projected
+    assert projected.count("Scanned page") == 1
+    assert {p.relative_to(manifest.parent): p.read_bytes() for p in manifest.parent.rglob("*") if p.is_file()} == original_files
+    assert (manifest.parent / "original.pdf").read_bytes() == pdf.read_bytes()
+
+
+@pytest.mark.parametrize("caption", [None, "", " \n\t", "Values"])
+def test_existing_bundle_optional_captions_remain_unchanged(tmp_path, caption):
+    table_caption = "" if caption is None else f"<caption>{caption}</caption>"
+    figure_caption = "" if caption is None else f"<figcaption>{caption}</figcaption>"
+    manifest = bundle(tmp_path, pages=[
+        f'<table id="p1">{table_caption}<tr><td>1</td><td>2</td></tr></table>',
+        f'<figure id="p2"><img src="assets/figure.png" alt="Diagram">{figure_caption}</figure>',
+    ])
+    original = (manifest.parent / "source.html").read_text()
+    _, _, candidate = run(tmp_path, manifest, Tasks({1: page_output(), 2: page_output()}))
+    assert candidate["original_html"] == candidate["corrected_html"] == original
+    assert (manifest.parent / "source.html").read_text() == original
+    projected = "\n".join(page["corrected_text"] for page in candidate["pages"])
+    assert "1\t2" in projected
+    assert "Diagram" in projected
+    if caption == "Values":
+        assert "Values\n1\t2" in projected
+        assert "Diagram\nValues" in projected
+    assert candidate["approval_required"]

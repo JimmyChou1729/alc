@@ -131,6 +131,11 @@ remain supported. New runs bind `math_edit_policy=command-boundaries.v1` so they
 do not reuse candidates generated before this check. Existing delivered results
 are not rewritten by this validation change.
 
+PDF review text separates table captions from cells and preserves distinct image
+descriptions alongside figure captions. An image alt that exactly repeats its
+figure caption appears once in the text projection. Empty or absent captions
+remain valid; projection does not rewrite source HTML, images, or approval state.
+
 ## Opt-in local MinerU setup
 
 `alc-ocr-proofread setup-mineru --project-dir PATH` prints a read-only plan.

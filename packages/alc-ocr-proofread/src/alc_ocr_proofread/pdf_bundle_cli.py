@@ -1,5 +1,7 @@
 """Native PDF candidate commands, separate from the Markdown workflow."""
 
+from ac_llm import with_host_resume_location
+
 from ac_jobs import (
     CommandResult,
     CommandStatus,
@@ -59,7 +61,9 @@ def dispatch(args):
     elif args.command == "stop-bundle":
         snapshot = service.stop(args.run_id, reason=args.reason).snapshot
     elif args.command == "status-bundle":
-        snapshot = service.inspect(args.run_id).snapshot
+        snapshot = with_host_resume_location(
+            service.inspect(args.run_id).snapshot, run_root=service.repository.root
+        )
         return CommandResult(
             CommandStatus.COMPLETED, data={"run": snapshot_data(snapshot)}
         )
@@ -78,4 +82,6 @@ def dispatch(args):
         return CommandResult(CommandStatus.COMPLETED, data=result)
     else:
         raise ValueError("Unknown PDF bundle command")
-    return command_result_from_snapshot(snapshot)
+    return command_result_from_snapshot(
+        with_host_resume_location(snapshot, run_root=service.repository.root)
+    )

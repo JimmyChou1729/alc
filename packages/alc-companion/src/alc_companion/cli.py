@@ -32,7 +32,14 @@ from ac_jobs import (
     file_lease,
     snapshot_data,
 )
-from ac_llm import ExecutionLimits, HostAuthority, LLMExecutionOptions, LLMExecutionProfile, ModelSelection
+from ac_llm import (
+    ExecutionLimits,
+    HostAuthority,
+    LLMExecutionOptions,
+    LLMExecutionProfile,
+    ModelSelection,
+    with_host_resume_location,
+)
 from alc_render import (
     HTMLRenderError,
     InteractiveReaderAdmissionError,
@@ -487,6 +494,7 @@ def _build(args: argparse.Namespace) -> CommandResult:
         authors=authors,
         reader_labels=reader_labels,
     )
+    execution = _execution_options(args)
     recipe = freeze_generation_recipe(
         CompanionGenerationRecipe(
             model=ModelSelection(
@@ -502,9 +510,9 @@ def _build(args: argparse.Namespace) -> CommandResult:
             cross_chapter_editorial_review=(
                 args.cross_chapter_editorial_review or getattr(args, "processing_mode", None) == "deep"
             ),
-        )
+        ),
+        options=execution.llm,
     )
-    execution = _execution_options(args)
     service = CompanionService(paths.jobs_root)
     run_id = companion_run_id(request, recipe)
     selected_run = paths.current_run_id
@@ -568,12 +576,13 @@ def _status(args: argparse.Namespace) -> CommandResult:
 def _status_locked(paths: CompanionProjectPaths) -> CommandResult:
     run_id = _current_run(paths)
     view = CompanionService(paths.jobs_root).inspect(run_id)
+    snapshot = with_host_resume_location(view.snapshot, run_root=paths.jobs_root)
     base = command_result_from_snapshot(
-        view.snapshot,
+        snapshot,
         query=view.snapshot.status
         in {RunStatus.PENDING, RunStatus.RUNNING},
     )
-    selected_run = snapshot_data(view.snapshot)
+    selected_run = snapshot_data(snapshot)
     data: dict[str, Any] = {
         "selected_run": selected_run,
         "build_diagnostics": CompanionService(paths.jobs_root).build_diagnostics(
@@ -1019,6 +1028,7 @@ def _snapshot_result(
     *,
     warnings: tuple[str, ...] = (),
 ) -> CommandResult:
+    snapshot = with_host_resume_location(snapshot, run_root=paths.jobs_root)
     base = command_result_from_snapshot(snapshot)
     persisted = paths.source_diagnostics(snapshot.run_id)
     source_values = tuple(dict.fromkeys((*persisted, *warnings)))

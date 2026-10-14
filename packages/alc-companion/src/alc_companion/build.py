@@ -293,7 +293,9 @@ class CompanionBuildHandler:
         except (TypeError, ValueError):
             durable_semantic_input = None
         if durable_semantic_input != self.semantic_input():
-            frozen_recipe = freeze_generation_recipe(self.recipe)
+            frozen_recipe = freeze_generation_recipe(
+                self.recipe, options=self.execution.llm
+            )
             frozen_semantic_input = encode_handler_semantic_input(
                 self.request,
                 frozen_recipe,
@@ -1630,7 +1632,10 @@ class CompanionBuildHandler:
                 completed_results[f"guide-{chapter.chapter_id}"] = read_json(
                     context, existing, "accepted chapter guide"
                 )
-                continue
+                # A paused batch must retain its original loop topology; the
+                # proposer-reviewer journal reuses already completed loops.
+                if chapter.chapter_id not in prior_contexts:
+                    continue
             if not chapter.generate_guide:
                 program_candidate = self._augment_chapter_candidate(
                     chapter,

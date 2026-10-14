@@ -35,8 +35,8 @@ def test_build_freezes_missing_model_for_explicit_provider(
 ) -> None:
     monkeypatch.setattr(
         request_contracts,
-        "resolve_model_selection",
-        lambda selection: ModelSelection(
+        "resolve_execution_model",
+        lambda selection, **kwargs: ModelSelection(
             provider=selection.provider,
             model="gpt-5.6-luna",
             tier="medium",
@@ -192,3 +192,52 @@ def test_missing_local_build_source_returns_typed_error(
     result = json.loads(capsys.readouterr().out)
     assert result["error"]["code"] == "source_not_found"
     assert "existing local file" in result["error"]["message"]
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_host_freeze_honors_coordinator_and_model_preferences(monkeypatch, explicit):
+    from ac_llm import HostCoordinator, LLMExecutionOptions
+
+    monkeypatch.setenv("AC_AGENT_HOST", "codex")
+    monkeypatch.setenv(
+        "AC_LLM_HOST_COORDINATOR",
+        json.dumps(
+            {
+                "coordinator_id": "environment",
+                "default_provider": "codex",
+                "native_fallback": False,
+            }
+        ),
+    )
+    selection = (
+        ModelSelection(provider="host", model="gpt-6-luna", reasoning_effort="high")
+        if explicit
+        else ModelSelection()
+    )
+    frozen = freeze_generation_recipe(
+        CompanionGenerationRecipe(model=selection),
+        options=LLMExecutionOptions(
+            host_coordinator=HostCoordinator("explicit", default_provider="host")
+        ),
+    )
+    assert frozen.model.provider == "host"
+    assert frozen.model.model == ("gpt-6-luna" if explicit else "inherit")
+    assert frozen.model.reasoning_effort == ("high" if explicit else None)
+    assert freeze_generation_recipe(frozen) == frozen
+
+
+def test_host_freeze_uses_environment_coordinator(monkeypatch):
+    monkeypatch.setenv("AC_AGENT_HOST", "codex")
+    monkeypatch.setenv(
+        "AC_LLM_HOST_COORDINATOR",
+        json.dumps(
+            {
+                "coordinator_id": "cloud",
+                "default_provider": "host",
+            }
+        ),
+    )
+    frozen = freeze_generation_recipe(CompanionGenerationRecipe())
+    assert frozen.model == ModelSelection(provider="host", model="inherit")
+    monkeypatch.delenv("AC_LLM_HOST_COORDINATOR")
+    assert freeze_generation_recipe(frozen) == frozen
