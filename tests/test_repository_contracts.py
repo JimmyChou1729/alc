@@ -63,18 +63,18 @@ def test_package_set_metadata_and_dependency_graph() -> None:
 def test_packages_require_reliability_foundation_floors() -> None:
     expected = {
         "alc-companion": {
-            "ac-llm>=2.1.0,<3",
-            "ac-document>=2.1.1,<3",
-            "ac-proposer-reviewer>=2.1.0,<3",
+            "ac-llm>=2.2.0,<3",
+            "ac-document>=2.2.0,<3",
+            "ac-proposer-reviewer>=2.2.0,<3",
         },
         "alc-ocr-proofread": {
-            "ac-llm>=2.1.0,<3",
-            "ac-document>=2.1.1,<3",
+            "ac-llm>=2.2.0,<3",
+            "ac-document>=2.2.0,<3",
         },
-        "alc-render": {"ac-document>=2.1.1,<3"},
+        "alc-render": {"ac-document>=2.2.0,<3"},
         "alc-translate": {
-            "ac-llm>=2.1.0,<3",
-            "ac-document>=2.1.1,<3",
+            "ac-llm>=2.2.0,<3",
+            "ac-document>=2.2.0,<3",
         },
     }
     for package, dependencies in expected.items():
