@@ -33,7 +33,10 @@ HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V16 = (
 HISTORICAL_CHAPTER_GUIDE_REVIEW_PROMPT_VERSION_V16 = (
     "alc.companion.chapter-learning-review-prompt.v16"
 )
-AUTHOR_IDENTITY_PROMPT_VERSION = "alc.companion.author-identity-prompt.v4"
+AUTHOR_IDENTITY_PROMPT_VERSION = "alc.companion.author-identity-prompt.v5"
+HISTORICAL_AUTHOR_IDENTITY_PROMPT_VERSION_V4 = (
+    "alc.companion.author-identity-prompt.v4"
+)
 HISTORICAL_AUTHOR_IDENTITY_PROMPT_VERSION_V3 = (
     "alc.companion.author-identity-prompt.v3"
 )
@@ -107,6 +110,13 @@ AUTHOR_IDENTITY_SCHEMA = _closed(
         },
         "basis": _NONEMPTY,
         "anchor_block_ids": _STRING_IDS,
+    },
+    ("authors", "confidence", "basis", "anchor_block_ids"),
+)
+AUTHOR_IDENTITY_FRONT_MATTER_SCHEMA = _closed(
+    {
+        **AUTHOR_IDENTITY_SCHEMA["properties"],
+        "anchor_front_matter_ids": _STRING_IDS,
     },
     ("authors", "confidence", "basis", "anchor_block_ids"),
 )
@@ -753,10 +763,12 @@ def author_identity_prompt(
     auto_candidates: Sequence[Mapping[str, Any]],
     block_access: Sequence[Mapping[str, Any]] = (),
     front_matter_evidence: Sequence[Mapping[str, Any]] = (),
+    structured_front_matter: Sequence[Mapping[str, Any]] = (),
     version: str = AUTHOR_IDENTITY_PROMPT_VERSION,
 ) -> str:
     if version not in {
         AUTHOR_IDENTITY_PROMPT_VERSION,
+        HISTORICAL_AUTHOR_IDENTITY_PROMPT_VERSION_V4,
         HISTORICAL_AUTHOR_IDENTITY_PROMPT_VERSION_V3,
     }:
         raise ValueError("unsupported author identity prompt contract")
@@ -767,7 +779,7 @@ def author_identity_prompt(
         embedded evidence is insufficient, return an empty, non-high-confidence
         result.
         """
-        if version == AUTHOR_IDENTITY_PROMPT_VERSION
+        if version != HISTORICAL_AUTHOR_IDENTITY_PROMPT_VERSION_V3
         else """
         Prefer the bounded front-matter line ranges in `block_access`. If they
         are insufficient, use a precise search or inspect a complete relevant
@@ -781,10 +793,26 @@ def author_identity_prompt(
         "block_access": [dict(item) for item in block_access],
         "source_inputs": _source_input_manifest(),
     }
-    if version == AUTHOR_IDENTITY_PROMPT_VERSION:
+    if version != HISTORICAL_AUTHOR_IDENTITY_PROMPT_VERSION_V3:
         payload["front_matter_evidence"] = [
             dict(item) for item in front_matter_evidence
         ]
+    anchor_instruction = "Every anchor must be a real source block ID."
+    if version == AUTHOR_IDENTITY_PROMPT_VERSION:
+        payload["structured_front_matter"] = [
+            dict(item) for item in structured_front_matter
+        ]
+        evidence_instruction = evidence_instruction.replace(
+            "in `front_matter_evidence`.",
+            "in `front_matter_evidence` and `structured_front_matter`.",
+        )
+        anchor_instruction = (
+            "Use anchor_block_ids only for real source block IDs. For authored "
+            "metadata, use anchor_front_matter_ids with the exact front_matter_id "
+            "from structured_front_matter; these IDs are not block IDs. Preserve "
+            "the source author order. At least one valid source or front-matter "
+            "anchor must support a high-confidence attribution."
+        )
     return _prompt(
         version,
         f"""
@@ -799,7 +827,7 @@ def author_identity_prompt(
         source anchors that support a high-confidence attribution. Explain the
         basis even when authors is empty. Never invent source block IDs.
         {evidence_instruction}
-        Every anchor must be a real source block ID. If the
+        {anchor_instruction} If the
         inspected source does not establish authorship, return an empty,
         non-high-confidence result.
         """,
@@ -867,6 +895,7 @@ __all__ = [
     "AUTHOR_IDENTITY_PROMPT_VERSION",
     "HISTORICAL_AUTHOR_IDENTITY_PROMPT_VERSION_V3",
     "AUTHOR_IDENTITY_SCHEMA",
+    "AUTHOR_IDENTITY_FRONT_MATTER_SCHEMA",
     "CHAPTER_GUIDE_PROMPT_VERSION",
     "CHAPTER_GUIDE_PROPOSAL_SCHEMA",
     "CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA",

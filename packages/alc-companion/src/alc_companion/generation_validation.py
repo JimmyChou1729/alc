@@ -29,6 +29,7 @@ def validate_author_identity(
     value: Any,
     *,
     block_ids: Sequence[str],
+    front_matter_ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Validate a conservative publication-author attribution.
 
@@ -37,9 +38,16 @@ def validate_author_identity(
     trying to rank or repair names.
     """
 
+    fields = {"authors", "confidence", "basis", "anchor_block_ids"}
+    if (
+        front_matter_ids is not None
+        and isinstance(value, Mapping)
+        and "anchor_front_matter_ids" in value
+    ):
+        fields.add("anchor_front_matter_ids")
     result = _exact(
         value,
-        {"authors", "confidence", "basis", "anchor_block_ids"},
+        fields,
         "author identity",
     )
     confidence = result["confidence"]
@@ -56,6 +64,14 @@ def validate_author_identity(
             "source_anchor_invalid",
             "author identity anchors must be existing block IDs",
         )
+    metadata_anchors = _string_ids(
+        result.get("anchor_front_matter_ids", []), "author front-matter anchors"
+    )
+    if any(anchor not in set(front_matter_ids or ()) for anchor in metadata_anchors):
+        raise CompanionContentError(
+            "source_anchor_invalid",
+            "author identity front-matter anchors must be supplied metadata IDs",
+        )
     if confidence != "high" and authors:
         raise CompanionContentError(
             "author_identity_uncertain",
@@ -66,7 +82,7 @@ def validate_author_identity(
             "author_identity_invalid",
             "high-confidence author identity requires at least one author",
         )
-    if confidence == "high" and not anchors:
+    if confidence == "high" and not (anchors or metadata_anchors):
         raise CompanionContentError(
             "source_anchor_invalid",
             "high-confidence author identity requires source anchors",
@@ -76,6 +92,10 @@ def validate_author_identity(
         "confidence": confidence,
         "basis": _nonempty(result["basis"], "author identity basis"),
         "anchor_block_ids": anchors,
+        **(
+            {"anchor_front_matter_ids": metadata_anchors}
+            if "anchor_front_matter_ids" in result else {}
+        ),
     }
 
 

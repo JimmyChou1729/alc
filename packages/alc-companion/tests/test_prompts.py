@@ -27,7 +27,7 @@ def test_author_identity_prompt_embeds_bounded_front_matter_evidence() -> None:
         ],
     )
 
-    assert AUTHOR_IDENTITY_PROMPT_VERSION.endswith(".v4")
+    assert AUTHOR_IDENTITY_PROMPT_VERSION.endswith(".v5")
     assert '"block_id":"block-author"' in prompt
     assert '"text":"Ada Example, Example Institute."' in prompt
     assert "Do not request a host action" in prompt

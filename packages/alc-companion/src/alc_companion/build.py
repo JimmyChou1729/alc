@@ -135,6 +135,7 @@ from .model_source import (
 )
 from .prompts import (
     AUTHOR_IDENTITY_PROMPT_VERSION,
+    AUTHOR_IDENTITY_FRONT_MATTER_SCHEMA,
     AUTHOR_IDENTITY_SCHEMA,
     CHAPTER_GUIDE_PROPOSAL_SCHEMA,
     CHAPTER_GUIDE_REVIEW_AUDIT_SCHEMA,
@@ -370,7 +371,13 @@ class CompanionBuildHandler:
                 raise CompanionContentError(
                     "reader_labels_invalid", str(exc)
                 ) from exc
-            identity = resolve_document_identity(source)
+            identity = resolve_document_identity(
+                source,
+                include_front_matter=(
+                    self.recipe.author_identity_prompt
+                    == AUTHOR_IDENTITY_PROMPT_VERSION
+                ),
+            )
             title = identity.title or reader_labels["untitled_document"]
             self._ensure_partial_reader(
                 context,
@@ -909,11 +916,22 @@ class CompanionBuildHandler:
 
         if self.request.authors:
             return tuple(self.request.authors)
+        use_front_matter = (
+            self.recipe.author_identity_prompt == AUTHOR_IDENTITY_PROMPT_VERSION
+        )
+        metadata_evidence = (
+            _structured_author_evidence(source) if use_front_matter else ()
+        )
+        front_matter_ids = (
+            [entry["front_matter_id"] for entry in metadata_evidence]
+            if use_front_matter else None
+        )
         existing = context.artifacts.find(_AUTHOR_IDENTITY_ARTIFACT)
         if existing is not None:
             value = validate_author_identity(
                 read_json(context, existing, "author identity"),
                 block_ids=[item.block_id for item in source.blocks],
+                front_matter_ids=front_matter_ids,
             )
             return (
                 tuple(value["authors"])
@@ -953,13 +971,18 @@ class CompanionBuildHandler:
                     source,
                     block_ids=author_block_ids,
                 ),
+                structured_front_matter=metadata_evidence,
                 version=getattr(
                     self.recipe,
                     "author_identity_prompt",
                     AUTHOR_IDENTITY_PROMPT_VERSION,
                 ),
             ),
-            JsonOutput(AUTHOR_IDENTITY_SCHEMA, repair="format"),
+            JsonOutput(
+                AUTHOR_IDENTITY_FRONT_MATTER_SCHEMA if use_front_matter
+                else AUTHOR_IDENTITY_SCHEMA,
+                repair="format",
+            ),
             self.recipe.model,
             inputs=inputs,
         )
@@ -974,6 +997,7 @@ class CompanionBuildHandler:
                 "anchor_block_ids": [],
             },
             block_ids=[item.block_id for item in source.blocks],
+            front_matter_ids=front_matter_ids,
         )
         outcome = execute_semantically_validated_task(
             self.task_service,
@@ -984,6 +1008,7 @@ class CompanionBuildHandler:
             validate=lambda raw: validate_author_identity(
                 raw,
                 block_ids=[item.block_id for item in source.blocks],
+                front_matter_ids=front_matter_ids,
             ),
             resume_input=resume_input,
             options=self.llm_options,
@@ -3385,6 +3410,36 @@ def _companion_llm_options(
         execution.llm,
         runtime_environment=AcRuntimeEnvironment(values),
     )
+
+
+def _structured_author_evidence(
+    source: RichDocument, *, max_bytes: int = 12_000,
+) -> tuple[dict[str, Any], ...]:
+    from ac_document import source_front_matter
+
+    front_matter = source_front_matter(source)
+    if front_matter is None:
+        return ()
+    evidence: list[dict[str, Any]] = []
+    for entry in front_matter["entries"]:
+        projected = {
+            "front_matter_id": entry["front_matter_id"],
+            "basis": "metadata.source_front_matter",
+            "locator": dict(entry["locator"]),
+            "authors": [
+                {
+                    key: author[key]
+                    for key in ("author_id", "name", "selector", "source_id")
+                }
+                for author in entry["authors"]
+            ],
+        }
+        # Keep an author group complete: truncating its names can silently
+        # turn a partial attribution into a high-confidence publication byline.
+        if len(canonical_json_bytes([*evidence, projected])) > max_bytes:
+            break
+        evidence.append(projected)
+    return tuple(evidence)
 
 
 def _author_front_matter_evidence(
