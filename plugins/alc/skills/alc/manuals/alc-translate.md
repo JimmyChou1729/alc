@@ -32,6 +32,14 @@ verified local Markdown, HTML, or flattened TeX document.
 The three generation commands use `ac-llm`; `get-result`, status, and
 validation only read existing project state.
 
+Currency amounts remain translatable prose; literal dollar signs are escaped
+when writing Markdown, while explicit source formulas retain their math
+identity. Existing accepted translations and frozen atom plans are not
+rewritten after an upgrade. To verify a currency-parsing fix against a previous
+delivery, retain that run as evidence and generate a new translation project
+from the same original source. Do not edit accepted artifacts or reset their
+digests to make an old run appear corrected.
+
 Every command returns a typed JSON envelope. Check top-level `status`,
 `warnings`, and `error` before using fields under `data`.
 

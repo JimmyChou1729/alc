@@ -17,6 +17,7 @@ from .source import (
     TranslationSourceError,
     _bibliography_entry_label,
     _compact_inline_text,
+    _escape_currency_dollars,
     _markdown_link_details,
     _markdown_math_spans,
     _normalize_markdown_text,
@@ -735,7 +736,7 @@ def _render_parts(
     rendered: list[str] = []
     for part in parts:
         if part["kind"] == "text":
-            rendered.append(str(part["text"]))
+            rendered.append(_escape_currency_dollars(str(part["text"])))
             continue
         atom = expected[str(part["atom_id"])]
         if part["kind"] == "atom":
@@ -751,7 +752,8 @@ def _render_parts(
         if label == source_label:
             rendered.append(str(payload["source_markdown"]))
         else:
-            rendered.append(f"[{_escape_link_label(label)}]{payload['suffix']}")
+            label = _escape_currency_dollars(_escape_link_label(label))
+            rendered.append(f"[{label}]{payload['suffix']}")
     return "".join(rendered)
 
 
@@ -1029,7 +1031,7 @@ def _translation_surface(block: Mapping[str, Any]) -> str:
             value = block_text(block)
         except TranslationSourceError as exc:
             raise ProtectedAtomError(exc.code, str(exc), exc.details) from exc
-    return _normalize_markdown_text(value)
+    return _escape_currency_dollars(_normalize_markdown_text(value))
 
 
 def _block_id(block: Mapping[str, Any]) -> str:
