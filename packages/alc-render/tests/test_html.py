@@ -2744,17 +2744,24 @@ function clonedRoot() {
     dataset: {},
     classList: {remove: function () {}}
   };
+  var status = {
+    textContent: "Synchronizing latest content…",
+    hidden: false
+  };
   var surfaces = {
     body: body,
     "#ac-document": emptySurface(),
     "#alc-book-header": emptySurface(),
-    "#alc-contents-list": emptySurface()
+    "#alc-contents-list": emptySurface(),
+    "#alc-storage-status": status
   };
   return {
     querySelector: function (selector) { return surfaces[selector] || null; },
     querySelectorAll: function () { return []; },
     get outerHTML() {
       return '<html data-reader-snapshot="' + snapshot + '"><body>' +
+        '<p id="alc-storage-status"' + (status.hidden ? ' hidden' : '') +
+        '>' + status.textContent + '</p>' +
         '<script id="alc-render-payload" type="application/json">{}</script>' +
         '</body></html>';
     }
@@ -2782,6 +2789,10 @@ var second = helpers.buildStandaloneExportHtml();
 assert(first.includes('data-reader-snapshot="first"'), "first snapshot was not captured");
 assert(second.includes('data-reader-snapshot="second"'), "second export reused the first snapshot");
 assert(!second.includes('data-reader-snapshot="first"'), "stale snapshot survived the second export");
+assert(first.includes('<p id="alc-storage-status" hidden></p>'), "first export kept a transient status");
+assert(second.includes('<p id="alc-storage-status" hidden></p>'), "second export kept a transient status");
+assert(!first.includes("Synchronizing latest content"), "first export serialized loading text");
+assert(!second.includes("Synchronizing latest content"), "second export serialized loading text");
 '''
     )
     completed = subprocess.run(
