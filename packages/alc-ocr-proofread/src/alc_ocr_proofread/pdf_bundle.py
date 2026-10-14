@@ -1360,13 +1360,23 @@ def _visible_text(fragment: str) -> str:
     for node in soup.find_all("math"):
         node.replace_with("$" + str(node.get("alttext") or node.get_text()) + "$")
     for node in soup.find_all("img"):
-        node.replace_with(str(node.get("alt") or ""))
+        alt = str(node.get("alt") or "")
+        figure = node.find_parent("figure")
+        if figure is None:
+            node.replace_with(alt)
+            continue
+        caption = figure.find("figcaption", recursive=False)
+        # Host bundles may repeat a caption verbatim as the full-page image alt.
+        # Only exact duplicates are redundant; diagram descriptions remain useful.
+        if caption is not None and alt.strip() == caption.get_text().strip():
+            alt = ""
+        node.replace_with(alt + "\n" if alt.strip() else "")
     for node in soup.find_all("br"):
         node.replace_with("\n")
     for node in soup.find_all(("td", "th")):
         node.append("\t")
     for node in soup.find_all(
-        ("p", "li", "tr", "figcaption", "pre", "h1", "h2", "h3", "h4", "h5", "h6")
+        ("p", "li", "tr", "caption", "figcaption", "pre", "h1", "h2", "h3", "h4", "h5", "h6")
     ):
         node.append("\n")
     return soup.get_text().strip()

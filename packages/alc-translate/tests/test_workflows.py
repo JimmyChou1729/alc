@@ -5177,3 +5177,127 @@ def test_split_unit_partial_slots_reach_original_fragment(tmp_path):
     original_revision = next(r for r in revisions if r.anchor.target_id == target["block_id"])
     assert list(original_revision.provenance["partial_source_text_slot_ids"]) == slot_ids
     assert "translation_fallback" not in original_revision.provenance
+
+
+def test_host_roundtrip_all_translation_stages(tmp_path):
+    from types import SimpleNamespace
+    from ac_llm import (
+        HostAuthority,
+        HostCoordinator,
+        HostTaskService,
+        LLMExecutionOptions,
+    )
+    from alc_translate import ExecutionOptions
+
+    source = _source(tmp_path)
+    root = tmp_path / "host-jobs"
+    service = TranslationService(root)
+    host = HostTaskService()
+    oracle = TextSlotOnlyTasks()
+    execution = ExecutionOptions(
+        llm=LLMExecutionOptions(
+            host_coordinator=HostCoordinator(
+                "offline-translator", default_provider="host"
+            ),
+            host_authority=HostAuthority.UNRESTRICTED,
+        )
+    )
+    recipe = GenerationRecipe(model=ModelSelection(provider="host"))
+    keywords = FakeKeywords([_term("term-1", "Entropy")])
+    submitted = []
+
+    def finish(snapshot):
+        run_id = snapshot.run_id
+        snapshot = service.execute(
+            run_id, execution=execution, keyword_provider=keywords
+        )
+        for _ in range(20):
+            if snapshot.status is RunStatus.SUCCEEDED:
+                break
+            assert snapshot.status is RunStatus.PAUSED, snapshot.error
+            tasks = host.pending(run_root=root, run_id=run_id)
+            assert tasks
+            before = [(t["task_id"], t["request_sha256"]) for t in tasks]
+            snapshot = service.resume(
+                run_id, execution=execution, keyword_provider=keywords
+            )
+            assert snapshot.status is RunStatus.PAUSED
+            assert [
+                (t["task_id"], t["request_sha256"])
+                for t in host.pending(run_root=root, run_id=run_id)
+            ] == before
+            for row in tasks:
+                task = host.export(run_root=root, run_id=run_id, task_id=row["task_id"])
+                request = SimpleNamespace(
+                    prompt=task["request"]["task_prompt"],
+                    output=SimpleNamespace(schema={}),
+                )
+                output = oracle.execute_or_resume(None, request).value
+                response = {
+                    "schema_version": "ac.llm.host_response.v1",
+                    "task_id": task["task_id"],
+                    "request_sha256": task["request_sha256"],
+                    "actor": {
+                        "actor_id": "fixture",
+                        "kind": "fake",
+                        "context_id": task["task_id"],
+                    },
+                    "output": output,
+                }
+                assert not host.submit(run_root=root, run_id=run_id, response=response)[
+                    "reused"
+                ]
+                assert host.submit(run_root=root, run_id=run_id, response=response)[
+                    "reused"
+                ]
+                submitted.append(response)
+            snapshot = service.resume(
+                run_id, execution=execution, keyword_provider=keywords
+            )
+        assert snapshot.status is RunStatus.SUCCEEDED, snapshot
+        completed_count = len(
+            host.pending(run_root=root, run_id=run_id, include_completed=True)
+        )
+        assert (
+            service.resume(
+                run_id, execution=execution, keyword_provider=keywords
+            ).status
+            is RunStatus.SUCCEEDED
+        )
+        assert (
+            len(host.pending(run_root=root, run_id=run_id, include_completed=True))
+            == completed_count
+        )
+        return snapshot
+
+    language = finish(
+        service.prepare_language(LanguageRequest(source, "fr"), recipe=recipe)
+    )
+    glossary = finish(
+        service.prepare_glossary(
+            GlossaryRequest(source, "fr", 50, service.result_source(language.run_id)),
+            recipe=recipe,
+        )
+    )
+    blocks = finish(
+        service.prepare_blocks(
+            BlocksRequest(
+                source,
+                "fr",
+                service.result_source(language.run_id),
+                service.result_source(glossary.run_id),
+            ),
+            recipe=recipe,
+        )
+    )
+    assert {
+        LANGUAGE_PROMPT_VERSION,
+        GLOSSARY_PROMPT_VERSION,
+        TRANSLATION_PROMPT_VERSION,
+        REVIEW_PROMPT_VERSION,
+    } <= set(oracle.calls)
+    assert len({r["task_id"] for r in submitted}) == len(submitted)
+    result = service.result(blocks.run_id)
+    assert result.coverage == "document"
+    assert len(result.revision_artifacts) == len(source_blocks(source))
+    assert keywords.calls == 1

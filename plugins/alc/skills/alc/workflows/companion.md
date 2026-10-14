@@ -62,6 +62,11 @@ alc-companion build <bundle-dir>/source.html \
 Companion verifies that the explicit source path and bytes match the manifest;
 do not copy, rename, or substitute that source between acquisition and build.
 
+If acquisition reports `remote_host_unresolved`, explain the local DNS/direct
+HTTPS requirement. A working host proxy download is a separate route: follow
+`manuals/ac-document.md` to preserve original HTML and images and use local
+import. Do not retry indefinitely or describe local import as a passed URL test.
+
 When the user explicitly requests OCR proofreading and supplies source
 Markdown, original PDF, and MinerU content-list JSON, first complete
 `workflows/ocr-proofread.md` in this same project root. Use its validated
@@ -95,6 +100,13 @@ alc-companion build <source-path> \
   --workers <workers>
 ```
 
+For Work/dot Host execution, configure `manuals/host-execution.md` first and
+use `--provider host`. Omit model and effort to inherit the actual host defaults.
+Set `fresh_context=true` only when independent contexts are available: Companion
+uses separate guide/reviewer workers and cannot replace them with role labels in
+one conversation. Follow Host export/submit/owning-resume on each pause.
+
+The following native-provider preflight applies only when launching a CLI model.
 Before requesting host execution for a new build whose provider is `auto`,
 resolve it in the ordinary command sandbox:
 
@@ -112,7 +124,7 @@ to the durable build and is frozen in its recipe. For `resume`, read the exact
 frozen provider/model from `status` and include them in the host-tool
 `justification`; never alter the recipe.
 
-Before starting a new model-backed build, resolve and freeze both the exact
+For a native-provider build, resolve and freeze both the exact
 model and effort, then announce them once in commentary without waiting for a
 reply. This is a non-blocking parameter disclosure, not an approval checkpoint.
 When neither value was supplied by the user and the Codex defaults resolve to
@@ -166,6 +178,8 @@ the exact read-only `ac-document` source and frozen-translation commands it
 declares. Unknown commands, writes, network access, and another source identity
 remain durable refusals or pauses.
 
+For a new build, the coordinator-aware resolver selects `--provider auto`
+according to the declared route. Host records `inherit` when no model is chosen.
 The build resolves `--provider auto` to one exact provider and model before it
 creates the durable recipe. Read the frozen values from status and keep them
 for every retry and resume. Never switch providers, create a fallback run, or

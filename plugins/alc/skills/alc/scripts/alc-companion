@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+export ALC_COMPANION_RESEARCH_HOST="${ALC_COMPANION_RESEARCH_HOST-$script_dir/companion-research-host}"
+exec "$script_dir/alc-runtime" alc-companion "$@"

@@ -8,12 +8,13 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from urllib.parse import unquote, urlsplit
 
-from ac_document import RichBlockKind, RichDocument
+from ac_document import RichBlockKind, RichDocument, source_front_matter
 
 
 _AUTHOR_BASES = {
     "metadata.authors",
     "metadata.author",
+    "metadata.source_front_matter",
     "document.byline",
     "none",
 }
@@ -60,12 +61,16 @@ class DocumentIdentity:
         object.__setattr__(self, "candidate_authors", authors)
 
 
-def resolve_document_identity(document: RichDocument) -> DocumentIdentity:
+def resolve_document_identity(
+    document: RichDocument, *, include_front_matter: bool = True,
+) -> DocumentIdentity:
     """Resolve deterministic title and conservative, unconfirmed authors."""
 
     if not isinstance(document, RichDocument):
         raise TypeError("document must be a RichDocument")
-    candidates, basis = _author_candidates(document)
+    candidates, basis = _author_candidates(
+        document, include_front_matter=include_front_matter
+    )
     return DocumentIdentity(
         title=_document_title(document),
         candidate_authors=candidates,
@@ -106,12 +111,23 @@ def _document_title(document: RichDocument) -> str:
 
 
 def _author_candidates(
-    document: RichDocument,
+    document: RichDocument, *, include_front_matter: bool,
 ) -> tuple[tuple[str, ...], str]:
     for key in ("authors", "author"):
         candidates = _metadata_authors(document.metadata.get(key))
         if candidates:
             return candidates, f"metadata.{key}"
+
+    if include_front_matter:
+        front_matter = source_front_matter(document)
+        if front_matter is not None:
+            candidates = _normalize_authors(
+                author["name"]
+                for entry in front_matter["entries"]
+                for author in entry["authors"]
+            )
+            if candidates:
+                return candidates, "metadata.source_front_matter"
 
     for block in document.blocks[:_BYLINE_SCAN_BLOCKS]:
         text = block.payload.get("text")

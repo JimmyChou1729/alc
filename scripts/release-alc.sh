@@ -120,6 +120,7 @@ for path in projects:
     updates.append((path, updated_text, init_path, updated_init))
 
 for path in (
+    root / "plugins/alc/plugin.json",
     root / "plugins/alc/.codex-plugin/plugin.json",
     root / "plugins/alc/.claude-plugin/plugin.json",
 ):

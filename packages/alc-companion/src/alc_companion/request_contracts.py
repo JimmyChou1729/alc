@@ -17,8 +17,12 @@ from ac_document import (
     rich_document_from_document,
     rich_document_to_document,
 )
-from ac_llm import ExecutionLimits, LLMExecutionOptions, ModelSelection
-from ac_llm.config import resolve_model_selection
+from ac_llm import (
+    ExecutionLimits,
+    LLMExecutionOptions,
+    ModelSelection,
+    resolve_execution_model,
+)
 
 from .prompts import (
     AUTHOR_IDENTITY_PROMPT_VERSION,
@@ -27,6 +31,7 @@ from .prompts import (
     EDITORIAL_PROPOSER_PROMPT_VERSION,
     EDITORIAL_REVIEWER_PROMPT_VERSION,
     HISTORICAL_AUTHOR_IDENTITY_PROMPT_VERSION_V3,
+    HISTORICAL_AUTHOR_IDENTITY_PROMPT_VERSION_V4,
     HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V16,
     HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V17,
     HISTORICAL_CHAPTER_GUIDE_PROMPT_VERSION_V18,
@@ -293,6 +298,7 @@ class CompanionGenerationRecipe:
             "author_identity_prompt": {
                 AUTHOR_IDENTITY_PROMPT_VERSION,
                 HISTORICAL_AUTHOR_IDENTITY_PROMPT_VERSION_V3,
+                HISTORICAL_AUTHOR_IDENTITY_PROMPT_VERSION_V4,
             },
             "chapter_guide_prompt": {
                 CHAPTER_GUIDE_PROMPT_VERSION,
@@ -363,6 +369,8 @@ class CompanionExecutionOptions:
 
 def freeze_generation_recipe(
     recipe: CompanionGenerationRecipe,
+    *,
+    options: LLMExecutionOptions | None = None,
 ) -> CompanionGenerationRecipe:
     """Resolve an automatic model exactly once for durable run identity."""
 
@@ -376,7 +384,7 @@ def freeze_generation_recipe(
             recipe,
             model=replace(recipe.model, reasoning_effort="medium"),
         )
-    resolved = resolve_model_selection(recipe.model)
+    resolved = resolve_execution_model(recipe.model, options=options)
     reasoning_effort = resolved.reasoning_effort
     if resolved.provider == "codex" and reasoning_effort is None:
         reasoning_effort = "medium"

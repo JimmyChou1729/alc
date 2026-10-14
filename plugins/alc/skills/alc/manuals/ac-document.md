@@ -67,6 +67,28 @@ alc-companion build <materialization-dir>/source.html \
 Use this Foundation route for supplied URLs, matching Local Web. Optional ARC
 discovery or enrichment does not automatically replace the source bundle.
 
+The current acquisition transport requires local DNS resolution and direct
+HTTPS access; it does not use environment HTTP proxies. A
+`remote_host_unresolved` result means local name resolution failed, not that
+the article is missing or that installing dependencies will fix access.
+Explain that distinction to the user rather than repeatedly retrying the same
+route. Do not disable public-target or redirect checks.
+
+If the host already offers an authorized download route, it may save the
+original HTML and referenced images locally, preserving their relative paths.
+Record the source URL, retrieval method and file hashes separately, then use
+the normal local-file entrypoint:
+
+```bash
+alc-companion build /absolute/path/source.html \
+  --project-dir /absolute/path/project --target-language zh-CN \
+  --host-authority unknown
+```
+
+This verifies the local HTML workflow, not successful URL acquisition. Do not
+invent an `--html-source-manifest`, rewrite the source into Markdown, or use
+the workaround to bypass a host access denial. Report any missing images.
+
 Build an approximate durable keyword inventory from a local source:
 
 ```bash
@@ -140,9 +162,18 @@ supports Windows. The supported engine is MinerU 3.4.5 pipeline / API protocol 2
    Absence from PATH does not mean MinerU is uninstalled; isolated virtual
    environments commonly expose it only through an absolute executable path.
 
+### Host PDF recognition
+
+In Work/dot without configured MinerU, use `host-pdf.md` when the host can inspect
+page images. This creates the same neutral PDF source bundle with Host provenance
+and requires no MinerU installation. Preserve explicit MinerU selections and
+existing job configuration. Host recognition is not OCR proofreading; verify
+actual page fidelity separately from machine-contract validation.
+
 ### Missing runtime or configuration
 
-When both configuration locations are absent, offer four choices:
+When both configuration locations are absent and Host recognition is unavailable
+or not selected, offer four choices:
 1. Let Agent install and configure MinerU automatically.
 2. Provide an existing local executable.
 3. Connect a compatible MinerU service.

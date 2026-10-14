@@ -17,7 +17,11 @@ model-request JSON. Companion automatically executes only these predeclared
 read-only `ac-document` commands through a bounded host broker; unknown
 commands, writes, network access, and another source identity are refused.
 Author verification receives bounded front-matter evidence directly and does
-not require a host read during an ordinary build.
+not require a host read during an ordinary build. This includes structured
+source author metadata and its original locators, even when the byline is not a
+body block. Metadata anchors remain distinct from body block IDs. Uncertain
+attributions remain empty; existing runs retain their frozen author-verification
+contract on resume.
 
 Guide writing uses `ac-proposer-reviewer`. A reviewer may accept a strong
 proposal immediately or give concrete, constructive suggestions for up to two

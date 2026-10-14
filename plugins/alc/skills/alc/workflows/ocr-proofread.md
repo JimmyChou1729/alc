@@ -11,6 +11,12 @@ disagrees with the PDF page range, stop before any model call; never infer or
 repair alignment. Use the user-supplied project directory as the project root
 itself. Inside this checkout, use one stable ignored path under `local/`.
 
+For a Host-recognized PDF bundle, use the native bundle commands in
+`manuals/alc-ocr-proofread.md`; do not fabricate a MinerU content-list to enter
+this legacy Markdown workflow. For Host proofreading, read `host-execution.md`.
+Dispatch no more page tasks than the host can handle; a Python worker setting
+does not create subagents or prove vision capability.
+
 ## Phase 2: Run
 
 ```bash

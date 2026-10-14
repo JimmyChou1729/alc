@@ -67,3 +67,48 @@ def test_rejects_page_map_outside_pdf(tmp_path: Path, monkeypatch) -> None:
 
     with pytest.raises(ProofreadSourceError, match="exceeds"):
         load_mineru_source(markdown, pdf, content)
+
+
+@pytest.mark.parametrize("bundle", [False, True])
+def test_host_pause_generation_and_status_keep_task_location(
+    tmp_path, monkeypatch, bundle,
+):
+    from types import SimpleNamespace
+    from ac_jobs import Awaiting, ResumeReason, RunSnapshot, RunStatus
+    from alc_ocr_proofread import cli, pdf_bundle_cli
+    from alc_ocr_proofread.project import ProofreadProject
+
+    project = ProofreadProject.open(tmp_path / "project")
+    project.select("legacy-host-run")
+    snapshot = RunSnapshot(
+        "legacy-host-run", 2, RunStatus.PAUSED, 1,
+        "2026-09-01T00:00:00Z", "2026-09-01T00:01:00Z",
+        awaiting=Awaiting(
+            ResumeReason.EXTERNAL_CONDITION, "host:page", False,
+            details={"code": "awaiting_host", "host_task_id": "page-task"},
+        ),
+    )
+    service = SimpleNamespace(
+        project=project, repository=SimpleNamespace(root=project.jobs_root),
+        inspect=lambda _run_id: SimpleNamespace(snapshot=snapshot),
+        resume=lambda *_args, **_kwargs: snapshot,
+        metrics=lambda _run_id: {},
+    )
+    if bundle:
+        monkeypatch.setattr(pdf_bundle_cli, "PDFBundleProofreadService", lambda _root: service)
+        generated = pdf_bundle_cli.dispatch(SimpleNamespace(
+            command="resume-bundle", project_dir=str(project.root),
+            run_id=snapshot.run_id, input=None,
+        ))
+        status = pdf_bundle_cli.dispatch(SimpleNamespace(
+            command="status-bundle", project_dir=str(project.root), run_id=snapshot.run_id,
+        ))
+    else:
+        monkeypatch.setattr(cli, "ProofreadService", lambda _project: service)
+        generated = cli._generation_result(service, snapshot)
+        status = cli._dispatch(SimpleNamespace(command="status", project_dir=str(project.root)))
+    expected = {"code": "awaiting_host", "host_task_id": "page-task",
+                "run_root": str(project.jobs_root), "run_id": snapshot.run_id}
+    assert generated.resume.details == expected
+    assert status.data["run"]["resume"]["details"] == expected
+    assert "run_root" not in snapshot.awaiting.details

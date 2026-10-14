@@ -924,7 +924,7 @@ def test_prepare_resolves_model_once_and_binds_run_id_to_stored_recipe(
     resolved_models = iter(("model-a", "model-b"))
     calls: list[ModelSelection] = []
 
-    def resolve(selection: ModelSelection) -> ModelSelection:
+    def resolve(selection: ModelSelection, **kwargs) -> ModelSelection:
         calls.append(selection)
         return ModelSelection(
             provider="codex",
@@ -933,7 +933,7 @@ def test_prepare_resolves_model_once_and_binds_run_id_to_stored_recipe(
         )
 
     monkeypatch.setattr(
-        request_contracts, "resolve_model_selection", resolve
+        request_contracts, "resolve_execution_model", resolve
     )
     request = CompanionBuildRequest(
         _document(tmp_path), target_language="zh-CN"
@@ -3020,3 +3020,136 @@ def test_failed_recovery_then_pause_preserves_research_request(tmp_path, monkeyp
     # One remaining chapter may need its first preparation, but the paused
     # chapter must keep its existing preparation and proposer request.
     assert tasks.counts[REFERENCE_PREPARATION_VERSION] <= preparations + 1
+
+
+@pytest.mark.parametrize("fresh_context", [True, False])
+def test_host_guides_and_reviews_resume_same_build(tmp_path, fresh_context):
+    from types import SimpleNamespace
+    from ac_llm import HostAuthority, HostCoordinator, HostTaskService
+
+    root = tmp_path / "host-jobs"
+    service = CompanionService(root)
+    host = HostTaskService()
+    oracle = FakeGuideTasks(reviewer_stop_round=1)
+    execution = CompanionExecutionOptions(
+        workers=1,
+        pipeline_chapters=False,
+        preload_chapter_evidence=False,
+        document_cache_root=tmp_path / "paper",
+        llm=LLMExecutionOptions(
+            host_coordinator=HostCoordinator(
+                "offline-companion",
+                default_provider="host",
+                fresh_context=fresh_context,
+            ),
+            host_authority=HostAuthority.UNRESTRICTED,
+        ),
+    )
+    prepared = service.prepare(
+        CompanionBuildRequest(_document(tmp_path), target_language="zh-CN"),
+        execution=execution,
+    )
+    assert prepared.run_id == companion_run_id(
+        CompanionBuildRequest(_document(tmp_path), target_language="zh-CN"),
+        None,
+        execution=execution,
+    )
+    _, frozen = decode_handler_semantic_input(
+        service.repository.read_spec(prepared.run_id).semantic_input
+    )
+    assert frozen.model.provider == "host"
+    assert frozen.model.model == "inherit"
+    assert frozen.model.reasoning_effort is None
+
+    class AnchoredTranslation(FakeTranslationAdapter):
+        def build_glossary(self, *args, **kwargs):
+            value = super().build_glossary(*args, **kwargs)
+            value["entries"] = [
+                item for item in value["entries"] if item["occurrence_count"]
+            ]
+            return value
+
+    translation = AnchoredTranslation(mode="enabled")
+    snapshot = service.execute(
+        prepared.run_id, execution=execution, translation_adapter=translation
+    )
+    completed = []
+    for _ in range(20):
+        if snapshot.status is RunStatus.SUCCEEDED:
+            break
+        assert snapshot.status is RunStatus.PAUSED, snapshot.error
+        rows = host.pending(run_root=root, run_id=prepared.run_id)
+        if not rows and not fresh_context:
+            assert (
+                snapshot.awaiting.details["provider_failure"]["detail_code"]
+                == "host_fresh_context_unavailable"
+            )
+            assert service.progress(prepared.run_id)["partial_reader_available"]
+            calls = list(translation.calls)
+            retry = service.resume(
+                prepared.run_id, execution=execution, translation_adapter=translation
+            )
+            assert retry.status is RunStatus.PAUSED
+            assert [c for c in translation.calls if c.startswith("translation:")] == [
+                c for c in calls if c.startswith("translation:")
+            ]
+            assert not oracle.counts[CHAPTER_GUIDE_PROMPT_VERSION]
+            return
+        assert rows
+        identities = [(r["task_id"], r["request_sha256"]) for r in rows]
+        snapshot = service.resume(
+            prepared.run_id, execution=execution, translation_adapter=translation
+        )
+        assert snapshot.status is RunStatus.PAUSED
+        assert [
+            (r["task_id"], r["request_sha256"])
+            for r in host.pending(run_root=root, run_id=prepared.run_id)
+        ] == identities
+        for row in rows:
+            task = host.export(
+                run_root=root, run_id=prepared.run_id, task_id=row["task_id"]
+            )
+            request = SimpleNamespace(
+                prompt=task["request"]["task_prompt"],
+                task_id=task["llm_task_id"],
+                inputs=[],
+            )
+            output = oracle.execute_or_resume(None, request).value
+            response = {
+                "schema_version": "ac.llm.host_response.v1",
+                "task_id": task["task_id"],
+                "request_sha256": task["request_sha256"],
+                "actor": {
+                    "actor_id": "fixture",
+                    "kind": "fake",
+                    "context_id": task["task_id"],
+                },
+                "output": output,
+                "isolation": "fresh_context",
+            }
+            host.submit(run_root=root, run_id=prepared.run_id, response=response)
+            assert host.submit(
+                run_root=root, run_id=prepared.run_id, response=response
+            )["reused"]
+            completed.append(response)
+        snapshot = service.resume(
+            prepared.run_id, execution=execution, translation_adapter=translation
+        )
+    assert snapshot.status is RunStatus.SUCCEEDED, snapshot
+    assert oracle.counts[CHAPTER_GUIDE_PROMPT_VERSION] == 2
+    assert oracle.counts[CHAPTER_GUIDE_REVIEW_PROMPT_VERSION] == 2
+    assert (
+        service.publication(prepared.run_id).reader_profile["delivery_ledger"][
+            "delivery_grade"
+        ]
+        == "complete"
+    )
+    assert (
+        service.resume(
+            prepared.run_id, execution=execution, translation_adapter=translation
+        ).status
+        is RunStatus.SUCCEEDED
+    )
+    assert len(
+        host.pending(run_root=root, run_id=prepared.run_id, include_completed=True)
+    ) == len(completed)

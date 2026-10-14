@@ -746,14 +746,19 @@ def _compact_inline_text(value: Mapping[str, Any]) -> str:
     if not spans:
         return str(value.get("text", ""))
     rendered: list[str] = []
-    for span in spans:
+    for ordinal, span in enumerate(spans):
         kind = str(span.get("kind"))
         if kind == "math" and "tex" in span:
             tex = str(span["tex"])
-            # Old LaTeX commonly embeds a math shift inside ``\mbox{...}``.
-            # Wrapping such TeX in another pair of dollar delimiters creates
-            # ambiguous Markdown, so use the equivalent parenthesized form.
-            if _contains_unescaped(tex, "$"):
+            # Numeric formulas can touch digits in adjacent prose; explicit
+            # delimiters preserve their identity without currency heuristics.
+            # They also disambiguate old LaTeX nested math shifts.
+            following = spans[ordinal + 1:ordinal + 2]
+            numeric_boundary = tex.lstrip()[:1].isdigit() and (
+                tex[-1:].isspace()
+                or bool(following and str(following[0].get("text", ""))[:1].isdigit())
+            )
+            if _contains_unescaped(tex, "$") or numeric_boundary:
                 rendered.append(f"\\({tex}\\)")
             else:
                 rendered.append(f"${tex}$")
@@ -1086,9 +1091,46 @@ def _markdown_math_spans(text: str) -> tuple[tuple[int, int, str], ...]:
         if end is None:
             index += len(delimiter)
             continue
+        if (
+            delimiter == "$"
+            and scanned_text[content_start:content_start + 1].isdigit()
+            and (
+                scanned_text[end - 1].isspace()
+                or scanned_text[end + 1:end + 2].isdigit()
+            )
+        ):
+            # A second price starts with a dollar; it does not close the first
+            # price as math. Resume at the next opener, including genuine math.
+            index = end
+            continue
         spans.append((index, end + len(closing), text[content_start:end]))
         index = end + len(closing)
     return tuple(spans)
+
+
+def _escape_currency_dollars(text: str) -> str:
+    """Keep monetary dollar signs literal when serializing prose to Markdown."""
+
+    if "$" not in text:
+        return text
+    protected = [(start, end) for start, end, _ in _markdown_math_spans(text)]
+    protected.extend(
+        (target_start, target_end)
+        for _, _, _, _, target_start, target_end in _markdown_link_details(
+            text, normalize=False
+        )
+    )
+    masked = _mask_markdown_inline_code(text)
+    return "".join(
+        "\\$"
+        if character == "$"
+        and text[index + 1:index + 2].isdigit()
+        and masked[index] == "$"
+        and not _is_escaped(text, index)
+        and not any(start <= index < end for start, end in protected)
+        else character
+        for index, character in enumerate(text)
+    )
 
 
 def _find_math_closing(

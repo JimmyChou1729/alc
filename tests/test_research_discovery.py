@@ -139,7 +139,9 @@ def test_private_python_does_not_change_arc_doctor_fingerprint(monkeypatch,tmp_p
 
 
 def test_plugin_entrypoint_provides_host_without_modifying_generated_launcher():
-    wrapper=(ROOT/'plugins/alc/bin/alc-companion').read_text()
+    entrypoint=(ROOT/'plugins/alc/bin/alc-companion').read_text()
+    assert 'exec "$script_dir/../skills/alc/scripts/alc-companion" "$@"' in entrypoint
+    wrapper=(ROOT/'plugins/alc/skills/alc/scripts/alc-companion').read_text()
     assert 'export ALC_COMPANION_RESEARCH_HOST=' in wrapper
     assert 'ALC_ARC_PAPER=' not in wrapper
     launcher=(ROOT/'plugins/alc/skills/alc/scripts/alc-runtime').read_text()
