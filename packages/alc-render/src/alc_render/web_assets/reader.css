@@ -176,6 +176,7 @@ button { cursor: pointer; }
   top: .45rem;
   left: .45rem;
   display: flex;
+  align-items: center;
   gap: .35rem;
 }
 .alc-tool-button,
@@ -205,6 +206,8 @@ button { cursor: pointer; }
 .alc-tool-icon-button {
   display: inline-grid;
   width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
   padding: .28rem;
   place-items: center;
 }
@@ -217,10 +220,13 @@ button { cursor: pointer; }
   stroke-linejoin: round;
   stroke-width: 1.8;
 }
-.alc-export-control { position: relative; }
-.alc-view-control { position: relative; }
-.alc-speech-control { position: relative; }
-.alc-settings-control { position: relative; }
+.alc-export-control,
+.alc-view-control,
+.alc-speech-control,
+.alc-settings-control {
+  position: relative;
+  display: flex;
+}
 .alc-view-panel,
 .alc-export-panel,
 .alc-speech-panel {

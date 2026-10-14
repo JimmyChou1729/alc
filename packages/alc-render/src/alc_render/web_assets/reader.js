@@ -11216,6 +11216,11 @@
     var root = document.documentElement.cloneNode(true);
     removeDeletedContentControls(root);
     stripLocalTtsRuntime(root);
+    var status = root.querySelector("#alc-storage-status");
+    if (status) {
+      status.textContent = "";
+      status.hidden = true;
+    }
     var body = root.querySelector("body");
     var readingArea = root.querySelector("#ac-document");
     var header = root.querySelector("#alc-book-header");

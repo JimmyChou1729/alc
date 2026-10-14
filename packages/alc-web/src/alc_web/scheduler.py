@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -91,9 +92,19 @@ class Scheduler:
                         active += 1
             except Exception as exc:
                 # Keep the supervisor alive; a later iteration can recover admission.
-                self.store.save_setting(
-                    "scheduler_error", {"type": type(exc).__name__, "at": time.time()}
+                logging.getLogger(__name__).warning(
+                    "Scheduler iteration failed (%s); retrying.", type(exc).__name__
                 )
+                try:
+                    self.store.save_setting(
+                        "scheduler_error", {"type": type(exc).__name__, "at": time.time()}
+                    )
+                except Exception as report_error:
+                    logging.getLogger(__name__).warning(
+                        "Could not persist scheduler error (%s).",
+                        type(report_error).__name__,
+                    )
+                self.stopping.wait(1)
 
     def launch(self, job):
         profile = job["spec"].get("provider", {})

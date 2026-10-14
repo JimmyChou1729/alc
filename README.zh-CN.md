@@ -158,28 +158,20 @@ scripts/build-packages.sh
 
 ## 发布
 
-在干净的工作区执行：
+在干净的分支中同步包、插件和前端版本：
 
 ```bash
-scripts/release-alc.sh VERSION
+scripts/release-alc.sh X.Y.Z
 ```
 
-`VERSION` 使用 `MAJOR.MINOR.PATCH` 格式。发布脚本统一更新包和插件版本，并同时更新
-产品源码 SHA 与包清单；插件运行环境不包含可选的 Web 应用。新的源码提交形成前，应保持
-现有 runtime lock 与其固定提交一致。新增 Foundation API 必须先包含在固定的 Foundation
-提交中，才能进行干净环境的 CI 或发布验证；工作区覆盖只用于本地开发。本项目不假设包已在 PyPI 发布。
+先合并 Foundation 更新并固定其上游提交。PR 通过 CI 并合入 `main` 后，
+在合并提交上创建带注释的 `vX.Y.Z` tag。Tag 应与包版本一致，发布后不再移动。
 
 ## Work／dot
 
-ALC 2.2 支持由宿主 Agent 完成模型任务，通过导出、提交和原任务恢复继续流程。
-使用前检查 shell/Python、可写项目目录及实际工具能力；Companion 的独立生成和评审还需要新上下文。
-线上插件交付独立 HTML Reader，不启动 Local Web。保留原生 CLI 和已配置的 MinerU，
-也可选择无需安装 MinerU 的 Host PDF 识别。识别结构校验不等于文字和公式准确率验收。
-详见 [Host 执行](plugins/alc/skills/alc/manuals/host-execution.md) 和
-[Host PDF](plugins/alc/skills/alc/manuals/host-pdf.md)。
-
-插件安装和更新默认跟踪 `main`；需要复现固定版本时，让宿主按已验证的 tag 打包。
-本轮升级前的版本保留在 `stable`。CI 不生成分发 ZIP，也不创建 GitHub Release。
+具备 shell 和 Python 的宿主可以通过自身 Agent 运行 ALC；Companion 独立评审需要新上下文。
+配置方法见 [Host 执行](plugins/alc/skills/alc/manuals/host-execution.md) 和
+[Host PDF 识别](plugins/alc/skills/alc/manuals/host-pdf.md)。
 
 ## 许可证
 
