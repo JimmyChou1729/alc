@@ -158,14 +158,18 @@ scripts/build-packages.sh
 
 ## 发布
 
-在干净的分支中同步包、插件和前端版本：
+由维护者确定下一个 `X.Y.Z` 版本，在干净的任务分支中同步包、插件和前端版本：
 
 ```bash
 scripts/release-alc.sh X.Y.Z
 ```
 
-先合并 Foundation 更新并固定其上游提交。PR 通过 CI 并合入 `main` 后，
-在合并提交上创建带注释的 `vX.Y.Z` tag。Tag 应与包版本一致，发布后不再移动。
+将版本和源码 pin 更新包含在发布 PR 中。若同时更新 Foundation，先合并它并固定其上游提交。
+使用 merge commit 合并，保留产品源码 pin 对应的提交 SHA。
+
+修改了 `VERSION` 的 PR 合入 `main` 后，CI 校验发布内容，全部检查通过后自动创建
+带注释的 `vX.Y.Z` tag。其他 PR 不创建 tag；打 tag 失败时重跑失败的 CI。
+已发布的 tag 不再移动。
 
 ## Work／dot
 
